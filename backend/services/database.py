@@ -18,9 +18,12 @@ async def get_db():
 
 
 async def create_tables():
+    # Transaction 1 — create all tables from ORM models
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Phase 2 columns — ADD COLUMN IF NOT EXISTS is idempotent on PostgreSQL
+
+    # Transaction 2 — idempotent column additions (separate tx so tables are visible)
+    async with engine.begin() as conn:
         for stmt in [
             "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS stay_group_id  VARCHAR",
             "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS segment_index  INTEGER DEFAULT 0",
