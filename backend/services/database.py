@@ -4,7 +4,18 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False, pool_pre_ping=True)
+# asyncpg doesn't accept sslmode= query param — strip it and pass ssl=True via connect_args
+_db_url = settings.DATABASE_URL
+_connect_args: dict = {}
+for _param in ("sslmode=require", "sslmode=verify-full", "sslmode=verify-ca"):
+    if f"?{_param}" in _db_url:
+        _db_url = _db_url.replace(f"?{_param}", "")
+        _connect_args["ssl"] = True
+    elif f"&{_param}" in _db_url:
+        _db_url = _db_url.replace(f"&{_param}", "")
+        _connect_args["ssl"] = True
+
+engine = create_async_engine(_db_url, echo=False, pool_pre_ping=True, connect_args=_connect_args)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
