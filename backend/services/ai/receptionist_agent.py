@@ -1,0 +1,595 @@
+"""
+Receptionist AI Agent — LangGraph + Gemini
+
+Architecture:
+  - Stateless: frontend owns full conversation history, sends it on every request
+  - LangGraph agentic loop: agent → tool_node → agent → ... → END
+  - Gemini 1.5 Flash via langchain-google-genai
+  - 3 tools: check_availability, find_split_stay (Phase 2 stub), confirm_booking
+  - action_data: structured payload returned alongside text reply for frontend cards
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import operator
+from collections import defaultdict
+from datetime import date, timedelta
+from typing import Annotated, Optional, TypedDict
+
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config import settings
+from controllers import receptionist as ctrl
+from core.models import Room, Slot
+from core.models.enums import BlockType, RoomCategory
+from core.schemas import BookingRequestIn
+
+logger = logging.getLogger(__name__)
+
+
+# ── System prompt ─────────────────────────────────────────────────────────────
+
+_SYSTEM = """\
+You are the AI front-desk assistant for {hotel_name}.
+Today is {today}.
+
+You help the receptionist handle guest booking requests conversationally.
+Available room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+
+Current hotel snapshot (category-level — see tool for per-room detail):
+{context}
+
+── CORE RULE — ALWAYS produce an action card ─────────────────────────────────
+Every reply that mentions a room, rate, or dates MUST be backed by a tool call.
+Never quote a room or price from memory. The tool result produces the action card
+that the receptionist uses to confirm. No tool call = no card = receptionist
+cannot act. You are a recommendation engine — you NEVER write to the database.
+Confirmation is always done by the receptionist clicking the UI button.
+── ───────────────────────────────────────────────────────────────────────────
+
+── Tools ─────────────────────────────────────────────────────────────────────
+check_availability(category, check_in, check_out)
+  → Call whenever you want to recommend a room for a date range.
+  → Returns DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE.
+  → ALWAYS call this even if you already know availability from context — the
+    return value is what produces the action card on the frontend.
+
+find_split_stay(category, check_in, check_out)
+  → Call when check_availability returns NOT_POSSIBLE.
+  → Returns SPLIT_POSSIBLE (2–3 rooms, discount) or NOT_POSSIBLE.
+
+get_room_inventory(category)
+  → Call when the guest asks about floors, specific room IDs, or exact rates.
+  → Do NOT call just to check booking feasibility — use check_availability.
+
+probe_split_window(category, anchor_check_in, duration_nights)
+  → Call when the guest asks about split stay discounts and find_split_stay
+    returned NOT_POSSIBLE for their dates.
+  → Automatically tries ±5 day shifts to find the nearest window where a
+    genuine 2-room split stay (5–10% discount) is possible.
+  → Also call when guest asks "any date/category with split stay discount?"
+  → Returns SPLIT_POSSIBLE with the actual segments — produces a confirm card.
+── ───────────────────────────────────────────────────────────────────────────
+
+── CARDINAL RULE — one tool call per room mentioned ──────────────────────────
+You MUST call check_availability (or find_split_stay) for EVERY option you intend
+to present. Never mention a room, date range, or category verbally without a tool
+call that confirms it. If you get NOT_POSSIBLE for the original request, call
+check_availability AGAIN for any shifted dates or alternative categories you
+consider. No tool call = no action card = receptionist cannot confirm.
+── ───────────────────────────────────────────────────────────────────────────
+
+── Normal booking flow ───────────────────────────────────────────────────────
+1. Collect category, check-in, check-out from conversation.
+2. Call check_availability → produces action card.
+3. DIRECT_AVAILABLE / SHUFFLE_POSSIBLE → one sentence + "Confirm with the button."
+4. NOT_POSSIBLE →
+   a. Call find_split_stay(same category, same dates).
+      SPLIT_POSSIBLE → one sentence. STOP.
+   b. Call check_availability(next higher category, same dates).
+      Available → one sentence. STOP.
+   c. Call check_availability(next lower category, same dates).
+      Available → one sentence. STOP.
+   d. Call check_availability(same category, check_in+1 day, same duration).
+      Available → one sentence. STOP.
+   e. None worked → call get_room_inventory(category), report earliest free window.
+── ───────────────────────────────────────────────────────────────────────────
+
+── [HANDOFF] mode ────────────────────────────────────────────────────────────
+Message starts with [HANDOFF] — deterministic engine already confirmed the exact
+requested dates are impossible. Do NOT call check_availability for those same dates.
+  STEP 1: call check_availability(same category, check_in+1 day, same duration).
+    Available → one sentence reply. STOP.
+  STEP 2: call check_availability(next higher category, original dates).
+    Available → one sentence reply. STOP.
+  STEP 3: call check_availability(next lower category, original dates).
+    Available → one sentence reply. STOP.
+  STEP 4: call find_split_stay(same category, original dates).
+    SPLIT_POSSIBLE → one sentence reply. STOP.
+  STEP 5: call get_room_inventory(category), report earliest free window, no card.
+── ───────────────────────────────────────────────────────────────────────────
+
+── Output rules (always) ─────────────────────────────────────────────────────
+• Keep text replies to 1–2 sentences. The card carries all the detail.
+• No bullet points, no markdown headers, no lettered options.
+• Never invent room IDs or rates — only report tool results.
+• Never say "I'll confirm" or "booking is done" — you only recommend.
+• End actionable replies with: "Confirm with the button below when ready."
+── ───────────────────────────────────────────────────────────────────────────
+"""
+
+
+# ── LangChain ↔ JSON helpers ──────────────────────────────────────────────────
+
+def _to_lc_messages(raw: list[dict]) -> list[BaseMessage]:
+    """Convert frontend { role, content } dicts to LangChain message objects."""
+    out: list[BaseMessage] = []
+    for m in raw:
+        role    = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "user":
+            out.append(HumanMessage(content=content))
+        elif role == "assistant":
+            out.append(AIMessage(content=content))
+        # tool / system messages from previous turns are intentionally excluded —
+        # the frontend only stores user/assistant turns
+    return out
+
+
+def _extract_action_data(messages: list[BaseMessage]) -> Optional[dict]:
+    """
+    Scan ALL tool results and return the highest-priority action_data.
+
+    Priority (highest wins — order matters):
+      0. confirmed    — booking_confirmed / split_stay_confirmed
+      1. actionable   — DIRECT_AVAILABLE or SHUFFLE_POSSIBLE (receptionist can act)
+      2. split        — SPLIT_POSSIBLE (receptionist can act)
+      3. informational— NOT_POSSIBLE (shows infeasible dates, no confirm button)
+
+    Scanning in chronological order and keeping the highest-priority result means
+    that if the AI calls check_availability(ECONOMY) → DIRECT_AVAILABLE and then
+    check_availability(DELUXE) → NOT_POSSIBLE, the DIRECT_AVAILABLE card wins
+    rather than being overwritten by the later NOT_POSSIBLE result.
+    """
+    confirmed: Optional[dict]    = None
+    actionable: Optional[dict]   = None
+    split_possible: Optional[dict] = None
+    not_possible: Optional[dict] = None
+
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        try:
+            data = json.loads(msg.content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        if data.get("stay_group_id"):
+            confirmed = {"type": "split_stay_confirmed", "data": data}
+        elif data.get("booking_id"):
+            confirmed = {"type": "booking_confirmed", "data": data}
+        elif data.get("state") == "SPLIT_POSSIBLE":
+            split_possible = {"type": "split_stay_result", "data": data}
+        elif data.get("state") in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
+            # Keep the first actionable result; don't overwrite with a later NOT_POSSIBLE
+            if actionable is None:
+                actionable = {"type": "availability_result", "data": data}
+        elif data.get("state") == "NOT_POSSIBLE":
+            not_possible = {"type": "availability_result", "data": data}
+
+    return confirmed or actionable or split_possible or not_possible
+
+
+# ── Agent state ───────────────────────────────────────────────────────────────
+
+class AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], operator.add]
+    action_data: Optional[dict]
+
+
+# ── Graph builder ─────────────────────────────────────────────────────────────
+
+def _build_graph(db: AsyncSession, system_msg: SystemMessage):
+    """
+    Build and compile a LangGraph graph bound to a specific DB session.
+    Tools are closures that capture `db` — no global state.
+    """
+
+    # ── Tools (closures over db) ──────────────────────────────────────────────
+
+    @tool
+    async def check_availability(
+        category: str,
+        check_in: str,
+        check_out: str,
+    ) -> str:
+        """
+        Check room availability for a category and date range.
+        Returns state: DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE,
+        plus room_id, message, swap_plan, and alternatives.
+        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        Dates must be ISO format: YYYY-MM-DD.
+        """
+        try:
+            req = BookingRequestIn(
+                category=RoomCategory(category.upper()),
+                check_in=date.fromisoformat(check_in),
+                check_out=date.fromisoformat(check_out),
+                guest_name="",
+            )
+            result = await ctrl.check_availability(req, db)
+            # comparison is a plain dict — serialise directly
+            comparison = result.comparison if isinstance(result.comparison, dict) else None
+            return json.dumps({
+                "state":            result.state,
+                "room_id":          result.room_id,
+                "message":          result.message,
+                "swap_plan":        result.swap_plan,
+                "comparison":       comparison,
+                "infeasible_dates": result.infeasible_dates,
+                "alternatives": [
+                    (a.model_dump() if hasattr(a, "model_dump") else a)
+                    for a in (result.alternatives or [])
+                ],
+                # Echo request params so the frontend Confirm button has
+                # everything needed to call /receptionist/confirm without
+                # the agent needing to do anything
+                "request": {
+                    "category":  category,
+                    "check_in":  check_in,
+                    "check_out": check_out,
+                },
+            })
+        except Exception as exc:
+            logger.exception("check_availability tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
+    async def find_split_stay(
+        category: str,
+        check_in: str,
+        check_out: str,
+    ) -> str:
+        """
+        When check_availability returns NOT_POSSIBLE, find a split stay:
+        cover all requested nights across 2–3 rooms of the same category,
+        with a consecutive-stay discount (5% for 1 handoff, 10% for 2).
+        Returns segments with room_id, floor, check_in, check_out, nights,
+        base_rate, discounted_rate, total_rate, discount_pct.
+        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        Dates must be ISO format: YYYY-MM-DD.
+        """
+        try:
+            req = BookingRequestIn(
+                category   = RoomCategory(category.upper()),
+                check_in   = date.fromisoformat(check_in),
+                check_out  = date.fromisoformat(check_out),
+                guest_name = "",
+            )
+            result = await ctrl.find_split_stay(req, db)
+            return json.dumps({
+                "state":        result.state,
+                "message":      result.message,
+                "category":     category,
+                "discount_pct": result.discount_pct,
+                "total_nights": result.total_nights,
+                "total_rate":   result.total_rate,
+                "segments": [
+                    {
+                        "room_id":         s.room_id,
+                        "floor":           s.floor,
+                        "check_in":        str(s.check_in),
+                        "check_out":       str(s.check_out),
+                        "nights":          s.nights,
+                        "base_rate":       s.base_rate,
+                        "discounted_rate": s.discounted_rate,
+                    }
+                    for s in result.segments
+                ],
+            })
+        except Exception as exc:
+            logger.exception("find_split_stay tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
+    async def get_room_inventory(category: str) -> str:
+        """
+        Return per-room detail for one category across the full booking window.
+        Call this when the guest asks which rooms are free, what prices are,
+        which floors are available, or how long a room is occupied.
+
+        Returns a list of rooms, each with:
+          id, floor, base_rate, today_status (EMPTY/SOFT/HARD),
+          timeline (20-day window: date → status),
+          booked_until (last consecutive blocked date from today, if occupied),
+          first_free (first EMPTY date).
+        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        """
+        try:
+            cat = RoomCategory(category.upper())
+            today = date.today()
+            window_end = today + timedelta(days=settings.BOOKING_WINDOW_DAYS)
+
+            # All active rooms for this category
+            rooms_result = await db.execute(
+                select(Room.id, Room.floor_number, Room.base_rate)
+                .where(Room.category == cat, Room.is_active == True)
+                .order_by(Room.floor_number, Room.id)
+            )
+            rooms = rooms_result.all()
+
+            if not rooms:
+                return json.dumps({"error": f"No active rooms in category {category}"})
+
+            room_ids = [r[0] for r in rooms]
+
+            # All slots in the booking window for these rooms
+            slots_result = await db.execute(
+                select(Slot.room_id, Slot.date, Slot.block_type, Slot.current_rate)
+                .where(
+                    Slot.room_id.in_(room_ids),
+                    Slot.date >= today,
+                    Slot.date < window_end,
+                )
+                .order_by(Slot.room_id, Slot.date)
+            )
+            # Build {room_id: {date: (block_type, rate)}}
+            slot_map: dict[str, dict] = defaultdict(dict)
+            for room_id, slot_date, block_type, rate in slots_result.all():
+                slot_map[room_id][slot_date] = (block_type, rate)
+
+            output = []
+            all_dates = [today + timedelta(days=i)
+                         for i in range(settings.BOOKING_WINDOW_DAYS)]
+
+            for room_id, floor, base_rate in rooms:
+                timeline = {}
+                for d in all_dates:
+                    bt, _ = slot_map[room_id].get(d, (BlockType.EMPTY, base_rate))
+                    timeline[str(d)] = bt.value if hasattr(bt, "value") else str(bt)
+
+                # today's status
+                today_bt, today_rate = slot_map[room_id].get(
+                    today, (BlockType.EMPTY, base_rate)
+                )
+                today_status = today_bt.value if hasattr(today_bt, "value") else str(today_bt)
+
+                # booked_until: last consecutive non-EMPTY date from today
+                booked_until = None
+                first_free = str(today)
+                if today_status != "EMPTY":
+                    prev = today
+                    for d in all_dates[1:]:
+                        bt, _ = slot_map[room_id].get(d, (BlockType.EMPTY, base_rate))
+                        status = bt.value if hasattr(bt, "value") else str(bt)
+                        if status != "EMPTY":
+                            prev = d
+                        else:
+                            break
+                    booked_until = str(prev)
+                    next_day = prev + timedelta(days=1)
+                    first_free = str(next_day) if next_day < window_end else None
+                else:
+                    first_free = str(today)
+
+                entry: dict = {
+                    "id":           room_id,
+                    "floor":        floor,
+                    "base_rate":    base_rate,
+                    "today_status": today_status,
+                    "today_rate":   today_rate,
+                    "timeline":     timeline,
+                    "first_free":   first_free,
+                }
+                if booked_until:
+                    entry["booked_until"] = booked_until
+
+                output.append(entry)
+
+            return json.dumps({"category": category, "rooms": output})
+        except Exception as exc:
+            logger.exception("get_room_inventory tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
+    async def probe_split_window(
+        category: str,
+        anchor_check_in: str,
+        duration_nights: int,
+    ) -> str:
+        """
+        Search for the nearest date window where a genuine split stay (2+ rooms,
+        5–10% discount) is possible for this category.
+
+        Tries the anchor dates then shifts check_in by ±1, ±2, ±3, ±4, ±5 days
+        and returns the first window that yields SPLIT_POSSIBLE with 2+ segments.
+
+        Use this when:
+        - The guest asks about split stay discounts
+        - find_split_stay returns NOT_POSSIBLE for the current dates
+        - The guest asks "any date where split stay works?"
+
+        Parameters
+        ----------
+        category        : room category (ECONOMY / STANDARD / STUDIO / DELUXE / PREMIUM / SUITE)
+        anchor_check_in : the guest's preferred check_in date (YYYY-MM-DD)
+        duration_nights : length of stay in nights (integer)
+
+        Returns the first working window: state, segments, discount_pct, check_in, check_out.
+        If nothing found within ±5 days, returns NOT_POSSIBLE with a message.
+        """
+        try:
+            cat      = RoomCategory(category.upper())
+            anchor   = date.fromisoformat(anchor_check_in)
+            today_d  = date.today()
+
+            # Try shifts: 0, -1, +1, -2, +2, -3, +3, -4, +4, -5, +5
+            shifts = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]
+            for delta in shifts:
+                ci = anchor + timedelta(days=delta)
+                co = ci + timedelta(days=duration_nights)
+                if ci < today_d:
+                    continue
+                req = BookingRequestIn(
+                    category   = cat,
+                    check_in   = ci,
+                    check_out  = co,
+                    guest_name = "",
+                )
+                result = await ctrl.find_split_stay(req, db)
+                if result.state == "SPLIT_POSSIBLE" and len(result.segments) >= 2:
+                    return json.dumps({
+                        "state":        "SPLIT_POSSIBLE",
+                        "category":     category,
+                        "check_in":     str(ci),
+                        "check_out":    str(co),
+                        "shift_days":   delta,
+                        "discount_pct": result.discount_pct,
+                        "total_nights": result.total_nights,
+                        "total_rate":   result.total_rate,
+                        "message":      result.message,
+                        "segments": [
+                            {
+                                "room_id":         s.room_id,
+                                "floor":           s.floor,
+                                "check_in":        str(s.check_in),
+                                "check_out":       str(s.check_out),
+                                "nights":          s.nights,
+                                "base_rate":       s.base_rate,
+                                "discounted_rate": s.discounted_rate,
+                            }
+                            for s in result.segments
+                        ],
+                    })
+
+            return json.dumps({
+                "state":   "NOT_POSSIBLE",
+                "message": (
+                    f"No {category} split stay found within ±5 days of {anchor_check_in} "
+                    f"for a {duration_nights}-night stay. The category may not have enough "
+                    "rooms with the required gap pattern."
+                ),
+            })
+        except Exception as exc:
+            logger.exception("probe_split_window tool error")
+            return json.dumps({"error": str(exc)})
+
+    # confirm_booking and confirm_split_stay are intentionally NOT tools.
+    # The AI only recommends. All DB writes go through the receptionist's
+    # confirm button in the UI — never triggered by the AI itself.
+
+    tools = [check_availability, get_room_inventory, find_split_stay, probe_split_window]
+
+    # ── LLM ───────────────────────────────────────────────────────────────────
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=settings.GEMINI_API_KEY,
+        temperature=0.3,
+        convert_system_message_to_human=True,   # Gemini doesn't natively support system role
+    )
+    llm_with_tools = llm.bind_tools(tools)
+
+    # ── Graph nodes ───────────────────────────────────────────────────────────
+
+    async def agent_node(state: AgentState) -> dict:
+        all_messages = [system_msg] + state["messages"]
+        response = await llm_with_tools.ainvoke(all_messages)
+        # Carry forward action_data extracted from any tool results already in state
+        action_data = _extract_action_data(state["messages"]) or state.get("action_data")
+        return {"messages": [response], "action_data": action_data}
+
+    tool_node = ToolNode(tools)
+
+    def should_continue(state: AgentState) -> str:
+        last = state["messages"][-1]
+        if hasattr(last, "tool_calls") and last.tool_calls:
+            return "tools"
+        return END
+
+    # ── Compile ───────────────────────────────────────────────────────────────
+
+    g = StateGraph(AgentState)
+    g.add_node("agent", agent_node)
+    g.add_node("tools", tool_node)
+    g.set_entry_point("agent")
+    g.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    g.add_edge("tools", "agent")
+    return g.compile()
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+async def run_agent(
+    messages: list[dict],
+    db: AsyncSession,
+    hotel_context: str = "",
+) -> dict:
+    """
+    Run the receptionist agent for one turn.
+
+    Parameters
+    ----------
+    messages     : Full conversation history from frontend
+                   [{ role: "user"|"assistant", content: str }, ...]
+    db           : AsyncSession injected by FastAPI
+    hotel_context: Live hotel summary (occupancy, floors, categories) from /ai/context
+
+    Returns
+    -------
+    { reply: str, action_data: dict | None }
+    reply       : AI text to display as the next assistant bubble
+    action_data : Optional structured payload for frontend to render a rich card
+    """
+    today = date.today().isoformat()
+
+    system_msg = SystemMessage(
+        content=_SYSTEM.format(
+            hotel_name=settings.HOTEL_NAME,
+            today=today,
+            context=hotel_context or "No live context provided.",
+        )
+    )
+
+    graph = _build_graph(db, system_msg)
+    lc_messages = _to_lc_messages(messages)
+
+    # Guard: if history is empty the agent has nothing to respond to
+    if not lc_messages:
+        return {"reply": "How can I help you today?", "action_data": None}
+
+    result = await graph.ainvoke(
+        {"messages": lc_messages, "action_data": None}
+    )
+
+    final_msg = result["messages"][-1]
+    raw_content = final_msg.content if hasattr(final_msg, "content") else ""
+
+    # Gemini 2.5+ returns content as a list of typed blocks:
+    #   [{"type": "text", "text": "..."}, ...]
+    # Earlier models return a plain string. Handle both.
+    if isinstance(raw_content, list):
+        reply = " ".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in raw_content
+        ).strip()
+    else:
+        reply = str(raw_content)
+
+    action_data = _extract_action_data(result["messages"])
+
+    return {"reply": reply, "action_data": action_data}
