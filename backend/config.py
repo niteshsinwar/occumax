@@ -17,12 +17,14 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Railway / Render inject plain `postgresql://` — translate for asyncpg
-        if self.DATABASE_URL.startswith("postgresql://"):
-            object.__setattr__(
-                self, "DATABASE_URL",
-                self.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-            )
+        # Aiven uses `postgres://`, Railway/Render use `postgresql://` — translate both for asyncpg
+        url = self.DATABASE_URL
+        if url.startswith("postgres://"):
+            url = "postgresql+asyncpg://" + url[len("postgres://"):]
+        elif url.startswith("postgresql://"):
+            url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+        if url != self.DATABASE_URL:
+            object.__setattr__(self, "DATABASE_URL", url)
 
     # ── AI ────────────────────────────────────────────────────────────────────
     GEMINI_API_KEY: str = ""
