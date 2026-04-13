@@ -1,0 +1,168 @@
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { getHeatmap, api } from "../api/client";
+import type { HeatmapResponse } from "../types";
+import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
+import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
+import { useToast } from "../components/shared/Toast";
+import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
+import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
+
+const maxDays = 20;
+
+/**
+ * Dashboard (Bird's Eye View): occupancy matrix and consecutive EMPTY run counts by length and room category.
+ * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
+ */
+export function Dashboard() {
+  const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
+  const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
+  const { show, Toasts } = useToast();
+
+  const loadHeatmap = useCallback(async () => {
+    try {
+      const h = await getHeatmap();
+      setHeatmap(h.data);
+    } catch {
+      show("Failed to load heatmap", "error");
+    }
+  }, [show]);
+
+  useEffect(() => {
+    loadHeatmap();
+  }, [loadHeatmap]);
+
+  const snapshot = useMemo(
+    () => (heatmap ? computeEmptyRunInventory(heatmap.rows, maxDays) : null),
+    [heatmap],
+  );
+
+  const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
+    if (!slotModal) return;
+    try {
+      await api.patch(`/admin/slots/${slotModal.id}`, {
+        block_type,
+        reason: "Manual edit from Bird's Eye View dashboard",
+      });
+      setSlotModal(null);
+      await loadHeatmap();
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      show(typeof detail === "string" ? detail : "Cannot edit this slot", "error");
+    }
+  };
+
+  return (
+    <div>
+      <Toasts />
+
+      {slotModal && (
+        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]">
+          <div className="bg-surface border border-border shadow-2xl p-6 w-full max-w-sm">
+            <h2 className="font-serif font-bold text-xl text-text mb-2">Configure Slot</h2>
+            <div className="text-sm text-text-muted mb-6 flex items-center gap-2">
+              Room {slotModal.room} · {slotModal.date}
+              <span
+                className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 border ${
+                  slotModal.block === "EMPTY"
+                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                    : slotModal.block === "SOFT"
+                      ? "bg-sky-100 text-sky-800 border-sky-300"
+                      : "bg-stone-100 text-stone-700 border-stone-300"
+                }`}
+              >
+                {slotModal.block}
+              </span>
+            </div>
+            {slotModal.block === "SOFT" ? (
+              <div className="bg-occuorange/10 border border-occuorange/20 text-occuorange text-xs font-semibold p-3 mb-6">
+                Active guest reservation. Cannot override manually.
+              </div>
+            ) : (
+              <div className="flex gap-2 mb-6">
+                {slotModal.block !== "EMPTY" && (
+                  <button
+                    type="button"
+                    className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                    onClick={() => handleSlotPatch("EMPTY")}
+                  >
+                    <Unlock className="w-3.5 h-3.5" /> Free
+                  </button>
+                )}
+                {slotModal.block !== "HARD" && (
+                  <button
+                    type="button"
+                    className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                    onClick={() => handleSlotPatch("HARD")}
+                  >
+                    <Lock className="w-3.5 h-3.5" /> Block
+                  </button>
+                )}
+              </div>
+            )}
+            <button
+              type="button"
+              className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
+              onClick={() => setSlotModal(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8 border-b border-border/50 pb-6">
+        <div>
+          <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Bird's Eye View</h1>
+          <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
+            Occupancy matrix and bookable empty-night runs by length and room type
+          </p>
+        </div>
+        <button
+          type="button"
+          className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border shrink-0"
+          onClick={() => loadHeatmap()}
+        >
+          <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
+        </button>
+      </div>
+
+      {heatmap && snapshot && (
+        <div className="flex flex-col lg:flex-row gap-6 items-stretch">
+          <div className="w-full lg:w-[70%] lg:min-w-0 min-h-[320px]">
+            <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
+              <HeatmapGrid
+                dates={heatmap.dates}
+                rows={heatmap.rows}
+                title="Current Occupancy"
+                compact
+                maxDays={maxDays}
+                hideLegend
+                onCellClick={setSlotModal}
+              />
+            </div>
+          </div>
+          <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
+            <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={maxDays} />
+          </aside>
+        </div>
+      )}
+
+      {!heatmap && (
+        <div className="bg-surface border border-border py-16 px-6 text-center">
+          <Grid3x3 className="w-8 h-8 text-accent/50 mx-auto mb-4" />
+          <h2 className="text-xl font-serif font-bold text-text mb-2">No calendar data</h2>
+          <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
+            The occupancy matrix could not be loaded. Check the API connection, then try again.
+          </p>
+          <button
+            type="button"
+            className="bg-text text-surface font-semibold hover:bg-text/90 text-xs uppercase tracking-widest px-8 py-3"
+            onClick={() => loadHeatmap()}
+          >
+            Retry load
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

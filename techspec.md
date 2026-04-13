@@ -51,7 +51,7 @@ flowchart LR
 
 | Path | Role |
 |------|------|
-| `frontend/` | Vite + React 19 + TypeScript + Tailwind. Routes: Manager (tabs: Yield Operations, Dynamic Pricing, Bird's Eye View), Receptionist, Admin (`frontend/src/App.tsx`, `frontend/src/pages/ManagerDashboard.tsx`). |
+| `frontend/` | Vite + React 19 + TypeScript + Tailwind. Routes: Manager (Yield + Pricing), **Dashboard** (Bird's Eye View at `/dashboard`), Receptionist, Admin (`frontend/src/App.tsx`, `frontend/src/pages/ManagerDashboard.tsx`, `frontend/src/pages/Dashboard.tsx`). |
 | `frontend/src/api/client.ts` | Central API client; mirrors backend routes used by the UI. |
 | `backend/main.py` | FastAPI app assembly, CORS, global exception handler, router includes, startup `create_tables`. |
 | `backend/config.py` | Pydantic-settings: `DATABASE_URL`, AI key, hotel name, scan/booking windows, gap costs, optimiser caps. |
@@ -202,7 +202,7 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
-| 2026-04-13 | Manager UI: **Bird's Eye View** tab (`birdseyeview`) — 70/30 layout with **Current Occupancy** heatmap (20-day window) and side panel of consecutive EMPTY **availability runs** by length (1–4 nights, 4+) broken down by **room category**; uses existing `GET /dashboard/heatmap` only (`ManagerDashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`). |
+| 2026-04-13 | **Bird's Eye View** is a dedicated **Dashboard** page at `/dashboard` (nav: Dashboard) — 70/30 **Current Occupancy** heatmap + availability-run side panel; Manager page is Yield + Pricing only (`Dashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`; `GET /dashboard/heatmap`). |
 | 2026-04-13 | Added **project-scoped** Cursor skill **occumax-change-workflow** (`.cursor/skills/occumax-change-workflow/SKILL.md`); documented `.cursor/skills/` in the repository map (not intended as a global/personal skill). |
 | Merge PR #4 | Removed legacy product / roadmap / solution design binary and markdown files from the repo (documentation cleanup). |
 | — | **fix**: SSL context for asyncpg with Aiven-style self-signed certificates (`database.py`). |
@@ -226,3 +226,4 @@ Newest first; reflects repository history at documentation time.
 | Booking / split stay algorithms | [`backend/services/algorithm/booking_placement.py`](backend/services/algorithm/booking_placement.py), [`backend/services/algorithm/split_stay.py`](backend/services/algorithm/split_stay.py) |
 | AI agents | [`backend/services/ai/receptionist_agent.py`](backend/services/ai/receptionist_agent.py), [`backend/services/ai/pricing_agent.py`](backend/services/ai/pricing_agent.py) |
 | Frontend API surface | [`frontend/src/api/client.ts`](frontend/src/api/client.ts) |
+| Bird's Eye Dashboard | [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx) |
