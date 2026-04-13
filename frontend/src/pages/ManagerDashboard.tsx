@@ -2,13 +2,11 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { getHeatmap, fireOptimise, commitPlan, api } from "../api/client";
 import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
-import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { useToast } from "../components/shared/Toast";
 import { PricingPanel } from "../components/PricingPanel";
-import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
-import { Zap, CheckCircle2, XCircle, Lock, Unlock, TrendingUp, DollarSign, Grid3x3, RefreshCw } from "lucide-react";
+import { Zap, CheckCircle2, XCircle, Lock, Unlock, TrendingUp, DollarSign } from "lucide-react";
 
-type ManagerTab = "yield" | "pricing" | "birdseyeview";
+type ManagerTab = "yield" | "pricing";
 
 type Stage = "idle" | "processing" | "preview" | "applied" | "converged";
 
@@ -189,14 +187,6 @@ export function ManagerDashboard() {
     [simulatedRows, stage, gaps.length],
   );
 
-  const birdseyeMaxDays = 20;
-
-  /** Consecutive EMPTY runs by length and room category for the Bird's Eye side panel. */
-  const birdseyeSnapshot = useMemo(
-    () => (heatmap ? computeEmptyRunInventory(heatmap.rows, birdseyeMaxDays) : null),
-    [heatmap],
-  );
-
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -255,7 +245,7 @@ export function ManagerDashboard() {
       {/* ── TAB BAR ───────────────────────────────────────────────────── */}
       <div className="flex items-end justify-between mb-8 border-b border-border/50">
         <div className="flex gap-0">
-          {(["yield", "pricing", "birdseyeview"] as ManagerTab[]).map(tab => (
+          {(["yield", "pricing"] as ManagerTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -274,7 +264,6 @@ export function ManagerDashboard() {
                   )}
                 </>
               )}
-              {tab === "birdseyeview" && <><Grid3x3 className="w-3.5 h-3.5" /> Bird's Eye View</>}
             </button>
           ))}
         </div>
@@ -316,17 +305,6 @@ export function ManagerDashboard() {
             )}
           </div>
         )}
-        {activeTab === "birdseyeview" && (
-          <div className="flex gap-3 pb-3">
-            <button
-              type="button"
-              className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
-              onClick={() => loadHeatmap()}
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
-            </button>
-          </div>
-        )}
       </div>
 
       {/* ── YIELD TAB SUBTITLE ────────────────────────────────────────── */}
@@ -343,65 +321,6 @@ export function ManagerDashboard() {
       )}
 
       {/* ── PRICING TAB ───────────────────────────────────────────────── */}
-      {/* ── BIRD'S EYE TAB ───────────────────────────────────────────── */}
-      {activeTab === "birdseyeview" && (
-        <>
-          <div className="text-xs tracking-wider text-text-muted mb-6 uppercase -mt-4">
-            Occupancy matrix with bookable empty-night runs by length and room type
-          </div>
-
-          {heatmap && stage !== "processing" && birdseyeSnapshot && (
-            <div className="flex flex-col lg:flex-row gap-6 items-stretch">
-              <div className="w-full lg:w-[70%] lg:min-w-0 min-h-[320px]">
-                <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
-                  <HeatmapGrid
-                    dates={heatmap.dates}
-                    rows={heatmap.rows}
-                    title="Current Occupancy"
-                    compact
-                    maxDays={birdseyeMaxDays}
-                    hideLegend
-                    onCellClick={setSlotModal}
-                  />
-                </div>
-              </div>
-              <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
-                <BirdseyeInventoryHighlights snapshot={birdseyeSnapshot} maxDays={birdseyeMaxDays} />
-              </aside>
-            </div>
-          )}
-
-          {stage === "processing" && (
-            <div className="bg-surface-2 border border-border p-10 mb-8 flex items-center justify-center">
-              <div className="flex flex-col items-center max-w-sm text-center">
-                <div className="w-10 h-10 border-2 border-border border-t-accent rounded-full animate-spin mb-6" />
-                <h3 className="text-lg font-serif font-bold text-text">Yield analysis in progress</h3>
-                <p className="text-xs text-text-muted mt-2 tracking-wide">
-                  Switch back to Yield Operations to monitor the run, or wait for it to finish — the heatmap will refresh automatically.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {!heatmap && stage !== "processing" && (
-            <div className="bg-surface border border-border py-16 px-6 text-center">
-              <Grid3x3 className="w-8 h-8 text-accent/50 mx-auto mb-4" />
-              <h2 className="text-xl font-serif font-bold text-text mb-2">No calendar data</h2>
-              <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-                The occupancy matrix could not be loaded. Check the API connection, then try again.
-              </p>
-              <button
-                type="button"
-                className="bg-text text-surface font-semibold hover:bg-text/90 text-xs uppercase tracking-widest px-8 py-3"
-                onClick={() => loadHeatmap()}
-              >
-                Retry load
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
       {activeTab === "pricing" && (
         <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
           {stage !== "applied" && stage !== "converged" ? (
