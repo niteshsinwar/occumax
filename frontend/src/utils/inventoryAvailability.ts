@@ -1,29 +1,52 @@
 import type { HeatmapRow, RoomCategory } from "../types";
 
-/** Consecutive-empty-night run length buckets used in the Bird's Eye inventory panel. */
+/** Stay-length buckets for k-night bookable windows in the Bird's Eye inventory panel (4+ aggregates windows of length ≥5). */
 export type AvailabilityBucket = "1" | "2" | "3" | "4" | "4+";
 
 const BUCKET_ORDER: AvailabilityBucket[] = ["1", "2", "3", "4", "4+"];
 
-/**
- * Maps a consecutive EMPTY run length to a display bucket (4+ groups five or more nights).
- * Callers only pass lengths from non-empty EMPTY runs (always >= 1).
- */
-function lengthToBucket(length: number): AvailabilityBucket {
-  if (length >= 5) return "4+";
-  return String(length) as "1" | "2" | "3" | "4";
-}
-
 export interface EmptyRunInventorySnapshot {
-  /** Count of EMPTY runs per room category within each length bucket. */
+  /** Count of k-night bookable windows per room category (buckets 1–4 are exact k; "4+" sums windows of length ≥5). */
   byBucket: Record<AvailabilityBucket, Partial<Record<RoomCategory, number>>>;
-  /** Total EMPTY runs per bucket (sum across categories). */
+  /** Total k-night bookable windows per bucket (sum across categories). */
   totalsByBucket: Record<AvailabilityBucket, number>;
 }
 
 /**
- * Scans heatmap rows and counts consecutive EMPTY cell runs, grouped by run length bucket and room category.
- * Each run increments exactly one bucket for that row's category (same semantics as gap "runs" in yield KPIs).
+ * For one maximal contiguous EMPTY run of length L, adds all overlapping k-night bookable windows:
+ * buckets "1".."4" get max(0, L−k+1); "4+" gets every window of length ≥5, i.e. Σ_{k=5..L}(L−k+1) = (L−4)(L−3)/2 for L≥5.
+ */
+function addBookableWindowsForRun(
+  length: number,
+  cat: RoomCategory,
+  byBucket: EmptyRunInventorySnapshot["byBucket"],
+  totalsByBucket: EmptyRunInventorySnapshot["totalsByBucket"],
+): void {
+  if (length < 1) return;
+
+  const exactBuckets: Array<{ bucket: "1" | "2" | "3" | "4"; k: number }> = [
+    { bucket: "1", k: 1 },
+    { bucket: "2", k: 2 },
+    { bucket: "3", k: 3 },
+    { bucket: "4", k: 4 },
+  ];
+  for (const { bucket, k } of exactBuckets) {
+    const n = length - k + 1;
+    if (n <= 0) continue;
+    byBucket[bucket][cat] = (byBucket[bucket][cat] ?? 0) + n;
+    totalsByBucket[bucket] += n;
+  }
+
+  if (length >= 5) {
+    const nPlus = ((length - 4) * (length - 3)) / 2;
+    byBucket["4+"][cat] = (byBucket["4+"][cat] ?? 0) + nPlus;
+    totalsByBucket["4+"] += nPlus;
+  }
+}
+
+/**
+ * Scans heatmap rows; for each maximal consecutive EMPTY run, counts overlapping k-night bookable windows
+ * (sliding placements within that run), grouped by stay length bucket and room category.
  */
 export function computeEmptyRunInventory(
   rows: HeatmapRow[],
@@ -55,10 +78,7 @@ export function computeEmptyRunInventory(
       const start = i;
       while (i < cells.length && cells[i].block_type === "EMPTY") i++;
       const length = i - start;
-      const bucket = lengthToBucket(length);
-      const cat = row.category;
-      byBucket[bucket][cat] = (byBucket[bucket][cat] ?? 0) + 1;
-      totalsByBucket[bucket]++;
+      addBookableWindowsForRun(length, row.category, byBucket, totalsByBucket);
     }
   }
 
