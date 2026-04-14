@@ -20,6 +20,12 @@ interface RoomRow {
 }
 interface CategoryRow { name: string; room_count: number; avg_base_rate: number; min_rate: number; max_rate: number; }
 
+function getErrorDetail(e: unknown): string | null {
+  const maybe = e as { response?: { data?: { detail?: unknown } } };
+  const detail = maybe?.response?.data?.detail;
+  return typeof detail === "string" ? detail : null;
+}
+
 export function AdminPanel() {
   const [tab, setTab] = useState<Tab>("rooms");
   const [rooms, setRooms] = useState<RoomRow[]>([]);
@@ -49,7 +55,7 @@ export function AdminPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [show]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -61,8 +67,8 @@ export function AdminPanel() {
       show(`Room ${newRoom.id} added`, "success");
       setNewRoom({ id: "", category: "STANDARD", base_rate: 3000, floor_number: 1 });
       load();
-    } catch (e: any) {
-      show(e?.response?.data?.detail || "Failed to add room", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to add room", "error");
     }
   };
 
@@ -99,8 +105,8 @@ export function AdminPanel() {
       } else {
         show(`Seeded analytics history: ${d.inserted_bookings ?? 0} bookings`, "success");
       }
-    } catch (e: any) {
-      show(e?.response?.data?.detail || "Failed to seed analytics history", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to seed analytics history", "error");
     } finally {
       setSeedLoading(false);
     }
@@ -111,12 +117,19 @@ export function AdminPanel() {
       <Toasts />
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-8 pb-4 border-b border-border/50">
-        <div>
+      <div className="mb-8 pb-4 border-b border-border/50">
+        <div className="flex items-start justify-between gap-6">
           <h1 className="text-3xl font-serif font-bold text-text">Platform Config</h1>
-          <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">Manage rooms, inventory, and dynamic pricing rules</p>
+          <div className="hidden sm:block text-[9px] font-bold text-text-muted uppercase tracking-[0.2em] bg-surface-2 px-4 py-1.5 rounded-sm border border-border shadow-subtle relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 h-full bg-text" />
+            Admin controls
+          </div>
         </div>
-        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+        <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">
+          Manage rooms, inventory, and dynamic pricing rules
+        </p>
+
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-end sm:justify-end gap-3">
           <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
             <div className="space-y-1">
               <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Seed range</div>
@@ -324,7 +337,7 @@ export function AdminPanel() {
                     await api.patch(`/admin/slots/${cell.id}`, { block_type: next, reason: "Admin manual edit" });
                     show(`Slot ${next === "HARD" ? "hard-blocked" : "freed"}`, "success");
                     load();
-                  } catch (e: any) { show(e?.response?.data?.detail || "Failed to update slot", "error"); }
+                  } catch (e: unknown) { show(getErrorDetail(e) || "Failed to update slot", "error"); }
                 }}
               />
             ) : (
