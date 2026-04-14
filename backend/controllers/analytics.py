@@ -34,6 +34,14 @@ def _as_of_dt(as_of: date) -> datetime:
     return datetime.combine(as_of, time.max)
 
 
+def _cutoff_dt_for_hist_lead(target_date: date, lead_days: int) -> datetime:
+    """
+    Historical pickup cutoff for a historical stay date, matching the current lead time.
+    Example: if today is 10 days before target_date, then for hist_date we use (hist_date - 10 days).
+    """
+    return datetime.combine(target_date - timedelta(days=lead_days), time.max)
+
+
 def _date_range(start: date, end: date) -> list[date]:
     days = (end - start).days
     return [start + timedelta(days=i) for i in range(max(0, days))]
@@ -75,6 +83,28 @@ async def _get_actual_occupied_counts(
     return {(d, cat): int(cnt) for (d, cat, cnt) in rows}
 
 
+async def _get_actual_occupied_counts_rollup(
+    db: AsyncSession,
+    dates: set[date],
+) -> dict[date, int]:
+    if not dates:
+        return {}
+    dmin, dmax = min(dates), max(dates) + timedelta(days=1)
+    rows = (await db.execute(
+        select(Slot.date, func.count(Slot.id))
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= dmin,
+            Slot.date < dmax,
+            Slot.block_type != BlockType.EMPTY,
+            Slot.date.in_(dates),
+        )
+        .group_by(Slot.date)
+    )).all()
+    return {d: int(cnt) for (d, cnt) in rows}
+
+
 async def _get_on_books_occupied_counts(
     db: AsyncSession,
     start: date,
@@ -99,6 +129,128 @@ async def _get_on_books_occupied_counts(
         for d in _date_range(seg_start, seg_end):
             counts[(d, b.room_category)] += 1
     return dict(counts)
+
+
+async def _get_on_books_counts_for_specific_dates(
+    db: AsyncSession,
+    dates: set[date],
+    cutoff_dt: datetime,
+    category: Optional[RoomCategory] = None,
+) -> dict[date, int]:
+    """
+    Count on-the-books occupied rooms for specific stay dates (per-day), as of cutoff_dt.
+    Uses bookings overlap logic; intended for small date sets (dashboard windows).
+    """
+    if not dates:
+        return {}
+    dmin, dmax = min(dates), max(dates) + timedelta(days=1)
+    q = select(Booking).where(
+        Booking.is_live == True,
+        Booking.created_at <= cutoff_dt,
+        Booking.check_out > dmin,
+        Booking.check_in < dmax,
+    )
+    if category is not None:
+        q = q.where(Booking.room_category == category)
+    bookings = (await db.execute(q)).scalars().all()
+
+    out: dict[date, int] = defaultdict(int)
+    for b in bookings:
+        seg_start = max(dmin, b.check_in)
+        seg_end = min(dmax, b.check_out)
+        for d in _date_range(seg_start, seg_end):
+            if d in dates:
+                out[d] += 1
+    return dict(out)
+
+
+def _clamp01(x: float) -> float:
+    return max(0.0, min(1.0, float(x)))
+
+
+def _clamp_pct(x: float) -> float:
+    return max(0.0, min(100.0, float(x)))
+
+
+async def _predict_final_occ_pct_for_date(
+    db: AsyncSession,
+    target_date: date,
+    as_of: date,
+    total_rooms: int,
+    on_books_rooms_now: int,
+    category: Optional[RoomCategory],
+) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """
+    Predict FINAL occupancy for target_date using historical pickup ratio at the same lead time.
+    pctBookedByLead = (on_books_at_lead / final_realized) on historical same-date windows.
+    forecastFinal = on_books_now / mean(pctBookedByLead)
+    """
+    lead_days = max(0, (target_date - as_of).days)
+    if total_rooms <= 0:
+        return None, None, None, None
+
+    # Historical same-calendar dates (approx) 1y and 2y back.
+    hist_dates = [target_date - timedelta(days=364), target_date - timedelta(days=728)]
+    hist_set = set(hist_dates)
+
+    # Final realized occupancy (rooms) for historical dates from slots.
+    if category is None:
+        final_hist = await _get_actual_occupied_counts_rollup(db, hist_set)
+        final_hist_cat: dict[date, int] = final_hist
+    else:
+        final_hist_cat = await _get_actual_occupied_counts(db, start=min(hist_set), end=max(hist_set) + timedelta(days=1))
+        final_hist_cat = {d: final_hist_cat.get((d, category), 0) for d in hist_set}
+
+    # On-the-books at same lead time for historical dates.
+    pct_samples: list[float] = []
+    for hd in hist_dates:
+        final_rooms = int(final_hist_cat.get(hd, 0) or 0)
+        if final_rooms <= 0:
+            continue
+        cutoff_dt = _cutoff_dt_for_hist_lead(hd, lead_days)
+        on_books_hist_map = await _get_on_books_counts_for_specific_dates(
+            db=db,
+            dates={hd},
+            cutoff_dt=cutoff_dt,
+            category=category,
+        )
+        on_books_hist = int(on_books_hist_map.get(hd, 0) or 0)
+        pct = on_books_hist / final_rooms
+        # Clamp to avoid insane blowups (e.g. data glitches).
+        pct_samples.append(_clamp01(pct))
+
+    if not pct_samples:
+        return None, None, None, None
+
+    pct_mean = max(0.05, min(0.95, mean(pct_samples)))
+    pct_low = max(0.05, min(0.95, min(pct_samples)))
+    pct_high = max(0.05, min(0.95, max(pct_samples)))
+
+    # If you're behind typical (smaller pct), final will project higher; so low/high invert.
+    final_mean_rooms = on_books_rooms_now / pct_mean if pct_mean > 0 else on_books_rooms_now
+    final_low_rooms = on_books_rooms_now / pct_high if pct_high > 0 else on_books_rooms_now
+    final_high_rooms = on_books_rooms_now / pct_low if pct_low > 0 else on_books_rooms_now
+
+    # Likelihood heuristic: higher when we have 2 samples and they agree.
+    # (With only 1–2 historical samples, keep it simple and explainable.)
+    if len(pct_samples) == 1:
+        likelihood = 55.0
+    else:
+        spread = abs(pct_samples[0] - pct_samples[1])
+        # If pickup ratios differ by <=5 pts → high confidence; <=12 pts → medium; else low.
+        if spread <= 0.05:
+            likelihood = 85.0
+        elif spread <= 0.12:
+            likelihood = 70.0
+        else:
+            likelihood = 55.0
+
+    return (
+        _clamp_pct((final_mean_rooms / total_rooms) * 100.0),
+        _clamp_pct((final_low_rooms / total_rooms) * 100.0),
+        _clamp_pct((final_high_rooms / total_rooms) * 100.0),
+        likelihood,
+    )
 
 
 def _rollup_counts(
@@ -139,14 +291,27 @@ async def get_occupancy_forecast(
             expected = expected_by_date_cat.get((d, cat))
             if not expected:
                 expected = {"mean": 0.0, "low": 0.0, "high": 0.0}
+            on_books_now = int(on_books_counts.get((d, cat), 0) or 0)
+            pred_mean, pred_low, pred_high, pred_like = await _predict_final_occ_pct_for_date(
+                db=db,
+                target_date=d,
+                as_of=as_of,
+                total_rooms=total_rooms,
+                on_books_rooms_now=on_books_now,
+                category=cat,
+            )
             points.append(OccupancyPoint(
                 date=d,
                 total_rooms=total_rooms,
                 occupied_rooms_actual=actual_counts.get((d, cat)),
-                occupied_rooms_on_books=on_books_counts.get((d, cat)),
+                occupied_rooms_on_books=on_books_now,
                 expected_occ_pct=expected["mean"],
                 expected_occ_low_pct=expected["low"],
                 expected_occ_high_pct=expected["high"],
+                predicted_final_occ_pct=pred_mean,
+                predicted_final_occ_low_pct=pred_low,
+                predicted_final_occ_high_pct=pred_high,
+                predicted_final_likelihood_pct=pred_like,
             ))
         series.append(OccupancySeries(category=cat, points=points))
 
@@ -156,14 +321,27 @@ async def get_occupancy_forecast(
     roll_points: list[OccupancyPoint] = []
     for d in days:
         expected = expected_by_date_cat.get((d, None)) or {"mean": 0.0, "low": 0.0, "high": 0.0}
+        on_books_now = int(roll_on_books.get(d, 0) or 0)
+        pred_mean, pred_low, pred_high, pred_like = await _predict_final_occ_pct_for_date(
+            db=db,
+            target_date=d,
+            as_of=as_of,
+            total_rooms=totals.total_all,
+            on_books_rooms_now=on_books_now,
+            category=None,
+        )
         roll_points.append(OccupancyPoint(
             date=d,
             total_rooms=totals.total_all,
             occupied_rooms_actual=roll_actual.get(d),
-            occupied_rooms_on_books=roll_on_books.get(d),
+            occupied_rooms_on_books=on_books_now,
             expected_occ_pct=expected["mean"],
             expected_occ_low_pct=expected["low"],
             expected_occ_high_pct=expected["high"],
+            predicted_final_occ_pct=pred_mean,
+            predicted_final_occ_low_pct=pred_low,
+            predicted_final_occ_high_pct=pred_high,
+            predicted_final_likelihood_pct=pred_like,
         ))
     series.append(OccupancySeries(category=None, points=roll_points))
 

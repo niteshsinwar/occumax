@@ -168,6 +168,10 @@ export interface OccupancyPoint {
   expected_occ_pct: number;
   expected_occ_low_pct: number;
   expected_occ_high_pct: number;
+  predicted_final_occ_pct: number | null;
+  predicted_final_occ_low_pct: number | null;
+  predicted_final_occ_high_pct: number | null;
+  predicted_final_likelihood_pct: number | null;
 }
 
 export interface OccupancySeries {
