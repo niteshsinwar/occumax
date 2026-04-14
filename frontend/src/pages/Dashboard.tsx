@@ -10,7 +10,7 @@ import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
 const maxDays = 20;
 
 /**
- * Dashboard (Bird's Eye View): occupancy matrix and consecutive EMPTY run counts by length and room category.
+ * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
  */
 export function Dashboard() {
@@ -114,7 +114,7 @@ export function Dashboard() {
         <div>
           <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Bird's Eye View</h1>
           <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
-            Occupancy matrix and bookable empty-night runs by length and room type
+            Occupancy matrix and k-night bookable windows by length and room type
           </p>
         </div>
         <button

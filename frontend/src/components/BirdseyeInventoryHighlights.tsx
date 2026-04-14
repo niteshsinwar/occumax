@@ -29,7 +29,7 @@ interface BirdseyeInventoryHighlightsProps {
 }
 
 /**
- * Right-column summary for Bird's Eye View: consecutive EMPTY runs by length bucket, broken down by room category.
+ * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
  */
 export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
   const grandTotal = BUCKET_ORDER.reduce((s, b) => s + snapshot.totalsByBucket[b], 0);
@@ -37,9 +37,9 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
   return (
     <div className="bg-surface border border-border shadow-subtle flex flex-col min-h-0">
       <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40 shrink-0">
-        <h3 className="font-serif font-bold text-sm text-text">Availability runs</h3>
+        <h3 className="font-serif font-bold text-sm text-text">Availability at a glance</h3>
         <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-          Consecutive empty nights · {maxDays}-day window · {grandTotal} run{grandTotal !== 1 ? "s" : ""} total
+          k-night placements in EMPTY strips (overlapping) · {maxDays}-day scan · {grandTotal} total across lengths
         </p>
       </div>
 
@@ -59,7 +59,7 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
               </div>
 
               {total === 0 ? (
-                <div className="px-2.5 py-3 text-[10px] text-text-muted font-medium">No runs in this bucket</div>
+                <div className="px-2.5 py-3 text-[10px] text-text-muted font-medium">No windows in this bucket</div>
               ) : (
                 <ul className="divide-y divide-border/40">
                   {categoriesPresent.map(cat => {

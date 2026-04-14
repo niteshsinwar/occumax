@@ -202,7 +202,8 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
-| 2026-04-13 | **Bird's Eye View** is a dedicated **Dashboard** page at `/dashboard` (nav: Dashboard) — 70/30 **Current Occupancy** heatmap + availability-run side panel; Manager page is Yield + Pricing only (`Dashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`; `GET /dashboard/heatmap`). |
+| 2026-04-13 | Bird's Eye side panel (`computeEmptyRunInventory`) counts **overlapping k-night bookable windows** inside each maximal EMPTY strip (not one tally per strip length); UI copy updated in `BirdseyeInventoryHighlights.tsx`. |
+| 2026-04-13 | **Bird's Eye View** is a dedicated **Dashboard** page at `/dashboard` (nav: Dashboard) — 70/30 **Current Occupancy** heatmap + **Availability at a glance** side panel (k-night bookable window counts); Manager page is Yield + Pricing only (`Dashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`; `GET /dashboard/heatmap`). |
 | 2026-04-13 | Added **project-scoped** Cursor skill **occumax-change-workflow** (`.cursor/skills/occumax-change-workflow/SKILL.md`); documented `.cursor/skills/` in the repository map (not intended as a global/personal skill). |
 | Merge PR #4 | Removed legacy product / roadmap / solution design binary and markdown files from the repo (documentation cleanup). |
 | — | **fix**: SSL context for asyncpg with Aiven-style self-signed certificates (`database.py`). |
