@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import {
   adminListRooms, adminAddRoom, adminUpdateRoom, adminDeleteRoom,
   adminListCategories,
+  adminSeedAnalyticsHistory,
   getHeatmap, api,
 } from "../api/client";
 import { useToast } from "../components/shared/Toast";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import type { HeatmapResponse } from "../types";
-import { Building2, Calendar as CalendarIcon, RefreshCw, Plus, Trash2, Edit2, Check, X } from "lucide-react";
+import { Building2, Calendar as CalendarIcon, RefreshCw, Plus, Trash2, Edit2, Check, X, Sparkles } from "lucide-react";
 
 const KNOWN_CATEGORIES = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"];
 
@@ -30,6 +31,13 @@ export function AdminPanel() {
   const [newRoom, setNewRoom] = useState({ id: "", category: "STANDARD", base_rate: 3000, floor_number: 1 });
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
   const [editRate, setEditRate] = useState("");
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedStart, setSeedStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [seedEnd, setSeedEnd] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 21);
+    return d.toISOString().slice(0, 10);
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -78,6 +86,26 @@ export function AdminPanel() {
     } catch { show("Failed to update rate", "error"); }
   };
 
+  const handleSeedAnalytics = async () => {
+    if (!seedStart || !seedEnd) { show("Select a start and end date", "error"); return; }
+    if (seedEnd <= seedStart) { show("End date must be after start date", "error"); return; }
+    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd}? This will insert DEMO_ANALYTICS rows (1y/2y back).`)) return;
+    setSeedLoading(true);
+    try {
+      const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd });
+      const d = res.data ?? {};
+      if (d.skipped) {
+        show("Demo analytics data already exists (skipped).", "info");
+      } else {
+        show(`Seeded analytics history: ${d.inserted_bookings ?? 0} bookings`, "success");
+      }
+    } catch (e: any) {
+      show(e?.response?.data?.detail || "Failed to seed analytics history", "error");
+    } finally {
+      setSeedLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto">
       <Toasts />
@@ -88,9 +116,40 @@ export function AdminPanel() {
           <h1 className="text-3xl font-serif font-bold text-text">Platform Config</h1>
           <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">Manage rooms, inventory, and dynamic pricing rules</p>
         </div>
-        <button className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2" onClick={load} disabled={loading}>
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-accent' : 'text-accent'}`} /> Refresh Data
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="hidden lg:flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
+            <div className="space-y-1">
+              <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Seed range</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
+                  value={seedStart}
+                  onChange={(e) => setSeedStart(e.target.value)}
+                />
+                <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">to</span>
+                <input
+                  type="date"
+                  className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
+                  value={seedEnd}
+                  onChange={(e) => setSeedEnd(e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          <button
+            className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2"
+            onClick={handleSeedAnalytics}
+            disabled={seedLoading}
+            title="Generate demo historical bookings so AI forecast shows non-zero predictions"
+          >
+            <Sparkles className={`w-3.5 h-3.5 ${seedLoading ? "animate-pulse text-accent" : "text-accent"}`} />
+            Seed AI History
+          </button>
+          <button className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2" onClick={load} disabled={loading}>
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-accent' : 'text-accent'}`} /> Refresh Data
+          </button>
+        </div>
       </div>
 
       {/* Category summary cards */}
