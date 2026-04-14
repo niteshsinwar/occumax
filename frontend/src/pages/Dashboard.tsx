@@ -189,6 +189,12 @@ export function Dashboard() {
         />
       )}
 
+      {heatmap && forecast && (
+        <div className="mt-6">
+          <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+        </div>
+      )}
+
       {heatmap && snapshot && (
         <>
           {filteredRows.length === 0 ? (
@@ -211,12 +217,7 @@ export function Dashboard() {
                 </div>
               </div>
               <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
-                <div className="flex flex-col gap-6">
-                  <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={spanDays} />
-                  {forecast && (
-                    <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
-                  )}
-                </div>
+                <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={spanDays} />
               </aside>
             </div>
           )}
