@@ -1,20 +1,24 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { getHeatmap, api } from "../api/client";
-import type { HeatmapResponse } from "../types";
+import type { HeatmapResponse, RoomCategory } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
+import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
 
-const maxDays = 20;
+const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
 
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
+ * Date span and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
  */
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
+  const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(2);
+  const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
   const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
   const { show, Toasts } = useToast();
 
@@ -31,10 +35,36 @@ export function Dashboard() {
     loadHeatmap();
   }, [loadHeatmap]);
 
-  const snapshot = useMemo(
-    () => (heatmap ? computeEmptyRunInventory(heatmap.rows, maxDays) : null),
-    [heatmap],
-  );
+  /** Rows limited to categories selected in the filter bar (Standard / Deluxe / Suite). */
+  const filteredRows = useMemo(() => {
+    if (!heatmap) return [];
+    const set = new Set(selectedCategories);
+    return heatmap.rows.filter(row => set.has(row.category));
+  }, [heatmap, selectedCategories]);
+
+  /** Number of day columns shown; capped by what the API returned. */
+  const spanDays = useMemo(() => {
+    if (!heatmap) return 0;
+    return Math.min(weekSpan * 7, heatmap.dates.length);
+  }, [heatmap, weekSpan]);
+
+  const snapshot = useMemo(() => {
+    if (!heatmap) return null;
+    return computeEmptyRunInventory(filteredRows, spanDays);
+  }, [heatmap, filteredRows, spanDays]);
+
+  /**
+   * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
+   */
+  const handleToggleCategory = useCallback((category: RoomCategory) => {
+    setSelectedCategories(prev => {
+      const on = prev.includes(category);
+      if (on && prev.length === 1) return prev;
+      if (on) return prev.filter(c => c !== category);
+      const order: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
+      return [...prev, category].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    });
+  }, []);
 
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
@@ -110,7 +140,7 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8 border-b border-border/50 pb-6">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6 border-b border-border/50 pb-6">
         <div>
           <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Bird's Eye View</h1>
           <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
@@ -126,25 +156,42 @@ export function Dashboard() {
         </button>
       </div>
 
+      {heatmap && (
+        <BirdseyeFilters
+          weekSpan={weekSpan}
+          onWeekSpanChange={setWeekSpan}
+          selectedCategories={selectedCategories}
+          onToggleCategory={handleToggleCategory}
+        />
+      )}
+
       {heatmap && snapshot && (
-        <div className="flex flex-col lg:flex-row gap-6 items-stretch">
-          <div className="w-full lg:w-[70%] lg:min-w-0 min-h-[320px]">
-            <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
-              <HeatmapGrid
-                dates={heatmap.dates}
-                rows={heatmap.rows}
-                title="Current Occupancy"
-                compact
-                maxDays={maxDays}
-                hideLegend
-                onCellClick={setSlotModal}
-              />
+        <>
+          {filteredRows.length === 0 ? (
+            <div className="bg-surface border border-border py-12 px-6 text-center text-sm text-text-muted">
+              No rooms match the selected types for this hotel.
             </div>
-          </div>
-          <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
-            <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={maxDays} />
-          </aside>
-        </div>
+          ) : (
+            <div className="flex flex-col lg:flex-row gap-6 items-stretch">
+              <div className="w-full lg:w-[70%] lg:min-w-0 min-h-[320px]">
+                <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
+                  <HeatmapGrid
+                    dates={heatmap.dates}
+                    rows={filteredRows}
+                    title="Current Occupancy"
+                    compact
+                    maxDays={spanDays}
+                    hideLegend
+                    onCellClick={setSlotModal}
+                  />
+                </div>
+              </div>
+              <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
+                <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={spanDays} />
+              </aside>
+            </div>
+          )}
+        </>
       )}
 
       {!heatmap && (
