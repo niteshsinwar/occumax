@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from services.database import create_tables
-from api import admin, dashboard, manager, receptionist, ai, pricing
+from api import admin, dashboard, manager, receptionist, ai, pricing, analytics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +38,7 @@ app.include_router(pricing.router)
 app.include_router(receptionist.router)
 app.include_router(admin.router)
 app.include_router(ai.router)
+app.include_router(analytics.router)
 
 
 @app.on_event("startup")

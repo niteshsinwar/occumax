@@ -110,6 +110,9 @@ Base URL: from `VITE_API_URL` or `http://localhost:8000` ([`frontend/src/api/cli
 | `/admin` | PATCH | `/slots/{slot_id}` | Patch individual slot (admin tooling). |
 | `/ai` | GET | `/context` | Serialized hotel snapshot for injecting into the chat agent. |
 | `/ai` | POST | `/chat` | One conversational turn; client may send full message history. |
+| `/analytics` | GET | `/occupancy-forecast` | Expected vs on-the-books vs realized occupancy (by category + rollup) for a requested window. |
+| `/analytics` | GET | `/pace` | Pickup / pace curve: on-the-books vs historical on-the-books at matching lead times (by category + rollup). |
+| `/analytics` | GET | `/event-insights` | LOS and arrival-pattern insights for a requested window (beta). |
 
 Implementation files: [`backend/api/dashboard.py`](backend/api/dashboard.py), [`backend/api/manager.py`](backend/api/manager.py), [`backend/api/pricing.py`](backend/api/pricing.py), [`backend/api/receptionist.py`](backend/api/receptionist.py), [`backend/api/admin.py`](backend/api/admin.py), [`backend/api/ai.py`](backend/api/ai.py).
 
@@ -202,6 +205,7 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-14 | Added additive **Analytics** endpoints (`/analytics/*`) for Bird's Eye Dashboard: occupancy forecast (seasonal baseline + recent trend + confidence band), pace (on-the-books vs historical lead time), and event LOS/arrival insights (beta). |
 | 2026-04-13 | Bird's Eye **Dashboard** (`/dashboard`): client-side **filter bar** — 1 / 2 / 3 week horizon (default 2) and Standard / Deluxe / Suite toggles (default all three); filters `HeatmapGrid` + **Availability at a glance** only (`BirdseyeFilters.tsx`, `Dashboard.tsx`). `getHeatmap` and other routes unchanged. |
 | 2026-04-13 | Bird's Eye side panel (`computeEmptyRunInventory`) counts **overlapping k-night bookable windows** inside each maximal EMPTY strip (not one tally per strip length); UI copy updated in `BirdseyeInventoryHighlights.tsx`. |
 | 2026-04-13 | **Bird's Eye View** is a dedicated **Dashboard** page at `/dashboard` (nav: Dashboard) — 70/30 **Current Occupancy** heatmap + **Availability at a glance** side panel (k-night bookable window counts); Manager page is Yield + Pricing only (`Dashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`; `GET /dashboard/heatmap`). |

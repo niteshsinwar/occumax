@@ -1,12 +1,14 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, api } from "../api/client";
-import type { HeatmapResponse, RoomCategory } from "../types";
+import { getHeatmap, getOccupancyForecast, api } from "../api/client";
+import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
+import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
+import { addDays, formatISO, parseISO } from "date-fns";
 
 const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
 
@@ -17,6 +19,7 @@ const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUIT
  */
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
+  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(2);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
   const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
@@ -34,6 +37,27 @@ export function Dashboard() {
   useEffect(() => {
     loadHeatmap();
   }, [loadHeatmap]);
+
+  const loadForecast = useCallback(async () => {
+    if (!heatmap) return;
+    try {
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const asOfStr = startStr;
+
+      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
+      setForecast(res.data);
+    } catch {
+      // Keep the dashboard functional even if analytics is unavailable.
+      setForecast(null);
+    }
+  }, [heatmap, weekSpan]);
+
+  useEffect(() => {
+    loadForecast();
+  }, [loadForecast]);
 
   /** Rows limited to categories selected in the filter bar (Standard / Deluxe / Suite). */
   const filteredRows = useMemo(() => {
@@ -163,6 +187,12 @@ export function Dashboard() {
           selectedCategories={selectedCategories}
           onToggleCategory={handleToggleCategory}
         />
+      )}
+
+      {heatmap && forecast && (
+        <div className="mt-6">
+          <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+        </div>
       )}
 
       {heatmap && snapshot && (

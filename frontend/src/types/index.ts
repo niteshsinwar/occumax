@@ -158,3 +158,47 @@ export interface PricingCommitResult {
   skipped: number;
 }
 
+// ── Analytics (forecast + pace) ─────────────────────────────────────────────
+
+export interface OccupancyPoint {
+  date: string;
+  total_rooms: number;
+  occupied_rooms_actual: number | null;
+  occupied_rooms_on_books: number | null;
+  expected_occ_pct: number;
+  expected_occ_low_pct: number;
+  expected_occ_high_pct: number;
+}
+
+export interface OccupancySeries {
+  category: RoomCategory | null;
+  points: OccupancyPoint[];
+}
+
+export interface OccupancyForecastResponse {
+  start: string;
+  end: string;
+  as_of: string;
+  series: OccupancySeries[];
+}
+
+export interface PacePoint {
+  lead_days: number;
+  on_books_rooms: number;
+  on_books_occ_pct: number;
+  expected_on_books_rooms: number;
+  expected_on_books_occ_pct: number;
+}
+
+export interface PaceSeries {
+  category: RoomCategory | null;
+  stay_start: string;
+  stay_end: string;
+  points: PacePoint[];
+}
+
+export interface PaceResponse {
+  as_of: string;
+  series: PaceSeries[];
+}
+

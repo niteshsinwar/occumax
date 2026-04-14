@@ -7,6 +7,12 @@ export const api = axios.create({ baseURL: BASE });
 
 // Dashboard
 export const getHeatmap = () => api.get("/dashboard/heatmap");
+export const getOccupancyForecast = (params: { start: string; end: string; as_of: string }) =>
+  api.get("/analytics/occupancy-forecast", { params });
+export const getPace = (params: { start: string; end: string; as_of: string; max_lead_days?: number }) =>
+  api.get("/analytics/pace", { params });
+export const getEventInsights = (params: { start: string; end: string; as_of: string; category?: string | null }) =>
+  api.get("/analytics/event-insights", { params });
 
 // Manager
 export const fireOptimise = () => api.post("/manager/optimise");
