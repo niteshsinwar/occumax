@@ -27,16 +27,16 @@ function AppLayout() {
               </div>
               <nav className="flex items-center gap-8 hidden md:flex h-full pt-1">
                 <NavLink
-                  to="/manager"
-                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
-                >
-                  <LayoutDashboard className="w-4 h-4" /> Manager
-                </NavLink>
-                <NavLink
                   to="/dashboard"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
                   <Grid3x3 className="w-4 h-4" /> Dashboard
+                </NavLink>
+                <NavLink
+                  to="/manager"
+                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
+                >
+                  <LayoutDashboard className="w-4 h-4" /> Manager
                 </NavLink>
                 <NavLink
                   to="/receptionist"
@@ -66,12 +66,12 @@ function AppLayout() {
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
         <div className="bg-surface rounded-sm shadow-subtle border border-border/70 border-t-4 border-t-accent p-8 sm:p-10 min-h-[600px] relative">
           <Routes>
-            <Route path="/" element={<Navigate to="/manager" replace />} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/manager" element={<ManagerDashboard />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/receptionist" element={<ReceptionistView />} />
             <Route path="/admin" element={<AdminPanel />} />
-            <Route path="*" element={<Navigate to="/manager" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
       </main>
