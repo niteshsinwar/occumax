@@ -202,6 +202,7 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-13 | Bird's Eye **Dashboard** (`/dashboard`): client-side **filter bar** — 1 / 2 / 3 week horizon (default 2) and Standard / Deluxe / Suite toggles (default all three); filters `HeatmapGrid` + **Availability at a glance** only (`BirdseyeFilters.tsx`, `Dashboard.tsx`). `getHeatmap` and other routes unchanged. |
 | 2026-04-13 | Bird's Eye side panel (`computeEmptyRunInventory`) counts **overlapping k-night bookable windows** inside each maximal EMPTY strip (not one tally per strip length); UI copy updated in `BirdseyeInventoryHighlights.tsx`. |
 | 2026-04-13 | **Bird's Eye View** is a dedicated **Dashboard** page at `/dashboard` (nav: Dashboard) — 70/30 **Current Occupancy** heatmap + **Availability at a glance** side panel (k-night bookable window counts); Manager page is Yield + Pricing only (`Dashboard.tsx`, `BirdseyeInventoryHighlights.tsx`, `utils/inventoryAvailability.ts`; `GET /dashboard/heatmap`). |
 | 2026-04-13 | Added **project-scoped** Cursor skill **occumax-change-workflow** (`.cursor/skills/occumax-change-workflow/SKILL.md`); documented `.cursor/skills/` in the repository map (not intended as a global/personal skill). |
@@ -227,4 +228,4 @@ Newest first; reflects repository history at documentation time.
 | Booking / split stay algorithms | [`backend/services/algorithm/booking_placement.py`](backend/services/algorithm/booking_placement.py), [`backend/services/algorithm/split_stay.py`](backend/services/algorithm/split_stay.py) |
 | AI agents | [`backend/services/ai/receptionist_agent.py`](backend/services/ai/receptionist_agent.py), [`backend/services/ai/pricing_agent.py`](backend/services/ai/pricing_agent.py) |
 | Frontend API surface | [`frontend/src/api/client.ts`](frontend/src/api/client.ts) |
-| Bird's Eye Dashboard | [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx) |
+| Bird's Eye Dashboard | [`frontend/src/pages/Dashboard.tsx`](frontend/src/pages/Dashboard.tsx), [`frontend/src/components/BirdseyeFilters.tsx`](frontend/src/components/BirdseyeFilters.tsx), [`frontend/src/components/BirdseyeInventoryHighlights.tsx`](frontend/src/components/BirdseyeInventoryHighlights.tsx) |
