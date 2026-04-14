@@ -20,18 +20,25 @@ const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUIT
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
+  const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
+  const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
+  const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(2);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
   const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async () => {
+    setIsHeatmapLoading(true);
+    setHeatmapLoadError(null);
     try {
       const h = await getHeatmap();
       setHeatmap(h.data);
     } catch {
-      show("Failed to load heatmap", "error");
+      setHeatmap(null);
+      setHeatmapLoadError("The occupancy matrix could not be loaded. Check the API connection, then try again.");
     }
+    setIsHeatmapLoading(false);
   }, [show]);
 
   useEffect(() => {
@@ -40,6 +47,7 @@ export function Dashboard() {
 
   const loadForecast = useCallback(async () => {
     if (!heatmap) return;
+    setIsForecastLoading(true);
     try {
       const start = parseISO(heatmap.dates[0]);
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
@@ -53,6 +61,7 @@ export function Dashboard() {
       // Keep the dashboard functional even if analytics is unavailable.
       setForecast(null);
     }
+    setIsForecastLoading(false);
   }, [heatmap, weekSpan]);
 
   useEffect(() => {
@@ -189,9 +198,26 @@ export function Dashboard() {
         />
       )}
 
-      {heatmap && forecast && (
+      {heatmap && (forecast || isForecastLoading) && (
         <div className="mt-6">
-          <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+          {forecast ? (
+            <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+          ) : (
+            <div className="bg-surface border border-border shadow-subtle">
+              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="font-serif font-bold text-sm text-text">AI forecast</h3>
+                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
+                </div>
+                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
+                  Generating predictions from past pickup trends…
+                </p>
+              </div>
+              <div className="p-3">
+                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -202,8 +228,8 @@ export function Dashboard() {
               No rooms match the selected types for this hotel.
             </div>
           ) : (
-            <div className="flex flex-col lg:flex-row gap-6 items-stretch">
-              <div className="w-full lg:w-[70%] lg:min-w-0 min-h-[320px]">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch">
+              <div className="min-h-[320px] min-w-0">
                 <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
                   <HeatmapGrid
                     dates={heatmap.dates}
@@ -216,7 +242,7 @@ export function Dashboard() {
                   />
                 </div>
               </div>
-              <aside className="w-full lg:w-[30%] lg:max-w-md lg:shrink-0 flex flex-col min-h-0">
+              <aside className="flex flex-col min-h-0">
                 <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={spanDays} />
               </aside>
             </div>
@@ -227,17 +253,31 @@ export function Dashboard() {
       {!heatmap && (
         <div className="bg-surface border border-border py-16 px-6 text-center">
           <Grid3x3 className="w-8 h-8 text-accent/50 mx-auto mb-4" />
-          <h2 className="text-xl font-serif font-bold text-text mb-2">No calendar data</h2>
-          <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-            The occupancy matrix could not be loaded. Check the API connection, then try again.
-          </p>
-          <button
-            type="button"
-            className="bg-text text-surface font-semibold hover:bg-text/90 text-xs uppercase tracking-widest px-8 py-3"
-            onClick={() => loadHeatmap()}
-          >
-            Retry load
-          </button>
+          {isHeatmapLoading ? (
+            <>
+              <h2 className="text-xl font-serif font-bold text-text mb-2">Fetching calendar data</h2>
+              <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
+                Loading rooms and slots, then generating insights…
+              </p>
+              <div className="max-w-sm mx-auto">
+                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
+              </div>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-serif font-bold text-text mb-2">No calendar data</h2>
+              <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
+                {heatmapLoadError ?? "The occupancy matrix could not be loaded. Check the API connection, then try again."}
+              </p>
+              <button
+                type="button"
+                className="bg-text text-surface font-semibold hover:bg-text/90 text-xs uppercase tracking-widest px-8 py-3"
+                onClick={() => loadHeatmap()}
+              >
+                Retry load
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
