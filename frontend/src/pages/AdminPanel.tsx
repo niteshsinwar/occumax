@@ -116,18 +116,18 @@ export function AdminPanel() {
           <h1 className="text-3xl font-serif font-bold text-text">Platform Config</h1>
           <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">Manage rooms, inventory, and dynamic pricing rules</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="hidden lg:flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+          <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
             <div className="space-y-1">
               <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Seed range</div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <input
                   type="date"
                   className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
                   value={seedStart}
                   onChange={(e) => setSeedStart(e.target.value)}
                 />
-                <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">to</span>
+                <span className="hidden sm:inline text-[10px] font-bold text-text-muted uppercase tracking-widest">to</span>
                 <input
                   type="date"
                   className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
