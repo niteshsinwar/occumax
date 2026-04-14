@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from core.models import Room, Slot, BlockType
 from core.schemas import RoomCreate, RoomUpdate
+from services.analytics.seed_history import seed_analytics_history as seedAnalyticsHistory
 
 
 async def list_rooms(db: AsyncSession) -> list[dict]:
@@ -164,3 +165,22 @@ async def patch_slot(slot_id: str, body: SlotPatch, db: AsyncSession) -> dict:
         "prev": prev,
         "new": body.block_type,
     }
+
+
+class SeedAnalyticsHistoryRequest(BaseModel):
+    start: date
+    end: date
+
+
+async def seed_analytics_history(db: AsyncSession, body: SeedAnalyticsHistoryRequest) -> dict:
+    """
+    Seed historical demo data for analytics predictions.
+
+    This is intended for demos/dev environments so the Bird's Eye AI forecast has
+    1y/2y-back data to compute predicted final occupancy and likelihood.
+    """
+    try:
+        result = await seedAnalyticsHistory(db=db, target_start=body.start, target_end=body.end, window_days=21)
+        return {"status": "ok", "start": str(body.start), "end": str(body.end), **result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

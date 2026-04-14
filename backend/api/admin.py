@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.database import get_db
 from core.schemas import RoomCreate, RoomUpdate
-from controllers.admin import SlotPatch
+from controllers.admin import SlotPatch, SeedAnalyticsHistoryRequest
 from controllers import admin as ctrl
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -44,3 +44,8 @@ async def patch_slot(
     slot_id: str, body: SlotPatch, db: AsyncSession = Depends(get_db)
 ):
     return await ctrl.patch_slot(slot_id, body, db)
+
+
+@router.post("/seed-analytics-history")
+async def seed_analytics_history(body: SeedAnalyticsHistoryRequest, db: AsyncSession = Depends(get_db)):
+    return await ctrl.seed_analytics_history(db=db, body=body)
