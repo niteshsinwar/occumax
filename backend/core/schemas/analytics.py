@@ -18,6 +18,13 @@ class OccupancyPoint(BaseModel):
     expected_occ_low_pct: float
     expected_occ_high_pct: float
 
+    # Pickup-based prediction of FINAL occupancy for this date (as of `as_of`), derived
+    # from same-lead pickup ratios on the same calendar dates in prior years.
+    predicted_final_occ_pct: Optional[float] = None
+    predicted_final_occ_low_pct: Optional[float] = None
+    predicted_final_occ_high_pct: Optional[float] = None
+    predicted_final_likelihood_pct: Optional[float] = None
+
 
 class OccupancySeries(BaseModel):
     category: Optional[RoomCategory] = None  # None => hotel-wide rollup
