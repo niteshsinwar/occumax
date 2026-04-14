@@ -7,6 +7,11 @@ from core.schemas.booking import (
     SplitSegmentOut, SplitStayResult, SplitStayConfirm,
 )
 from core.schemas.manager import SwapStep, GapInfo, OptimiseResult, CommitRequest, CommitResult
+from core.schemas.analytics import (
+    OccupancyForecastResponse,
+    PaceResponse,
+    EventInsightsResponse,
+)
 
 __all__ = [
     "RoomOut", "RoomCreate", "RoomUpdate",
@@ -14,4 +19,5 @@ __all__ = [
     "BookingRequestIn", "ShuffleResult", "BookingConfirm",
     "SplitSegmentOut", "SplitStayResult", "SplitStayConfirm",
     "SwapStep", "GapInfo", "OptimiseResult", "CommitRequest", "CommitResult",
+    "OccupancyForecastResponse", "PaceResponse", "EventInsightsResponse",
 ]

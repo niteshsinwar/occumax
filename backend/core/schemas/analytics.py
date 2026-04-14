@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from datetime import date
+from typing import Optional
+
+from pydantic import BaseModel
+
+from core.models.enums import RoomCategory
+
+
+class OccupancyPoint(BaseModel):
+    date: date
+    total_rooms: int
+    occupied_rooms_actual: Optional[int] = None
+    occupied_rooms_on_books: Optional[int] = None
+
+    expected_occ_pct: float
+    expected_occ_low_pct: float
+    expected_occ_high_pct: float
+
+
+class OccupancySeries(BaseModel):
+    category: Optional[RoomCategory] = None  # None => hotel-wide rollup
+    points: list[OccupancyPoint]
+
+
+class OccupancyForecastResponse(BaseModel):
+    start: date
+    end: date
+    as_of: date
+    series: list[OccupancySeries]
+
+
+class PacePoint(BaseModel):
+    lead_days: int
+    on_books_rooms: int
+    on_books_occ_pct: float
+    expected_on_books_rooms: float
+    expected_on_books_occ_pct: float
+
+
+class PaceSeries(BaseModel):
+    category: Optional[RoomCategory] = None  # None => hotel-wide rollup
+    stay_start: date
+    stay_end: date
+    points: list[PacePoint]
+
+
+class PaceResponse(BaseModel):
+    as_of: date
+    series: list[PaceSeries]
+
+
+class LosBucket(BaseModel):
+    nights: int
+    count: int
+
+
+class EventInsightsResponse(BaseModel):
+    start: date
+    end: date
+    as_of: date
+    category: Optional[RoomCategory] = None
+
+    most_common_los_nights: Optional[int] = None
+    los_histogram: list[LosBucket]
+
+    most_common_arrival_weekday: Optional[int] = None  # 0=Mon..6=Sun
+    arrival_weekday_histogram: list[int]               # length 7
