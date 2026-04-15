@@ -6,8 +6,6 @@ They do not mutate DB state.
 
 from __future__ import annotations
 
-import asyncio
-from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -172,121 +170,6 @@ def _clamp_pct(x: float) -> float:
     return max(0.0, min(100.0, float(x)))
 
 
-@dataclass(frozen=True)
-class _ForecastCacheEntry:
-    expires_at: float
-    value: OccupancyForecastResponse
-
-
-# Very small in-process cache to make dashboard refreshes snappy.
-# Safe to be approximate; if multiple workers exist, each has its own cache.
-_FORECAST_CACHE_TTL_S = 60.0
-_forecast_cache: dict[str, _ForecastCacheEntry] = {}
-_forecast_cache_lock = asyncio.Lock()
-
-
-def _forecast_cache_key(start: date, end: date, as_of: date) -> str:
-    return f"{start.isoformat()}|{end.isoformat()}|{as_of.isoformat()}"
-
-
-def _now_s() -> float:
-    # Monotonic not strictly required here; wall clock is OK for short TTL.
-    return datetime.utcnow().timestamp()
-
-
-def _build_created_at_index_for_dates(
-    bookings: list[Booking],
-    dates: set[date],
-) -> dict[date, list[datetime]]:
-    """
-    Build an index for fast: count(bookings covering stay_date with created_at <= cutoff_dt).
-
-    Returns: stay_date -> sorted list of created_at timestamps for bookings that include stay_date.
-    """
-    idx: dict[date, list[datetime]] = {d: [] for d in dates}
-    if not dates:
-        return idx
-    dmin, dmax = min(dates), max(dates)
-    for b in bookings:
-        # Intersect [check_in, check_out) with [dmin, dmax] and only emit stay_dates in our set.
-        seg_start = max(dmin, b.check_in)
-        seg_end = min(dmax + timedelta(days=1), b.check_out)
-        if seg_end <= seg_start:
-            continue
-        cur = seg_start
-        while cur < seg_end:
-            if cur in idx:
-                idx[cur].append(b.created_at)
-            cur += timedelta(days=1)
-    for d in idx.keys():
-        idx[d].sort()
-    return idx
-
-
-def _count_created_at_leq(sorted_ts: list[datetime], cutoff_dt: datetime) -> int:
-    if not sorted_ts:
-        return 0
-    return int(bisect_right(sorted_ts, cutoff_dt))
-
-
-def _predict_final_occ_pct_for_date_from_indexes(
-    *,
-    target_date: date,
-    as_of: date,
-    total_rooms: int,
-    on_books_rooms_now: int,
-    final_hist_rooms_by_date: dict[date, int],
-    created_at_index_by_date: dict[date, list[datetime]],
-) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-    """
-    Same logic as `_predict_final_occ_pct_for_date`, but uses precomputed in-memory indexes
-    to avoid per-day database queries.
-    """
-    lead_days = max(0, (target_date - as_of).days)
-    if total_rooms <= 0:
-        return None, None, None, None
-
-    hist_dates = [target_date - timedelta(days=364), target_date - timedelta(days=728)]
-
-    pct_samples: list[float] = []
-    for hd in hist_dates:
-        final_rooms = int(final_hist_rooms_by_date.get(hd, 0) or 0)
-        if final_rooms <= 0:
-            continue
-        cutoff_dt = _cutoff_dt_for_hist_lead(hd, lead_days)
-        on_books_hist = _count_created_at_leq(created_at_index_by_date.get(hd, []), cutoff_dt)
-        pct_samples.append(_clamp01(on_books_hist / final_rooms))
-
-    if not pct_samples:
-        return None, None, None, None
-
-    pct_mean = max(0.05, min(0.95, mean(pct_samples)))
-    pct_low = max(0.05, min(0.95, min(pct_samples)))
-    pct_high = max(0.05, min(0.95, max(pct_samples)))
-
-    # If you're behind typical (smaller pct), final will project higher; so low/high invert.
-    final_mean_rooms = on_books_rooms_now / pct_mean if pct_mean > 0 else on_books_rooms_now
-    final_low_rooms = on_books_rooms_now / pct_high if pct_high > 0 else on_books_rooms_now
-    final_high_rooms = on_books_rooms_now / pct_low if pct_low > 0 else on_books_rooms_now
-
-    if len(pct_samples) == 1:
-        likelihood = 55.0
-    else:
-        spread = abs(pct_samples[0] - pct_samples[1])
-        if spread <= 0.05:
-            likelihood = 85.0
-        elif spread <= 0.12:
-            likelihood = 70.0
-        else:
-            likelihood = 55.0
-
-    mean_pct = _clamp_pct((final_mean_rooms / total_rooms) * 100.0)
-    raw_low = _clamp_pct((final_low_rooms / total_rooms) * 100.0)
-    raw_high = _clamp_pct((final_high_rooms / total_rooms) * 100.0)
-    band_lo, band_hi = min(raw_low, raw_high), max(raw_low, raw_high)
-    return (mean_pct, band_lo, band_hi, likelihood)
-
-
 async def _predict_final_occ_pct_for_date(
     db: AsyncSession,
     target_date: date,
@@ -387,55 +270,12 @@ async def get_occupancy_forecast(
     end: date,
     as_of: date,
 ) -> OccupancyForecastResponse:
-    key = _forecast_cache_key(start, end, as_of)
-    now = _now_s()
-    async with _forecast_cache_lock:
-        cached = _forecast_cache.get(key)
-        if cached and cached.expires_at > now:
-            return cached.value
-
     totals = await _get_room_totals(db)
     days = _date_range(start, end)
 
     actual_counts = await _get_actual_occupied_counts(db, start=min(start, as_of - timedelta(days=365)), end=min(end, as_of + timedelta(days=1)))
     # Calendar occupancy (guest SOFT + blocks HARD); matches heatmap, not Booking.created_at.
     on_books_counts = await _get_actual_occupied_counts(db, start=start, end=end)
-
-    # Preload historical pickup info for every target date and category in one pass.
-    # For each target date d we consult two historical dates: d-364 and d-728.
-    hist_dates_all: set[date] = set()
-    max_cutoff_dt = _as_of_dt(as_of)
-    for d in days:
-        lead_days = max(0, (d - as_of).days)
-        for hd in (d - timedelta(days=364), d - timedelta(days=728)):
-            hist_dates_all.add(hd)
-            cd = _cutoff_dt_for_hist_lead(hd, lead_days)
-            if cd > max_cutoff_dt:
-                max_cutoff_dt = cd
-
-    hist_min = min(hist_dates_all) if hist_dates_all else start
-    hist_max = (max(hist_dates_all) + timedelta(days=1)) if hist_dates_all else end
-
-    # Pull all bookings that could contribute to any historical on-books query.
-    # We keep it broad (created_at <= max cutoff, overlaps hist range) and filter by category in Python.
-    all_bookings = (await db.execute(
-        select(Booking)
-        .where(
-            Booking.is_live == True,
-            Booking.created_at <= max_cutoff_dt,
-            Booking.check_out > hist_min,
-            Booking.check_in < hist_max,
-        )
-    )).scalars().all()
-
-    bookings_by_cat: dict[Optional[RoomCategory], list[Booking]] = defaultdict(list)
-    for b in all_bookings:
-        bookings_by_cat[b.room_category].append(b)
-        bookings_by_cat[None].append(b)  # rollup
-
-    created_at_index_by_cat: dict[Optional[RoomCategory], dict[date, list[datetime]]] = {}
-    for cat in list(totals.total_by_category.keys()) + [None]:
-        created_at_index_by_cat[cat] = _build_created_at_index_for_dates(bookings_by_cat.get(cat, []), hist_dates_all)
 
     expected_by_date_cat = await build_expected_occupancy(
         db=db,
@@ -450,19 +290,18 @@ async def get_occupancy_forecast(
 
     for cat, total_rooms in totals.total_by_category.items():
         points: list[OccupancyPoint] = []
-        final_hist_rooms_by_date = {d: int(actual_counts.get((d, cat), 0) or 0) for d in hist_dates_all}
         for d in days:
             expected = expected_by_date_cat.get((d, cat))
             if not expected:
                 expected = {"mean": 0.0, "low": 0.0, "high": 0.0}
             on_books_now = int(on_books_counts.get((d, cat), 0) or 0)
-            pred_mean, pred_low, pred_high, pred_like = _predict_final_occ_pct_for_date_from_indexes(
+            pred_mean, pred_low, pred_high, pred_like = await _predict_final_occ_pct_for_date(
+                db=db,
                 target_date=d,
                 as_of=as_of,
                 total_rooms=total_rooms,
                 on_books_rooms_now=on_books_now,
-                final_hist_rooms_by_date=final_hist_rooms_by_date,
-                created_at_index_by_date=created_at_index_by_cat.get(cat, {}),
+                category=cat,
             )
             points.append(OccupancyPoint(
                 date=d,
@@ -483,20 +322,16 @@ async def get_occupancy_forecast(
     roll_actual = _rollup_counts({k: v for k, v in actual_counts.items() if k[0] in set(days)})
     roll_on_books = _rollup_counts(on_books_counts)
     roll_points: list[OccupancyPoint] = []
-    final_hist_roll_by_date: dict[date, int] = {}
-    for hd in hist_dates_all:
-        # `actual_counts` includes (date, category) keys only; roll up by summing.
-        final_hist_roll_by_date[hd] = int(sum(actual_counts.get((hd, c), 0) or 0 for c in totals.total_by_category.keys()))
     for d in days:
         expected = expected_by_date_cat.get((d, None)) or {"mean": 0.0, "low": 0.0, "high": 0.0}
         on_books_now = int(roll_on_books.get(d, 0) or 0)
-        pred_mean, pred_low, pred_high, pred_like = _predict_final_occ_pct_for_date_from_indexes(
+        pred_mean, pred_low, pred_high, pred_like = await _predict_final_occ_pct_for_date(
+            db=db,
             target_date=d,
             as_of=as_of,
             total_rooms=totals.total_all,
             on_books_rooms_now=on_books_now,
-            final_hist_rooms_by_date=final_hist_roll_by_date,
-            created_at_index_by_date=created_at_index_by_cat.get(None, {}),
+            category=None,
         )
         roll_points.append(OccupancyPoint(
             date=d,
@@ -513,19 +348,7 @@ async def get_occupancy_forecast(
         ))
     series.append(OccupancySeries(category=None, points=roll_points))
 
-    resp = OccupancyForecastResponse(start=start, end=end, as_of=as_of, series=series)
-    async with _forecast_cache_lock:
-        _forecast_cache[key] = _ForecastCacheEntry(expires_at=_now_s() + _FORECAST_CACHE_TTL_S, value=resp)
-        # Tiny eviction: keep cache bounded.
-        if len(_forecast_cache) > 32:
-            # Drop expired entries first; if still large, drop arbitrary oldest by expiration.
-            now2 = _now_s()
-            for k in [k for k, v in _forecast_cache.items() if v.expires_at <= now2]:
-                _forecast_cache.pop(k, None)
-            if len(_forecast_cache) > 32:
-                for k, _v in sorted(_forecast_cache.items(), key=lambda kv: kv[1].expires_at)[: max(0, len(_forecast_cache) - 32)]:
-                    _forecast_cache.pop(k, None)
-    return resp
+    return OccupancyForecastResponse(start=start, end=end, as_of=as_of, series=series)
 
 
 async def get_pace(

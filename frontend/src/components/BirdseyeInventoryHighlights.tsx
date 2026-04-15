@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import type { RoomCategory } from "../types";
 import {
   BIRDSEYE_DISPLAY_BUCKET_ORDER,
@@ -24,110 +23,6 @@ const CATEGORY_DONUT_FILL: Partial<Record<RoomCategory, string>> = {
   PREMIUM: "#c5a059",
   ECONOMY: "rgba(120, 113, 108, 0.55)",
 };
-
-const DONUT_CX = 50;
-const DONUT_CY = 50;
-const DONUT_R_OUTER = 38;
-const DONUT_R_INNER = 22;
-
-/**
- * Converts polar coordinates to SVG Cartesian (0° = top).
- */
-function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180;
-  return { x: cx + radius * Math.cos(rad), y: cy + radius * Math.sin(rad) };
-}
-
-/**
- * Builds an SVG path for one donut slice between two angles (degrees, clockwise from top).
- */
-function donutSlicePath(
-  startAngle: number,
-  endAngle: number,
-  outerR: number,
-  innerR: number,
-  cx: number,
-  cy: number,
-) {
-  const outerStart = polarToCartesian(cx, cy, outerR, endAngle);
-  const outerEnd = polarToCartesian(cx, cy, outerR, startAngle);
-  const innerEnd = polarToCartesian(cx, cy, innerR, startAngle);
-  const innerStart = polarToCartesian(cx, cy, innerR, endAngle);
-  const largeArc = endAngle - startAngle <= 180 ? 0 : 1;
-  return [
-    "M",
-    outerStart.x,
-    outerStart.y,
-    "A",
-    outerR,
-    outerR,
-    0,
-    largeArc,
-    0,
-    outerEnd.x,
-    outerEnd.y,
-    "L",
-    innerEnd.x,
-    innerEnd.y,
-    "A",
-    innerR,
-    innerR,
-    0,
-    largeArc,
-    1,
-    innerStart.x,
-    innerStart.y,
-    "Z",
-  ].join(" ");
-}
-
-/**
- * Renders SVG path elements for a category breakdown donut (handles a single full ring).
- */
-function buildDonutSliceElements(
-  categoriesPresent: RoomCategory[],
-  breakdown: Partial<Record<RoomCategory, number>>,
-  total: number,
-): ReactNode[] {
-  const paths: ReactNode[] = [];
-  let startAngle = 0;
-  for (const cat of categoriesPresent) {
-    const n = breakdown[cat] ?? 0;
-    if (n <= 0) continue;
-    const sweep = (n / total) * 360;
-    const fill = CATEGORY_DONUT_FILL[cat] ?? "rgba(44, 27, 24, 0.3)";
-    if (sweep >= 359.5) {
-      paths.push(
-        <path
-          key={`${cat}-h1`}
-          d={donutSlicePath(0, 180, DONUT_R_OUTER, DONUT_R_INNER, DONUT_CX, DONUT_CY)}
-          fill={fill}
-          stroke="#ffffff"
-          strokeWidth={0.35}
-        />,
-        <path
-          key={`${cat}-h2`}
-          d={donutSlicePath(180, 360, DONUT_R_OUTER, DONUT_R_INNER, DONUT_CX, DONUT_CY)}
-          fill={fill}
-          stroke="#ffffff"
-          strokeWidth={0.35}
-        />,
-      );
-      return paths;
-    }
-    paths.push(
-      <path
-        key={cat}
-        d={donutSlicePath(startAngle, startAngle + sweep, DONUT_R_OUTER, DONUT_R_INNER, DONUT_CX, DONUT_CY)}
-        fill={fill}
-        stroke="#ffffff"
-        strokeWidth={0.35}
-      />,
-    );
-    startAngle += sweep;
-  }
-  return paths;
-}
 
 function ButterflyChart({
   bucketLabel,
@@ -199,6 +94,42 @@ function ButterflyChart({
 
       <div className="mt-2 text-[9px] text-text-muted font-bold uppercase tracking-widest">
         Scale: max {maxVal} windows · bars show per-room-type mix shift
+      </div>
+    </div>
+  );
+}
+
+function SimpleCategoryBars({
+  bucketLabel,
+  categories,
+  breakdown,
+}: {
+  bucketLabel: string;
+  categories: RoomCategory[];
+  breakdown: Partial<Record<RoomCategory, number>>;
+}) {
+  const rows = categories.map(cat => ({ cat, n: breakdown[cat] ?? 0 })).filter(r => r.n > 0);
+  const maxVal = Math.max(1, ...rows.map(r => r.n));
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">{bucketLabel}</div>
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Mix by room type</div>
+      </div>
+      <div className="space-y-1.5">
+        {rows.map(r => {
+          const fill = CATEGORY_DONUT_FILL[r.cat] ?? "rgba(44, 27, 24, 0.3)";
+          const pct = (r.n / maxVal) * 100;
+          return (
+            <div key={r.cat} className="grid grid-cols-[64px_1fr_40px] items-center gap-2">
+              <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">{r.cat}</div>
+              <div className="h-3 bg-surface-2 border border-border/60 relative overflow-hidden">
+                <div className="absolute left-0 top-0 bottom-0" style={{ width: `${pct}%`, backgroundColor: fill }} />
+              </div>
+              <div className="text-[10px] font-bold text-text tabular-nums text-right">{r.n}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -279,15 +210,12 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
                       />
                     </div>
                   ) : (
-                    <div className="shrink-0 flex justify-center sm:justify-start">
-                      <svg
-                        viewBox="0 0 100 100"
-                        className="w-28 h-28 sm:w-32 sm:h-32"
-                        role="img"
-                        aria-label={`Category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
-                      >
-                        {buildDonutSliceElements(categoriesPresent, breakdown, total)}
-                      </svg>
+                    <div className="w-full">
+                      <SimpleCategoryBars
+                        bucketLabel={BUCKET_LABELS[bucket]}
+                        categories={categoriesPresent}
+                        breakdown={breakdown}
+                      />
                     </div>
                   )}
                   <ul className="flex-1 min-w-0 space-y-2">
