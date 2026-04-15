@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, getOccupancyForecast, api } from "../api/client";
-import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory } from "../types";
+import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, api } from "../api/client";
+import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
@@ -8,6 +8,7 @@ import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights
 import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
+import { simulateRows } from "../utils/simulateRows";
 import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
@@ -23,6 +24,8 @@ export function Dashboard() {
   const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
+  const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
+  const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
@@ -90,6 +93,16 @@ export function Dashboard() {
     return computeEmptyRunInventory(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
+  const simulatedRows = useMemo(() => {
+    if (!heatmap || !swapPlan || swapPlan.length === 0) return null;
+    return simulateRows(filteredRows, swapPlan);
+  }, [heatmap, filteredRows, swapPlan]);
+
+  const projectedSnapshot = useMemo(() => {
+    if (!simulatedRows) return null;
+    return computeEmptyRunInventory(simulatedRows, spanDays);
+  }, [simulatedRows, spanDays]);
+
   /**
    * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
    */
@@ -102,6 +115,37 @@ export function Dashboard() {
       return [...prev, category].sort((a, b) => order.indexOf(a) - order.indexOf(b));
     });
   }, []);
+
+  const runOptimisePreview = useCallback(async () => {
+    if (!heatmap) return;
+    setIsOptimiseLoading(true);
+    try {
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const res = await dashboardOptimisePreview({
+        start: startStr,
+        end: endStr,
+        categories: selectedCategories,
+      });
+      const body = res.data as DashboardOptimisePreviewResponse;
+      setSwapPlan(body.swap_plan ?? []);
+      if ((body.swap_plan?.length ?? 0) === 0) {
+        if (body.fully_clean) show("No orphan gaps detected in the current slice.", "success");
+        else show("No improvements found for the current slice (converged).", "info");
+      } else {
+        show(`Preview ready: ${body.shuffle_count} optimisation steps`, "success");
+      }
+    } catch {
+      show("Failed to run optimisation preview", "error");
+      setSwapPlan(null);
+    } finally {
+      setIsOptimiseLoading(false);
+    }
+  }, [heatmap, weekSpan, selectedCategories, show]);
+
+  const clearOptimisePreview = useCallback(() => setSwapPlan(null), []);
 
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
@@ -184,13 +228,32 @@ export function Dashboard() {
             Occupancy matrix and k-night bookable windows by length and room type
           </p>
         </div>
-        <button
-          type="button"
-          className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border shrink-0"
-          onClick={() => loadHeatmap()}
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+          <button
+            type="button"
+            className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
+            onClick={() => loadHeatmap()}
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
+          </button>
+          <button
+            type="button"
+            className="self-start sm:self-auto bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={() => runOptimisePreview()}
+            disabled={!heatmap || isOptimiseLoading}
+          >
+            {isOptimiseLoading ? "Running…" : "Run optimisation preview"}
+          </button>
+          {swapPlan && (
+            <button
+              type="button"
+              className="self-start sm:self-auto bg-surface text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
+              onClick={() => clearOptimisePreview()}
+            >
+              Clear preview
+            </button>
+          )}
+        </div>
       </div>
 
       {heatmap && (
@@ -250,7 +313,7 @@ export function Dashboard() {
                 </div>
               </div>
               <aside className="flex flex-col min-h-0">
-                <BirdseyeInventoryHighlights snapshot={snapshot} maxDays={spanDays} />
+                <BirdseyeInventoryHighlights snapshot={snapshot} projectedSnapshot={projectedSnapshot} maxDays={spanDays} />
               </aside>
             </div>
           )}

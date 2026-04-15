@@ -12,6 +12,10 @@ from core.schemas.analytics import (
     PaceResponse,
     EventInsightsResponse,
 )
+from core.schemas.dashboard_optimise import (
+    DashboardOptimisePreviewRequest,
+    DashboardOptimisePreviewResponse,
+)
 
 __all__ = [
     "RoomOut", "RoomCreate", "RoomUpdate",
@@ -20,4 +24,5 @@ __all__ = [
     "SplitSegmentOut", "SplitStayResult", "SplitStayConfirm",
     "SwapStep", "GapInfo", "OptimiseResult", "CommitRequest", "CommitResult",
     "OccupancyForecastResponse", "PaceResponse", "EventInsightsResponse",
+    "DashboardOptimisePreviewRequest", "DashboardOptimisePreviewResponse",
 ]

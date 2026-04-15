@@ -93,6 +93,7 @@ Base URL: from `VITE_API_URL` or `http://localhost:8000` ([`frontend/src/api/cli
 |--------|--------|------|---------|
 | — | GET | `/health` | Liveness; returns `status` and `hotel` from settings. |
 | `/dashboard` | GET | `/heatmap` | Heatmap payload for the manager view. |
+| `/dashboard` | POST | `/optimise-preview` | Run a **scoped** calendar optimisation preview (no DB write) for the Bird's Eye Dashboard; returns swap plan for UI simulation. |
 | `/manager` | POST | `/optimise` | Run T1 calendar optimisation **in memory**; returns swap plan and gap metadata (no DB write). |
 | `/manager` | POST | `/commit` | Atomically apply a previously returned swap plan to slots. |
 | `/manager/pricing` | GET | `/analyse` | Run pricing AI on live occupancy; returns recommendations (no DB write). |
@@ -120,6 +121,7 @@ Implementation files: [`backend/api/dashboard.py`](backend/api/dashboard.py), [`
 
 **Manager optimisation flow** (deterministic): `POST /manager/optimise` loads slots in the configured window, runs gap detection / shuffle planning ([`backend/controllers/manager.py`](backend/controllers/manager.py), [`backend/services/algorithm/calendar_optimiser.py`](backend/services/algorithm/calendar_optimiser.py)), returns steps; `POST /manager/commit` applies those steps transactionally.
 
+**Orphan gaps (fragmentation)**: an “orphan gap” is a **short consecutive run of `EMPTY` slot nights in a single room** that is **bounded by booked nights** (`SOFT` guest reservation or `HARD` block) **on both sides**. These trapped runs are harder to sell and are what the optimiser targets.\n+\n+- **Managers page KPI (UI)**: counts `EMPTY` runs of length **≤5** nights bounded by (`SOFT`/`HARD`) on both sides within the displayed window ([`frontend/src/pages/ManagerDashboard.tsx`](frontend/src/pages/ManagerDashboard.tsx) `computeRunMetrics`).\n+- **Optimiser (backend)**: detects bounded `EMPTY` runs and filters them by `MAX_GAP_NIGHTS` plus booking-window constraints (`BOOKING_WINDOW_DAYS`) before attempting shuffles ([`backend/services/algorithm/calendar_optimiser.py`](backend/services/algorithm/calendar_optimiser.py) `GapDetector.detect_gaps`).\n+
 ---
 
 ## 6. Data model (conceptual)
@@ -207,6 +209,8 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-15 | **Dashboard optimisation preview**: added `POST /dashboard/optimise-preview` to run **scoped** (filter + visible window) shuffle planning with **no DB write**, and Bird's Eye **Availability at a glance** now shows **Before / After / Δ** k-night window counts after applying the swap plan client-side. |
+| 2026-04-15 | **Dashboard forecast performance**: `GET /analytics/occupancy-forecast` now batches historical “on-books at lead time” computations and adds a small in-process TTL cache to reduce load time for the AI forecast panel. |
 | 2026-04-14 | **AI forecast UI** (`BirdseyeForecastInsights`): signed **vs pred** (on books − pred final); **pred band** aggregation uses per-day min/max of low/high so the range cannot invert; copy explains prior-year pickup and that **likelihood is a heuristic score** (not a probability). API normalizes predicted low/high so `low ≤ high` (`analytics.py`). |
 | 2026-04-14 | **`/analytics/occupancy-forecast` on-the-books**: uses **non-EMPTY slot nights** (SOFT + HARD) per date/category, matching the heatmap; prediction path uses the same slot definition for historical numerators (pickup ratio ~1 without slot history). **`/analytics/pace`** still uses **Booking**-based on-the-books with `created_at` cutoffs (`backend/controllers/analytics.py`). |
 | 2026-04-14 | **Availability at a glance** lists **1–4 night** buckets only; the **`4+`** aggregate stays in `computeEmptyRunInventory` but is no longer shown in the panel (`BIRDSEYE_DISPLAY_BUCKET_ORDER`, `BirdseyeInventoryHighlights.tsx`). |
