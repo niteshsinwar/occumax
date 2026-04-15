@@ -37,6 +37,15 @@ async def find_split_stay(
     return await ctrl.find_split_stay(request, db)
 
 
+@router.post("/find-split-flex", response_model=SplitStayResult)
+async def find_split_stay_flex(
+    request: BookingRequestIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Phase 2 — find a split stay allowing mixed room categories."""
+    return await ctrl.find_split_stay_flex(request, db)
+
+
 @router.post("/confirm-split")
 async def confirm_split_stay(
     body: SplitStayConfirm,
