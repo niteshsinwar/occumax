@@ -9,10 +9,6 @@ function int(n: number) {
 /** Signed difference for display (e.g. +12 or −7). */
 // (removed: signedInt) — we no longer show vs-pred summary text in the card header.
 
-function sum(nums: number[]) {
-  return nums.reduce((a, b) => a + b, 0);
-}
-
 type DailyDatum = {
   date: string;
   totalRooms: number;
@@ -107,42 +103,7 @@ function buildDailySeriesFromSelectedSeries(series: OccupancyForecastResponse["s
  * Capacity-weighted averages for the visible window; predicted low/high use per-day min/max
  * of API band fields so window totals never invert after aggregation.
  */
-function computeWindowSummary(points: OccupancyForecastResponse["series"][number]["points"]) {
-  if (points.length === 0) {
-    return { onBooksAvg: 0, predictedFinalAvg: 0, predictedLowAvg: 0, predictedHighAvg: 0, likelihood: null as number | null };
-  }
-
-  const totalRooms = sum(points.map(p => p.total_rooms));
-  const onBooksRooms = sum(points.map(p => p.occupied_rooms_on_books ?? 0));
-
-  const onBooksAvg = (onBooksRooms / Math.max(1, totalRooms)) * 100;
-
-  const predMeanRooms = sum(points.map(p => ((p.predicted_final_occ_pct ?? 0) / 100) * p.total_rooms));
-  // Per day, API may label low/high before normalization; always take min/max of the band in % space.
-  const predLowRooms = sum(
-    points.map(p => {
-      const lo = p.predicted_final_occ_low_pct ?? 0;
-      const hi = p.predicted_final_occ_high_pct ?? 0;
-      return (Math.min(lo, hi) / 100) * p.total_rooms;
-    }),
-  );
-  const predHighRooms = sum(
-    points.map(p => {
-      const lo = p.predicted_final_occ_low_pct ?? 0;
-      const hi = p.predicted_final_occ_high_pct ?? 0;
-      return (Math.max(lo, hi) / 100) * p.total_rooms;
-    }),
-  );
-
-  const predictedFinalAvg = (predMeanRooms / Math.max(1, totalRooms)) * 100;
-  const predictedLowAvg = Math.min(100, Math.max(0, (predLowRooms / Math.max(1, totalRooms)) * 100));
-  const predictedHighAvg = Math.min(100, Math.max(0, (predHighRooms / Math.max(1, totalRooms)) * 100));
-
-  const likes = points.map(p => p.predicted_final_likelihood_pct).filter((n): n is number => typeof n === "number");
-  const likelihood = likes.length ? sum(likes) / likes.length : null;
-
-  return { onBooksAvg, predictedFinalAvg, predictedLowAvg, predictedHighAvg, likelihood };
-}
+// (unused on dashboard now) computeWindowSummary removed.
 
 function ForecastLinesChart(props: { data: DailyDatum[] }) {
   const { data } = props;
@@ -331,14 +292,6 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
             <span className="text-text font-bold tabular-nums">{typeof hover.predictedRooms === "number" ? int(hover.predictedRooms) : "n/a"}</span>
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-3">
-            <span className="text-text-muted font-semibold">Band</span>
-            <span className="text-text font-bold tabular-nums">
-              {typeof hover.predictedLowRooms === "number" && typeof hover.predictedHighRooms === "number"
-                ? `${int(hover.predictedLowRooms)}–${int(hover.predictedHighRooms)}`
-                : "n/a"}
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center justify-between gap-3">
             <span className="text-text-muted font-semibold">Total rooms</span>
             <span className="text-text font-bold tabular-nums">{int(hover.totalRooms)}</span>
           </div>
@@ -356,29 +309,11 @@ export function BirdseyeForecastInsights(props: {
   selectedCategories: RoomCategory[];
 }) {
   const { forecast, selectedCategories } = props;
-  const set = new Set(selectedCategories);
 
-  const rollup = forecast.series.find(s => s.category === null) ?? null;
-  const selectedSeries = forecast.series.filter(s => s.category !== null && set.has(s.category));
-
-  const rollupSummary = computeWindowSummary(rollup?.points ?? []);
-  const selectedSummary = computeWindowSummary(selectedSeries.flatMap(s => s.points));
-
-  const rollupDaily = useMemo(() => buildDailySeriesFromPoints(rollup?.points ?? []), [rollup?.points]);
   const selectedDaily = useMemo(() => buildDailySeriesFromSelectedSeries(forecast.series, selectedCategories), [forecast.series, selectedCategories]);
+  const fallbackDaily = useMemo(() => buildDailySeriesFromPoints(forecast.series.find(s => s.category === null)?.points ?? []), [forecast.series]);
 
-  const cards: {
-    label: string;
-    onBooksAvg: number;
-    predictedFinalAvg: number;
-    predictedLowAvg: number;
-    predictedHighAvg: number;
-    daily: DailyDatum[];
-  }[] = [];
-  cards.push({ label: "ALL", ...rollupSummary, daily: rollupDaily });
-  if (selectedSeries.length > 0) {
-    cards.push({ label: "SELECTED_TYPES", ...selectedSummary, daily: selectedDaily });
-  }
+  const daily = selectedDaily.length ? selectedDaily : fallbackDaily;
 
   return (
     <div className="bg-surface border border-border shadow-subtle">
@@ -394,22 +329,19 @@ export function BirdseyeForecastInsights(props: {
         </p>
       </div>
 
-      <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {cards.map(c => {
-          return (
-            <div key={c.label} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
-              <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50 gap-2">
-                <span className="text-[10px] font-bold text-text uppercase tracking-widest">
-                  {c.label === "SELECTED_TYPES" ? "Selected types" : "All rooms"}
-                </span>
-              </div>
+      <div className="p-3">
+        <div className="border border-border/70 rounded-sm overflow-hidden bg-surface">
+          <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50 gap-2">
+            <span className="text-[10px] font-bold text-text uppercase tracking-widest">Selected types</span>
+            <span className="text-[10px] font-black tabular-nums text-text text-right shrink-0" title="Total selected room types.">
+              {selectedCategories.length} type{selectedCategories.length === 1 ? "" : "s"}
+            </span>
+          </div>
 
-              <div className="px-3 py-2">
-                <ForecastLinesChart data={c.daily} />
-              </div>
-            </div>
-          );
-        })}
+          <div className="px-3 py-2">
+            <ForecastLinesChart data={daily} />
+          </div>
+        </div>
       </div>
     </div>
   );

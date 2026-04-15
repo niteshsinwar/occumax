@@ -5,6 +5,7 @@ import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
+import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
@@ -204,7 +205,10 @@ export function Dashboard() {
       {heatmap && (forecast || isForecastLoading) && (
         <div className="mt-6">
           {forecast ? (
-            <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+              <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+              <BirdseyeCompressionInsights dates={heatmap.dates} rows={filteredRows} maxDays={spanDays} />
+            </div>
           ) : (
             <div className="bg-surface border border-border shadow-subtle">
               <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
