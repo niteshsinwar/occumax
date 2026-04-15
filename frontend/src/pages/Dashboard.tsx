@@ -53,7 +53,10 @@ export function Dashboard() {
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
       const startStr = formatISO(start, { representation: "date" });
       const endStr = formatISO(end, { representation: "date" });
-      const asOfStr = startStr;
+      // `as_of` is the pickup / on-books cutoff for the analytics API: bookings with created_at
+      // after this date are excluded. Must match "today" so on-the-books % aligns with the live
+      // heatmap; using the window start made on-books look nearly empty while the grid showed SOFT.
+      const asOfStr = formatISO(new Date(), { representation: "date" });
 
       const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
       setForecast(res.data);

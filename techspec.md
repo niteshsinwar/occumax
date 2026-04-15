@@ -114,6 +114,8 @@ Base URL: from `VITE_API_URL` or `http://localhost:8000` ([`frontend/src/api/cli
 | `/analytics` | GET | `/pace` | Pickup / pace curve: on-the-books vs historical on-the-books at matching lead times (by category + rollup). |
 | `/analytics` | GET | `/event-insights` | LOS and arrival-pattern insights for a requested window (beta). |
 
+**`/analytics/occupancy-forecast`**: `as_of` is the observation / pickup cutoff — on-the-books counts only include `Booking` rows with `created_at <= end_of(as_of)`. UIs that show a **live slot heatmap** next to this metric should pass **`as_of` = today** (not the window `start`), or the two views will disagree.
+
 Implementation files: [`backend/api/dashboard.py`](backend/api/dashboard.py), [`backend/api/manager.py`](backend/api/manager.py), [`backend/api/pricing.py`](backend/api/pricing.py), [`backend/api/receptionist.py`](backend/api/receptionist.py), [`backend/api/admin.py`](backend/api/admin.py), [`backend/api/ai.py`](backend/api/ai.py).
 
 **Manager optimisation flow** (deterministic): `POST /manager/optimise` loads slots in the configured window, runs gap detection / shuffle planning ([`backend/controllers/manager.py`](backend/controllers/manager.py), [`backend/services/algorithm/calendar_optimiser.py`](backend/services/algorithm/calendar_optimiser.py)), returns steps; `POST /manager/commit` applies those steps transactionally.
@@ -205,6 +207,7 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-14 | **Dashboard** occupancy forecast: pass **`as_of` = client today** (not heatmap `start`) when calling `GET /analytics/occupancy-forecast` so on-the-books counts use `Booking.created_at <= as_of` aligned with the live grid; previously `as_of = start` made on-books look empty vs SOFT slots (`Dashboard.tsx`). |
 | 2026-04-14 | Bird's Eye **Dashboard** polish: default date span **3 weeks**; room-type chips reuse the same inverted active styling as the week chips; spacing between the AI forecast block and the occupancy row; **Availability at a glance** uses **donut** charts per bucket; section titles share one **uppercase sans** header style with the heatmap title (`Dashboard.tsx`, `BirdseyeFilters.tsx`, `BirdseyeForecastInsights.tsx`, `BirdseyeInventoryHighlights.tsx`). |
 | 2026-04-14 | Added additive **Analytics** endpoints (`/analytics/*`) for Bird's Eye Dashboard: occupancy forecast (seasonal baseline + recent trend + confidence band), pace (on-the-books vs historical lead time), and event LOS/arrival insights (beta). |
 | 2026-04-13 | Bird's Eye **Dashboard** (`/dashboard`): client-side **filter bar** — 1 / 2 / 3 week horizon (initial default was 2 weeks, later **3 weeks**) and Standard / Deluxe / Suite toggles (default all three); filters `HeatmapGrid` + **Availability at a glance** only (`BirdseyeFilters.tsx`, `Dashboard.tsx`). `getHeatmap` and other routes unchanged. |
