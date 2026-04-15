@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { RoomCategory } from "../types";
 import {
-  BUCKET_ORDER,
+  BIRDSEYE_DISPLAY_BUCKET_ORDER,
   CATEGORY_ORDER,
   type AvailabilityBucket,
   type EmptyRunInventorySnapshot,
@@ -136,10 +136,10 @@ interface BirdseyeInventoryHighlightsProps {
 
 /**
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
- * Each bucket shows a donut chart of the category mix plus a legend with counts.
+ * Each bucket shows a donut chart of the category mix plus a legend with counts (1–4 nights; 4+ is omitted from this panel).
  */
 export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
-  const grandTotal = BUCKET_ORDER.reduce((s, b) => s + snapshot.totalsByBucket[b], 0);
+  const grandTotal = BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + snapshot.totalsByBucket[b], 0);
 
   return (
     <div className="bg-surface border border-border shadow-subtle flex flex-col min-h-0">
@@ -151,7 +151,7 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
       </div>
 
       <div className="p-3 space-y-4 overflow-y-auto flex-1 max-h-[calc(100vh-220px)] lg:max-h-none">
-        {BUCKET_ORDER.map(bucket => {
+        {BIRDSEYE_DISPLAY_BUCKET_ORDER.map(bucket => {
           const total = snapshot.totalsByBucket[bucket];
           const breakdown = snapshot.byBucket[bucket];
           const categoriesPresent = CATEGORY_ORDER.filter(c => (breakdown[c] ?? 0) > 0);
