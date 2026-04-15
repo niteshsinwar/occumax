@@ -114,7 +114,7 @@ Base URL: from `VITE_API_URL` or `http://localhost:8000` ([`frontend/src/api/cli
 | `/analytics` | GET | `/pace` | Pickup / pace curve: on-the-books vs historical on-the-books at matching lead times (by category + rollup). |
 | `/analytics` | GET | `/event-insights` | LOS and arrival-pattern insights for a requested window (beta). |
 
-**`/analytics/occupancy-forecast`**: `as_of` is the observation / pickup cutoff — on-the-books counts only include `Booking` rows with `created_at <= end_of(as_of)`. UIs that show a **live slot heatmap** next to this metric should pass **`as_of` = today** (not the window `start`), or the two views will disagree.
+**`/analytics/occupancy-forecast`**: `occupied_rooms_on_books` counts **slot nights** with `block_type` **SOFT or HARD** (not `EMPTY`), same as the heatmap. `as_of` is still the **lead-time anchor** for the pickup heuristic vs prior-year dates (not a `Booking.created_at` filter for this field). Bird's Eye should pass **`as_of` = today** so lead days match the dashboard context.
 
 Implementation files: [`backend/api/dashboard.py`](backend/api/dashboard.py), [`backend/api/manager.py`](backend/api/manager.py), [`backend/api/pricing.py`](backend/api/pricing.py), [`backend/api/receptionist.py`](backend/api/receptionist.py), [`backend/api/admin.py`](backend/api/admin.py), [`backend/api/ai.py`](backend/api/ai.py).
 
@@ -207,6 +207,8 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-14 | **`/analytics/occupancy-forecast` on-the-books**: uses **non-EMPTY slot nights** (SOFT + HARD) per date/category, matching the heatmap; prediction path uses the same slot definition for historical numerators (pickup ratio ~1 without slot history). **`/analytics/pace`** still uses **Booking**-based on-the-books with `created_at` cutoffs (`backend/controllers/analytics.py`). |
+| 2026-04-14 | **Availability at a glance** lists **1–4 night** buckets only; the **`4+`** aggregate stays in `computeEmptyRunInventory` but is no longer shown in the panel (`BIRDSEYE_DISPLAY_BUCKET_ORDER`, `BirdseyeInventoryHighlights.tsx`). |
 | 2026-04-14 | **Dashboard** occupancy forecast: pass **`as_of` = client today** (not heatmap `start`) when calling `GET /analytics/occupancy-forecast` so on-the-books counts use `Booking.created_at <= as_of` aligned with the live grid; previously `as_of = start` made on-books look empty vs SOFT slots (`Dashboard.tsx`). |
 | 2026-04-14 | Bird's Eye **Dashboard** polish: default date span **3 weeks**; room-type chips reuse the same inverted active styling as the week chips; spacing between the AI forecast block and the occupancy row; **Availability at a glance** uses **donut** charts per bucket; section titles share one **uppercase sans** header style with the heatmap title (`Dashboard.tsx`, `BirdseyeFilters.tsx`, `BirdseyeForecastInsights.tsx`, `BirdseyeInventoryHighlights.tsx`). |
 | 2026-04-14 | Added additive **Analytics** endpoints (`/analytics/*`) for Bird's Eye Dashboard: occupancy forecast (seasonal baseline + recent trend + confidence band), pace (on-the-books vs historical lead time), and event LOS/arrival insights (beta). |

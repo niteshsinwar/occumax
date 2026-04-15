@@ -12,6 +12,7 @@ class OccupancyPoint(BaseModel):
     date: date
     total_rooms: int
     occupied_rooms_actual: Optional[int] = None
+    # Calendar holds: nights with block SOFT or HARD (same as heatmap / non-EMPTY slots).
     occupied_rooms_on_books: Optional[int] = None
 
     expected_occ_pct: float
