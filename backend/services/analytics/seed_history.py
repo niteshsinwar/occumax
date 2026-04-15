@@ -46,6 +46,7 @@ async def seed_analytics_history(
     target_start: date | None = None,
     target_end: date | None = None,
     seed: int = 42,
+    fill_pct: int = 35,
 ) -> dict[str, int]:
     as_of = date.today()
     future_start = target_start or as_of
@@ -116,72 +117,91 @@ async def seed_analytics_history(
     )).scalars().all()
     slot_map: dict[str, Slot] = {s.id: s for s in existing_slots}
 
-    def start_prob_for_day(cat: RoomCategory, d: date, room_rng: random.Random) -> float:
-        """
-        Probability that a room starts a booking on day d.
-        Tuned to avoid near-100% occupancy while still producing believable patterns.
-        """
-        wd = d.weekday()  # 0=Mon..6=Sun
-        weekend = wd in (4, 5, 6)
+    def _iter_days(start: date, end: date):
+        cur = start
+        while cur < end:
+            yield cur
+            cur += timedelta(days=1)
 
-        base = 0.33 if not weekend else 0.45
-        cat_bump = {
-            RoomCategory.SUITE: 0.06,
-            RoomCategory.DELUXE: 0.04,
-            RoomCategory.STANDARD: 0.02,
-        }.get(cat, 0.02)
+    def _rand_created_at(check_in: date, room_rng: random.Random) -> datetime:
+        lead = room_rng.randint(3, 35)
+        return _as_utc_dt(check_in - timedelta(days=lead), hour=room_rng.randint(8, 18))
 
-        # Add small per-room/day jitter.
-        jitter = room_rng.uniform(-0.06, 0.06)
-        return max(0.10, min(0.75, base + cat_bump + jitter))
+    fill_pct = max(0, min(100, int(fill_pct)))
 
     for (hstart, hend) in hist_windows:
-        # For each room, generate a realistic sequence of bookings/gaps across the window.
-        for cat, cat_rooms in rooms_by_cat.items():
-            for room in cat_rooms:
-                room_rng = random.Random(_hash_seed(seed, f"{room.id}:{hstart.isoformat()}"))
-                cur = hstart
-                while cur < hend:
-                    # Probabilistic booking start with weekday/weekend seasonality and jitter.
-                    if room_rng.random() >= start_prob_for_day(cat, cur, room_rng):
-                        cur += timedelta(days=1)
-                        continue
+        window_days_count = (hend - hstart).days
+        if window_days_count <= 0:
+            continue
 
-                    los = room_rng.choices([1, 2, 3, 4], weights=[12, 36, 34, 18], k=1)[0]
+        # Target occupancy is expressed as % of room-nights in this window.
+        target_room_nights = int(round(len(rooms) * window_days_count * (fill_pct / 100.0)))
+        if target_room_nights <= 0:
+            continue
+
+        # Randomly pick the specific room-nights to fill, then group them into bookings.
+        candidates: list[tuple[str, RoomCategory, float, date]] = []
+        for room in rooms:
+            for d in _iter_days(hstart, hend):
+                candidates.append((room.id, room.category, float(room.base_rate), d))
+
+        rng.shuffle(candidates)
+        chosen = candidates[:target_room_nights]
+
+        # Index chosen days per room, then create bookings over contiguous runs.
+        chosen_by_room: dict[str, set[date]] = defaultdict(set)
+        room_meta: dict[str, tuple[RoomCategory, float]] = {}
+        for (room_id, cat, base_rate, d) in chosen:
+            chosen_by_room[room_id].add(d)
+            room_meta[room_id] = (cat, base_rate)
+
+        for room_id, days_set in chosen_by_room.items():
+            cat, base_rate = room_meta[room_id]
+            room_rng = random.Random(_hash_seed(seed, f"{room_id}:{hstart.isoformat()}:{fill_pct}"))
+
+            days_sorted = sorted(days_set)
+            i = 0
+            while i < len(days_sorted):
+                start = days_sorted[i]
+                end = start + timedelta(days=1)
+                i += 1
+                while i < len(days_sorted) and days_sorted[i] == end:
+                    end += timedelta(days=1)
+                    i += 1
+
+                # Split long contiguous runs into 1–4 night bookings.
+                cur = start
+                while cur < end:
+                    remaining = (end - cur).days
+                    los = min(remaining, room_rng.choices([1, 2, 3, 4], weights=[12, 36, 34, 18], k=1)[0])
                     check_in = cur
-                    check_out = min(hend, cur + timedelta(days=los))
-                    if check_out <= check_in:
-                        cur += timedelta(days=1)
-                        continue
-
-                    lead = room_rng.randint(3, 35)
-                    created_at = _as_utc_dt(check_in - timedelta(days=lead), hour=room_rng.randint(8, 18))
+                    check_out = cur + timedelta(days=los)
 
                     booking = Booking(
                         id=str(uuid.uuid4())[:8].upper(),
-                        guest_name=f"{DEMO_PREFIX}[{run_tag}] {cat} {room.id}",
+                        guest_name=f"{DEMO_PREFIX}[{run_tag}] {fill_pct}% {cat} {room_id}",
                         room_category=cat,
-                        assigned_room_id=room.id,
+                        assigned_room_id=room_id,
                         check_in=check_in,
                         check_out=check_out,
                         is_live=True,
-                        created_at=created_at,
+                        created_at=_rand_created_at(check_in, room_rng),
                     )
                     db.add(booking)
                     inserted_bookings += 1
 
                     dcur = check_in
                     while dcur < check_out:
-                        sid = _slot_id(room.id, dcur)
+                        sid = _slot_id(room_id, dcur)
                         slot = slot_map.get(sid)
                         if slot is None:
                             slot = Slot(
                                 id=sid,
-                                room_id=room.id,
+                                room_id=room_id,
                                 date=dcur,
                                 block_type=BlockType.EMPTY,
                                 booking_id=None,
-                                current_rate=float(room.base_rate),
+                                current_rate=float(base_rate),
                                 floor_rate=0.0,
                                 channel=Channel.OTA,
                                 min_stay_active=False,
@@ -195,14 +215,12 @@ async def seed_analytics_history(
                             slot.block_type = BlockType.SOFT
                             slot.booking_id = booking.id
                             slot.channel = Channel.OTA
-                            slot.current_rate = float(room.base_rate)
+                            slot.current_rate = float(base_rate)
                             updated_slots += 1
 
                         dcur += timedelta(days=1)
 
-                    # Advance cursor to end of booking (prevents overlapping bookings in same room).
-                    gap_days = room_rng.choices([0, 1, 2, 3], weights=[35, 35, 20, 10], k=1)[0]
-                    cur = check_out + timedelta(days=gap_days)
+                    cur = check_out
 
     await db.commit()
 
