@@ -397,7 +397,12 @@ async def get_occupancy_forecast(
     totals = await _get_room_totals(db)
     days = _date_range(start, end)
 
-    actual_counts = await _get_actual_occupied_counts(db, start=min(start, as_of - timedelta(days=365)), end=min(end, as_of + timedelta(days=1)))
+    # Need up to ~2y of history for the pickup ratio samples (d-364, d-728).
+    actual_counts = await _get_actual_occupied_counts(
+        db,
+        start=min(start, as_of - timedelta(days=728)),
+        end=min(end, as_of + timedelta(days=1)),
+    )
     # Calendar occupancy (guest SOFT + blocks HARD); matches heatmap, not Booking.created_at.
     on_books_counts = await _get_actual_occupied_counts(db, start=start, end=end)
 

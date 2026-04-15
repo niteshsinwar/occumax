@@ -204,6 +204,42 @@ function ButterflyChart({
   );
 }
 
+function SimpleCategoryBars({
+  bucketLabel,
+  categories,
+  breakdown,
+}: {
+  bucketLabel: string;
+  categories: RoomCategory[];
+  breakdown: Partial<Record<RoomCategory, number>>;
+}) {
+  const rows = categories.map(cat => ({ cat, n: breakdown[cat] ?? 0 })).filter(r => r.n > 0);
+  const maxVal = Math.max(1, ...rows.map(r => r.n));
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">{bucketLabel}</div>
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Mix by room type</div>
+      </div>
+      <div className="space-y-1.5">
+        {rows.map(r => {
+          const fill = CATEGORY_DONUT_FILL[r.cat] ?? "rgba(44, 27, 24, 0.3)";
+          const pct = (r.n / maxVal) * 100;
+          return (
+            <div key={r.cat} className="grid grid-cols-[64px_1fr_40px] items-center gap-2">
+              <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">{r.cat}</div>
+              <div className="h-3 bg-surface-2 border border-border/60 relative overflow-hidden">
+                <div className="absolute left-0 top-0 bottom-0" style={{ width: `${pct}%`, backgroundColor: fill }} />
+              </div>
+              <div className="text-[10px] font-bold text-text tabular-nums text-right">{r.n}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface BirdseyeInventoryHighlightsProps {
   snapshot: EmptyRunInventorySnapshot;
   projectedSnapshot?: EmptyRunInventorySnapshot | null;
@@ -279,15 +315,12 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
                       />
                     </div>
                   ) : (
-                    <div className="shrink-0 flex justify-center sm:justify-start">
-                      <svg
-                        viewBox="0 0 100 100"
-                        className="w-28 h-28 sm:w-32 sm:h-32"
-                        role="img"
-                        aria-label={`Category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
-                      >
-                        {buildDonutSliceElements(categoriesPresent, breakdown, total)}
-                      </svg>
+                    <div className="w-full">
+                      <SimpleCategoryBars
+                        bucketLabel={BUCKET_LABELS[bucket]}
+                        categories={categoriesPresent}
+                        breakdown={breakdown}
+                      />
                     </div>
                   )}
                   <ul className="flex-1 min-w-0 space-y-2">
