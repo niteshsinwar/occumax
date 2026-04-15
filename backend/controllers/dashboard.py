@@ -12,8 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, BlockType
+from core.models import Room, Slot, BlockType, RoomCategory
 from core.schemas import HeatmapCell, HeatmapRow, HeatmapResponse
+from core.schemas.dashboard_optimise import DashboardOptimisePreviewResponse
+from core.schemas.manager import SwapStep
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 
 
@@ -101,6 +103,56 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
             "total_orphan_nights": orphan_nights,
             "estimated_lost_revenue": est_lost,
         },
+    )
+
+
+async def optimise_preview(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    categories: list[RoomCategory],
+) -> DashboardOptimisePreviewResponse:
+    """
+    Run the calendar optimiser in memory for a scoped slice of the hotel calendar.
+
+    - Scope is limited to the provided date window and categories.
+    - Nothing is written to the DB; the response is meant for UI simulation only.
+    """
+    today = date.today()
+    cats = list(dict.fromkeys(categories))  # stable dedupe
+
+    rooms_q = select(Room).where(Room.is_active == True)
+    if cats:
+        rooms_q = rooms_q.where(Room.category.in_(cats))
+    rooms_q = rooms_q.order_by(Room.category, Room.id)
+    rooms = (await db.execute(rooms_q)).scalars().all()
+    room_map = {r.id: r for r in rooms}
+
+    slots_q = (
+        select(Slot)
+        .where(
+            Slot.date >= start,
+            Slot.date < end,
+            Slot.room_id.in_(list(room_map.keys())) if room_map else False,
+        )
+    )
+    slots = (await db.execute(slots_q)).scalars().all()
+
+    slot_infos = _slots_to_slotinfo(slots, room_map)
+    detector = GapDetector(slot_infos, today)
+    gaps, all_steps_raw = detector.run()
+
+    swap_plan = [SwapStep(**s) for s in all_steps_raw]
+    shuffle_count = len(swap_plan)
+    fully_clean = len(gaps) == 0
+    converged = (not fully_clean) and shuffle_count == 0
+
+    return DashboardOptimisePreviewResponse(
+        gaps_found=len(gaps),
+        shuffle_count=shuffle_count,
+        converged=converged,
+        fully_clean=fully_clean,
+        swap_plan=swap_plan,
     )
 
 

@@ -131,6 +131,7 @@ function buildDonutSliceElements(
 
 interface BirdseyeInventoryHighlightsProps {
   snapshot: EmptyRunInventorySnapshot;
+  projectedSnapshot?: EmptyRunInventorySnapshot | null;
   maxDays: number;
 }
 
@@ -138,23 +139,39 @@ interface BirdseyeInventoryHighlightsProps {
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
  * Each bucket shows a donut chart of the category mix plus a legend with counts (1–4 nights; 4+ is omitted from this panel).
  */
-export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
-  const grandTotal = BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + snapshot.totalsByBucket[b], 0);
+export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
+  const base = snapshot;
+  const after = projectedSnapshot ?? null;
+  const baseGrandTotal = BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + base.totalsByBucket[b], 0);
+  const afterGrandTotal = after ? BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + after.totalsByBucket[b], 0) : null;
 
   return (
     <div className="bg-surface border border-border shadow-subtle flex flex-col min-h-0">
       <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40 shrink-0">
         <h3 className="font-bold text-xs text-text uppercase tracking-widest">Availability at a glance</h3>
         <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-          k-night placements in EMPTY strips (overlapping) · {maxDays}-day scan · {grandTotal} total across lengths
+          k-night placements in EMPTY strips (overlapping) · {maxDays}-day scan ·{" "}
+          {afterGrandTotal != null ? (
+            <>
+              <span className="text-text-muted">before</span> {baseGrandTotal} ·{" "}
+              <span className="text-text-muted">after</span> {afterGrandTotal} ·{" "}
+              <span className={(afterGrandTotal - baseGrandTotal) >= 0 ? "text-occugreen" : "text-occuorange"}>
+                Δ {afterGrandTotal - baseGrandTotal}
+              </span>
+            </>
+          ) : (
+            <>{baseGrandTotal} total across lengths</>
+          )}
         </p>
       </div>
 
       <div className="p-3 space-y-4 overflow-y-auto flex-1 max-h-[calc(100vh-220px)] lg:max-h-none">
         {BIRDSEYE_DISPLAY_BUCKET_ORDER.map(bucket => {
-          const total = snapshot.totalsByBucket[bucket];
-          const breakdown = snapshot.byBucket[bucket];
+          const baseTotal = base.totalsByBucket[bucket];
+          const total = after ? after.totalsByBucket[bucket] : baseTotal;
+          const breakdown = after ? after.byBucket[bucket] : base.byBucket[bucket];
           const categoriesPresent = CATEGORY_ORDER.filter(c => (breakdown[c] ?? 0) > 0);
+          const delta = after ? (after.totalsByBucket[bucket] - baseTotal) : null;
 
           return (
             <section key={bucket} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
@@ -162,7 +179,15 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
                 <span className="text-[10px] font-bold text-text uppercase tracking-widest">
                   {BUCKET_LABELS[bucket]}
                 </span>
-                <span className="text-[10px] font-black text-accent tabular-nums">{total}</span>
+                {after ? (
+                  <span className="text-[10px] font-black tabular-nums flex items-baseline gap-2">
+                    <span className="text-text-muted">B {baseTotal}</span>
+                    <span className="text-accent">A {total}</span>
+                    <span className={(delta ?? 0) >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {delta}</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-black text-accent tabular-nums">{total}</span>
+                )}
               </div>
 
               {total === 0 ? (
@@ -182,6 +207,8 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
                   <ul className="flex-1 min-w-0 space-y-2">
                     {categoriesPresent.map(cat => {
                       const n = breakdown[cat] ?? 0;
+                      const baseN = base.byBucket[bucket][cat] ?? 0;
+                      const deltaN = after ? (n - baseN) : null;
                       const fill = CATEGORY_DONUT_FILL[cat] ?? "rgba(44, 27, 24, 0.3)";
                       return (
                         <li key={cat} className="flex justify-between items-center gap-2">
@@ -191,7 +218,15 @@ export function BirdseyeInventoryHighlights({ snapshot, maxDays }: BirdseyeInven
                               {cat}
                             </span>
                           </span>
-                          <span className="text-[10px] font-bold text-text tabular-nums shrink-0">{n}</span>
+                          {after ? (
+                            <span className="text-[10px] font-bold tabular-nums shrink-0 flex items-baseline gap-2">
+                              <span className="text-text-muted">B {baseN}</span>
+                              <span className="text-text">A {n}</span>
+                              <span className={(deltaN ?? 0) >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {deltaN}</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold text-text tabular-nums shrink-0">{n}</span>
+                          )}
                         </li>
                       );
                     })}

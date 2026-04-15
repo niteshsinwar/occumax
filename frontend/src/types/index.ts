@@ -39,6 +39,14 @@ export interface SwapStep {
   dates: string[];
 }
 
+export interface DashboardOptimisePreviewResponse {
+  gaps_found: number;
+  shuffle_count: number;
+  converged: boolean;
+  fully_clean: boolean;
+  swap_plan: SwapStep[];
+}
+
 
 export interface ComparisonCell {
   date: string;
