@@ -105,32 +105,6 @@ async def _get_actual_occupied_counts_rollup(
     return {d: int(cnt) for (d, cnt) in rows}
 
 
-async def _get_on_books_occupied_counts(
-    db: AsyncSession,
-    start: date,
-    end: date,
-    as_of: date,
-) -> dict[tuple[date, RoomCategory], int]:
-    cutoff = _as_of_dt(as_of)
-    bookings = (await db.execute(
-        select(Booking)
-        .where(
-            Booking.is_live == True,
-            Booking.created_at <= cutoff,
-            Booking.check_out > start,
-            Booking.check_in < end,
-        )
-    )).scalars().all()
-
-    counts: dict[tuple[date, RoomCategory], int] = defaultdict(int)
-    for b in bookings:
-        seg_start = max(start, b.check_in)
-        seg_end = min(end, b.check_out)
-        for d in _date_range(seg_start, seg_end):
-            counts[(d, b.room_category)] += 1
-    return dict(counts)
-
-
 async def _get_on_books_counts_for_specific_dates(
     db: AsyncSession,
     dates: set[date],
@@ -138,30 +112,30 @@ async def _get_on_books_counts_for_specific_dates(
     category: Optional[RoomCategory] = None,
 ) -> dict[date, int]:
     """
-    Count on-the-books occupied rooms for specific stay dates (per-day), as of cutoff_dt.
-    Uses bookings overlap logic; intended for small date sets (dashboard windows).
+    Per-night counts of non-EMPTY slots (SOFT + HARD) on the given calendar dates.
+    Aligns with the heatmap and ``_get_actual_occupied_counts``; ``cutoff_dt`` is kept for
+    call-site compatibility but not applied (slots do not store historical snapshots).
     """
+    _ = cutoff_dt
     if not dates:
         return {}
     dmin, dmax = min(dates), max(dates) + timedelta(days=1)
-    q = select(Booking).where(
-        Booking.is_live == True,
-        Booking.created_at <= cutoff_dt,
-        Booking.check_out > dmin,
-        Booking.check_in < dmax,
+    q = (
+        select(Slot.date, func.count(Slot.id))
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= dmin,
+            Slot.date < dmax,
+            Slot.date.in_(dates),
+            Slot.block_type != BlockType.EMPTY,
+        )
     )
     if category is not None:
-        q = q.where(Booking.room_category == category)
-    bookings = (await db.execute(q)).scalars().all()
-
-    out: dict[date, int] = defaultdict(int)
-    for b in bookings:
-        seg_start = max(dmin, b.check_in)
-        seg_end = min(dmax, b.check_out)
-        for d in _date_range(seg_start, seg_end):
-            if d in dates:
-                out[d] += 1
-    return dict(out)
+        q = q.where(Room.category == category)
+    q = q.group_by(Slot.date)
+    rows = (await db.execute(q)).all()
+    return {d: int(cnt) for (d, cnt) in rows}
 
 
 def _clamp01(x: float) -> float:
@@ -182,8 +156,9 @@ async def _predict_final_occ_pct_for_date(
 ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Predict FINAL occupancy for target_date using historical pickup ratio at the same lead time.
-    pctBookedByLead = (on_books_at_lead / final_realized) on historical same-date windows.
-    forecastFinal = on_books_now / mean(pctBookedByLead)
+    On-the-books and final realized both use **slot** counts (SOFT + HARD, i.e. not EMPTY),
+    so for past calendar dates the historical ratio is typically ~1.0 and the forecast stays
+    near current calendar occupancy unless samples clamp differently.
     """
     lead_days = max(0, (target_date - as_of).days)
     if total_rooms <= 0:
@@ -272,7 +247,8 @@ async def get_occupancy_forecast(
     days = _date_range(start, end)
 
     actual_counts = await _get_actual_occupied_counts(db, start=min(start, as_of - timedelta(days=365)), end=min(end, as_of + timedelta(days=1)))
-    on_books_counts = await _get_on_books_occupied_counts(db, start=start, end=end, as_of=as_of)
+    # Calendar occupancy (guest SOFT + blocks HARD); matches heatmap, not Booking.created_at.
+    on_books_counts = await _get_actual_occupied_counts(db, start=start, end=end)
 
     expected_by_date_cat = await build_expected_occupancy(
         db=db,
