@@ -22,8 +22,10 @@ class OccupancyPoint(BaseModel):
     # Pickup-based prediction of FINAL occupancy for this date (as of `as_of`), derived
     # from same-lead pickup ratios on the same calendar dates in prior years.
     predicted_final_occ_pct: Optional[float] = None
+    # Band endpoints are normalized so low ≤ high (room-level inversion is unfolded in the API).
     predicted_final_occ_low_pct: Optional[float] = None
     predicted_final_occ_high_pct: Optional[float] = None
+    # Heuristic agreement score (55/70/85), not a calibrated probability.
     predicted_final_likelihood_pct: Optional[float] = None
 
 

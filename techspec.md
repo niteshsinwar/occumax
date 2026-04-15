@@ -207,6 +207,7 @@ Newest first; reflects repository history at documentation time.
 
 | When (approx.) | Summary |
 |----------------|---------|
+| 2026-04-14 | **AI forecast UI** (`BirdseyeForecastInsights`): signed **vs pred** (on books − pred final); **pred band** aggregation uses per-day min/max of low/high so the range cannot invert; copy explains prior-year pickup and that **likelihood is a heuristic score** (not a probability). API normalizes predicted low/high so `low ≤ high` (`analytics.py`). |
 | 2026-04-14 | **`/analytics/occupancy-forecast` on-the-books**: uses **non-EMPTY slot nights** (SOFT + HARD) per date/category, matching the heatmap; prediction path uses the same slot definition for historical numerators (pickup ratio ~1 without slot history). **`/analytics/pace`** still uses **Booking**-based on-the-books with `created_at` cutoffs (`backend/controllers/analytics.py`). |
 | 2026-04-14 | **Availability at a glance** lists **1–4 night** buckets only; the **`4+`** aggregate stays in `computeEmptyRunInventory` but is no longer shown in the panel (`BIRDSEYE_DISPLAY_BUCKET_ORDER`, `BirdseyeInventoryHighlights.tsx`). |
 | 2026-04-14 | **Dashboard** occupancy forecast: pass **`as_of` = client today** (not heatmap `start`) when calling `GET /analytics/occupancy-forecast` so on-the-books counts use `Booking.created_at <= as_of` aligned with the live grid; previously `as_of = start` made on-books look empty vs SOFT slots (`Dashboard.tsx`). |
