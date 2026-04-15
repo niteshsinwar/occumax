@@ -129,6 +129,81 @@ function buildDonutSliceElements(
   return paths;
 }
 
+function ButterflyChart({
+  bucketLabel,
+  categories,
+  beforeBreakdown,
+  afterBreakdown,
+}: {
+  bucketLabel: string;
+  categories: RoomCategory[];
+  beforeBreakdown: Partial<Record<RoomCategory, number>>;
+  afterBreakdown: Partial<Record<RoomCategory, number>>;
+}) {
+  const rows = categories.map(cat => {
+    const before = beforeBreakdown[cat] ?? 0;
+    const after = afterBreakdown[cat] ?? 0;
+    const delta = after - before;
+    return { cat, before, after, delta };
+  });
+  const maxVal = Math.max(1, ...rows.map(r => Math.max(r.before, r.after)));
+
+  return (
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Before</div>
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">{bucketLabel}</div>
+        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">After</div>
+      </div>
+
+      <div className="relative">
+        <div className="absolute inset-y-0 left-1/2 w-px bg-border/70" aria-hidden />
+        <div className="space-y-1.5">
+          {rows.map(r => {
+            const fill = CATEGORY_DONUT_FILL[r.cat] ?? "rgba(44, 27, 24, 0.3)";
+            const leftPct = (r.before / maxVal) * 100;
+            const rightPct = (r.after / maxVal) * 100;
+            return (
+              <div key={r.cat} className="grid grid-cols-[64px_1fr_44px] items-center gap-2">
+                <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">
+                  {r.cat}
+                </div>
+
+                <div className="grid grid-cols-2 gap-1">
+                  <div className="h-3 bg-surface-2 border border-border/60 relative overflow-hidden">
+                    <div
+                      className="absolute right-0 top-0 bottom-0"
+                      style={{ width: `${leftPct}%`, backgroundColor: fill }}
+                      aria-label={`${r.cat} before: ${r.before}`}
+                      role="img"
+                    />
+                  </div>
+                  <div className="h-3 bg-surface-2 border border-border/60 relative overflow-hidden">
+                    <div
+                      className="absolute left-0 top-0 bottom-0"
+                      style={{ width: `${rightPct}%`, backgroundColor: fill }}
+                      aria-label={`${r.cat} after: ${r.after}`}
+                      role="img"
+                    />
+                  </div>
+                </div>
+
+                <div className={`text-[10px] font-bold tabular-nums text-right ${r.delta >= 0 ? "text-occugreen" : "text-occuorange"}`}>
+                  {r.delta >= 0 ? `+${r.delta}` : `${r.delta}`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-2 text-[9px] text-text-muted font-bold uppercase tracking-widest">
+        Scale: max {maxVal} windows · bars show per-room-type mix shift
+      </div>
+    </div>
+  );
+}
+
 interface BirdseyeInventoryHighlightsProps {
   snapshot: EmptyRunInventorySnapshot;
   projectedSnapshot?: EmptyRunInventorySnapshot | null;
@@ -195,35 +270,13 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
               ) : (
                 <div className="px-2.5 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
                   {after ? (
-                    <div className="shrink-0 grid grid-cols-2 gap-3 items-start">
-                      <div className="flex flex-col items-center">
-                        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest mb-1">Before</div>
-                        <svg
-                          viewBox="0 0 100 100"
-                          className="w-24 h-24 sm:w-28 sm:h-28"
-                          role="img"
-                          aria-label={`Before category mix for ${BUCKET_LABELS[bucket]}: ${baseTotal} windows`}
-                        >
-                          {baseTotal > 0
-                            ? buildDonutSliceElements(
-                                CATEGORY_ORDER.filter(c => ((base.byBucket[bucket][c] ?? 0) > 0)),
-                                base.byBucket[bucket],
-                                baseTotal,
-                              )
-                            : null}
-                        </svg>
-                      </div>
-                      <div className="flex flex-col items-center">
-                        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest mb-1">After</div>
-                        <svg
-                          viewBox="0 0 100 100"
-                          className="w-24 h-24 sm:w-28 sm:h-28"
-                          role="img"
-                          aria-label={`After category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
-                        >
-                          {total > 0 ? buildDonutSliceElements(categoriesPresent, breakdown, total) : null}
-                        </svg>
-                      </div>
+                    <div className="w-full">
+                      <ButterflyChart
+                        bucketLabel={BUCKET_LABELS[bucket]}
+                        categories={CATEGORY_ORDER.filter(c => ((base.byBucket[bucket][c] ?? 0) > 0) || ((after.byBucket[bucket][c] ?? 0) > 0))}
+                        beforeBreakdown={base.byBucket[bucket]}
+                        afterBreakdown={after.byBucket[bucket]}
+                      />
                     </div>
                   ) : (
                     <div className="shrink-0 flex justify-center sm:justify-start">
