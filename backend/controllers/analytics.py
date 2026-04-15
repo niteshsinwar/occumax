@@ -138,6 +138,30 @@ async def _get_on_books_counts_for_specific_dates(
     return {d: int(cnt) for (d, cnt) in rows}
 
 
+async def _get_on_books_booking_count_for_date(
+    db: AsyncSession,
+    stay_date: date,
+    cutoff_dt: datetime,
+    category: Optional[RoomCategory],
+) -> int:
+    """
+    Count rooms on the books for a specific stay date using Booking.created_at as the pickup cutoff.
+
+    This is what we need for historical "on-books at same lead time" calculations. Slot records
+    represent the current calendar state and do not preserve past snapshots.
+    """
+    q = select(func.count(Booking.id)).where(
+        Booking.is_live == True,
+        Booking.created_at <= cutoff_dt,
+        Booking.check_in <= stay_date,
+        Booking.check_out > stay_date,
+    )
+    if category is not None:
+        q = q.where(Booking.room_category == category)
+    val = (await db.execute(q)).scalar_one()
+    return int(val or 0)
+
+
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, float(x)))
 
@@ -156,9 +180,13 @@ async def _predict_final_occ_pct_for_date(
 ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
     Predict FINAL occupancy for target_date using historical pickup ratio at the same lead time.
-    On-the-books and final realized both use **slot** counts (SOFT + HARD, i.e. not EMPTY),
-    so for past calendar dates the historical ratio is typically ~1.0 and the forecast stays
-    near current calendar occupancy unless samples clamp differently.
+
+    - Final realized occupancy for historical dates comes from slots (SOFT + HARD, i.e. not EMPTY).
+    - Historical on-the-books at the same lead time is computed from Booking.created_at cutoffs.
+
+    Using slots for historical on-books would always approximate 100% for past dates because slots
+    do not store historical snapshots; that collapses the pickup ratio and makes pred final hug
+    current on-books.
     """
     lead_days = max(0, (target_date - as_of).days)
     if total_rooms <= 0:
@@ -183,13 +211,12 @@ async def _predict_final_occ_pct_for_date(
         if final_rooms <= 0:
             continue
         cutoff_dt = _cutoff_dt_for_hist_lead(hd, lead_days)
-        on_books_hist_map = await _get_on_books_counts_for_specific_dates(
+        on_books_hist = await _get_on_books_booking_count_for_date(
             db=db,
-            dates={hd},
+            stay_date=hd,
             cutoff_dt=cutoff_dt,
             category=category,
         )
-        on_books_hist = int(on_books_hist_map.get(hd, 0) or 0)
         pct = on_books_hist / final_rooms
         # Clamp to avoid insane blowups (e.g. data glitches).
         pct_samples.append(_clamp01(pct))
