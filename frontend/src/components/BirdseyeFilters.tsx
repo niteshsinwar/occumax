@@ -40,7 +40,7 @@ export function BirdseyeFilters({
 
   return (
     <div className="mb-6 bg-surface border border-border p-4 sm:p-5 shadow-subtle">
-      <div className="text-[10px] font-bold text-text-muted uppercase tracking-widest mb-4">Filters</div>
+      <div className="font-bold text-xs text-text uppercase tracking-widest mb-4">Filters</div>
       <div className="flex flex-col lg:flex-row lg:items-start gap-6 lg:gap-10">
         <div className="min-w-0">
           <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide mb-2">Date range</div>
@@ -78,8 +78,8 @@ export function BirdseyeFilters({
                   className={
                     "text-xs font-semibold uppercase tracking-wider px-4 py-2.5 rounded-sm border transition-all " +
                     (active
-                      ? "bg-accent/15 text-text border-accent/40"
-                      : "bg-surface-2 text-text-muted border-border hover:bg-border hover:text-text")
+                      ? "bg-text text-surface border-text"
+                      : "bg-surface-2 text-text border-border hover:bg-border")
                   }
                 >
                   {label}

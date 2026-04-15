@@ -61,7 +61,7 @@ export function BirdseyeForecastInsights(props: {
     <div className="bg-surface border border-border shadow-subtle">
       <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
         <div className="flex items-baseline justify-between gap-3">
-          <h3 className="font-serif font-bold text-sm text-text">AI forecast</h3>
+          <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
           <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">
             as of {forecast.as_of}
           </div>
@@ -79,7 +79,7 @@ export function BirdseyeForecastInsights(props: {
           return (
             <div key={c.label} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
               <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50">
-                <span className="text-[10px] font-bold text-text uppercase tracking-wider">
+                <span className="text-[10px] font-bold text-text uppercase tracking-widest">
                   {c.label === "SELECTED_TYPES" ? "Selected types" : "All rooms"}
                 </span>
                 <span className="text-[10px] font-black tabular-nums text-text">
