@@ -194,16 +194,49 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
                 <div className="px-2.5 py-3 text-[10px] text-text-muted font-medium">No windows in this bucket</div>
               ) : (
                 <div className="px-2.5 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
-                  <div className="shrink-0 flex justify-center sm:justify-start">
-                    <svg
-                      viewBox="0 0 100 100"
-                      className="w-28 h-28 sm:w-32 sm:h-32"
-                      role="img"
-                      aria-label={`Category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
-                    >
-                      {buildDonutSliceElements(categoriesPresent, breakdown, total)}
-                    </svg>
-                  </div>
+                  {after ? (
+                    <div className="shrink-0 grid grid-cols-2 gap-3 items-start">
+                      <div className="flex flex-col items-center">
+                        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest mb-1">Before</div>
+                        <svg
+                          viewBox="0 0 100 100"
+                          className="w-24 h-24 sm:w-28 sm:h-28"
+                          role="img"
+                          aria-label={`Before category mix for ${BUCKET_LABELS[bucket]}: ${baseTotal} windows`}
+                        >
+                          {baseTotal > 0
+                            ? buildDonutSliceElements(
+                                CATEGORY_ORDER.filter(c => ((base.byBucket[bucket][c] ?? 0) > 0)),
+                                base.byBucket[bucket],
+                                baseTotal,
+                              )
+                            : null}
+                        </svg>
+                      </div>
+                      <div className="flex flex-col items-center">
+                        <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest mb-1">After</div>
+                        <svg
+                          viewBox="0 0 100 100"
+                          className="w-24 h-24 sm:w-28 sm:h-28"
+                          role="img"
+                          aria-label={`After category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
+                        >
+                          {total > 0 ? buildDonutSliceElements(categoriesPresent, breakdown, total) : null}
+                        </svg>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="shrink-0 flex justify-center sm:justify-start">
+                      <svg
+                        viewBox="0 0 100 100"
+                        className="w-28 h-28 sm:w-32 sm:h-32"
+                        role="img"
+                        aria-label={`Category mix for ${BUCKET_LABELS[bucket]}: ${total} windows`}
+                      >
+                        {buildDonutSliceElements(categoriesPresent, breakdown, total)}
+                      </svg>
+                    </div>
+                  )}
                   <ul className="flex-1 min-w-0 space-y-2">
                     {categoriesPresent.map(cat => {
                       const n = breakdown[cat] ?? 0;
