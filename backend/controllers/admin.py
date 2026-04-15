@@ -170,6 +170,7 @@ async def patch_slot(slot_id: str, body: SlotPatch, db: AsyncSession) -> dict:
 class SeedAnalyticsHistoryRequest(BaseModel):
     start: date
     end: date
+    fill_pct: int = 35
 
 
 async def seed_analytics_history(db: AsyncSession, body: SeedAnalyticsHistoryRequest) -> dict:
@@ -180,7 +181,20 @@ async def seed_analytics_history(db: AsyncSession, body: SeedAnalyticsHistoryReq
     1y/2y-back data to compute predicted final occupancy and likelihood.
     """
     try:
-        result = await seedAnalyticsHistory(db=db, target_start=body.start, target_end=body.end, window_days=21)
-        return {"status": "ok", "start": str(body.start), "end": str(body.end), **result}
+        fillPct = max(0, min(100, int(body.fill_pct)))
+        result = await seedAnalyticsHistory(
+            db=db,
+            target_start=body.start,
+            target_end=body.end,
+            window_days=21,
+            fill_pct=fillPct,
+        )
+        return {
+            "status": "ok",
+            "start": str(body.start),
+            "end": str(body.end),
+            "fill_pct": fillPct,
+            **result,
+        }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

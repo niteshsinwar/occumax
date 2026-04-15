@@ -2,16 +2,12 @@ import type { OccupancyForecastResponse, RoomCategory } from "../types";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useMemo, useRef, useState } from "react";
 
-function pct(n: number) {
-  return `${n.toFixed(0)}%`;
+function int(n: number) {
+  return Math.round(n).toString();
 }
 
-/** Signed difference for display (e.g. +2% or −3%). */
-function signedPct(diff: number) {
-  if (diff > 0) return `+${diff.toFixed(0)}%`;
-  if (diff < 0) return `−${Math.abs(diff).toFixed(0)}%`;
-  return "0%";
-}
+/** Signed difference for display (e.g. +12 or −7). */
+// (removed: signedInt) — we no longer show vs-pred summary text in the card header.
 
 function sum(nums: number[]) {
   return nums.reduce((a, b) => a + b, 0);
@@ -19,10 +15,11 @@ function sum(nums: number[]) {
 
 type DailyDatum = {
   date: string;
-  onBooksPct: number | null;
-  predictedPct: number | null;
-  predictedLowPct: number | null;
-  predictedHighPct: number | null;
+  totalRooms: number;
+  onBooksRooms: number | null;
+  predictedRooms: number | null;
+  predictedLowRooms: number | null;
+  predictedHighRooms: number | null;
 };
 
 function clamp(n: number, lo: number, hi: number) {
@@ -31,17 +28,29 @@ function clamp(n: number, lo: number, hi: number) {
 
 function buildDailySeriesFromPoints(points: OccupancyForecastResponse["series"][number]["points"]): DailyDatum[] {
   return points.map(p => {
-    const onBooks =
-      typeof p.occupied_rooms_on_books === "number" && p.total_rooms > 0 ? (p.occupied_rooms_on_books / p.total_rooms) * 100 : null;
-    const predicted = typeof p.predicted_final_occ_pct === "number" ? p.predicted_final_occ_pct : null;
-    const lo = typeof p.predicted_final_occ_low_pct === "number" ? p.predicted_final_occ_low_pct : null;
-    const hi = typeof p.predicted_final_occ_high_pct === "number" ? p.predicted_final_occ_high_pct : null;
+    const onBooksRooms = typeof p.occupied_rooms_on_books === "number" ? p.occupied_rooms_on_books : null;
+    const predictedRooms = typeof p.predicted_final_occ_pct === "number" ? (p.predicted_final_occ_pct / 100) * p.total_rooms : null;
+    const lo = p.predicted_final_occ_low_pct;
+    const hi = p.predicted_final_occ_high_pct;
+    const predictedLowRooms =
+      typeof lo === "number" && typeof hi === "number"
+        ? (Math.min(lo, hi) / 100) * p.total_rooms
+        : typeof lo === "number"
+          ? (lo / 100) * p.total_rooms
+          : null;
+    const predictedHighRooms =
+      typeof lo === "number" && typeof hi === "number"
+        ? (Math.max(lo, hi) / 100) * p.total_rooms
+        : typeof hi === "number"
+          ? (hi / 100) * p.total_rooms
+          : null;
     return {
       date: p.date,
-      onBooksPct: onBooks,
-      predictedPct: predicted,
-      predictedLowPct: lo,
-      predictedHighPct: hi,
+      totalRooms: p.total_rooms,
+      onBooksRooms,
+      predictedRooms,
+      predictedLowRooms,
+      predictedHighRooms,
     };
   });
 }
@@ -83,12 +92,14 @@ function buildDailySeriesFromSelectedSeries(series: OccupancyForecastResponse["s
   return [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, row]) => {
-      const denom = Math.max(1, row.totalRooms);
-      const onBooksPct = (row.onBooksRooms / denom) * 100;
-      const predictedPct = row.hasPred ? (row.predictedRooms / denom) * 100 : null;
-      const predictedLowPct = row.hasBand ? (row.lowRooms / denom) * 100 : null;
-      const predictedHighPct = row.hasBand ? (row.highRooms / denom) * 100 : null;
-      return { date, onBooksPct, predictedPct, predictedLowPct, predictedHighPct };
+      return {
+        date,
+        totalRooms: row.totalRooms,
+        onBooksRooms: row.onBooksRooms,
+        predictedRooms: row.hasPred ? row.predictedRooms : null,
+        predictedLowRooms: row.hasBand ? row.lowRooms : null,
+        predictedHighRooms: row.hasBand ? row.highRooms : null,
+      };
     });
 }
 
@@ -139,25 +150,37 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   const w = 600;
-  const h = 160;
+  const h = 190;
   const padL = 36;
   const padR = 12;
   const padT = 10;
-  const padB = 26;
+  const padB = 52;
 
   const xFor = (i: number) => {
     if (data.length <= 1) return padL;
     return padL + (i / (data.length - 1)) * (w - padL - padR);
   };
 
-  const yForPct = (pctVal: number) => {
+  const yMax = useMemo(() => {
+    const vals: number[] = [];
+    for (const p of data) {
+      vals.push(p.totalRooms);
+      if (typeof p.onBooksRooms === "number") vals.push(p.onBooksRooms);
+      if (typeof p.predictedRooms === "number") vals.push(p.predictedRooms);
+      if (typeof p.predictedHighRooms === "number") vals.push(p.predictedHighRooms);
+    }
+    const m = vals.length ? Math.max(...vals) : 0;
+    return Math.max(1, Math.ceil(m / 5) * 5);
+  }, [data]);
+
+  const yForRooms = (rooms: number) => {
     const y0 = padT;
     const y1 = h - padB;
-    return y1 - (clamp(pctVal, 0, 100) / 100) * (y1 - y0);
+    return y1 - (clamp(rooms, 0, yMax) / yMax) * (y1 - y0);
   };
 
   const paths = useMemo(() => {
-    const linePath = (key: keyof Pick<DailyDatum, "onBooksPct" | "predictedPct">) => {
+    const linePath = (key: keyof Pick<DailyDatum, "onBooksRooms" | "predictedRooms">) => {
       let d = "";
       let started = false;
       for (let i = 0; i < data.length; i++) {
@@ -167,7 +190,7 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
           continue;
         }
         const x = xFor(i);
-        const y = yForPct(v);
+        const y = yForRooms(v);
         if (!started) {
           d += `M ${x.toFixed(2)} ${y.toFixed(2)} `;
           started = true;
@@ -181,25 +204,25 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
     // Band area path (high forward, low backward) for contiguous defined points.
     let band = "";
     const defined = data
-      .map((p, i) => ({ i, lo: p.predictedLowPct, hi: p.predictedHighPct }))
+      .map((p, i) => ({ i, lo: p.predictedLowRooms, hi: p.predictedHighRooms }))
       .filter(p => typeof p.lo === "number" && typeof p.hi === "number");
     if (defined.length) {
-      const top = defined.map(p => `L ${xFor(p.i).toFixed(2)} ${yForPct(p.hi as number).toFixed(2)}`).join(" ");
+      const top = defined.map(p => `L ${xFor(p.i).toFixed(2)} ${yForRooms(p.hi as number).toFixed(2)}`).join(" ");
       const bot = [...defined]
         .reverse()
-        .map(p => `L ${xFor(p.i).toFixed(2)} ${yForPct(p.lo as number).toFixed(2)}`)
+        .map(p => `L ${xFor(p.i).toFixed(2)} ${yForRooms(p.lo as number).toFixed(2)}`)
         .join(" ");
       const first = defined[0];
-      band = `M ${xFor(first.i).toFixed(2)} ${yForPct(first.hi as number).toFixed(2)} ${top} ${bot} Z`;
+      band = `M ${xFor(first.i).toFixed(2)} ${yForRooms(first.hi as number).toFixed(2)} ${top} ${bot} Z`;
       band = band.replace(/^M [^ ]+ [^ ]+ L /, "M "); // avoid a redundant first L
     }
 
     return {
       band,
-      onBooks: linePath("onBooksPct"),
-      predicted: linePath("predictedPct"),
+      onBooks: linePath("onBooksRooms"),
+      predicted: linePath("predictedRooms"),
     };
-  }, [data]);
+  }, [data, yMax]);
 
   const hover = hoverIdx !== null ? data[hoverIdx] : null;
 
@@ -217,16 +240,19 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
 
   return (
     <div ref={wrapRef} className="relative" onMouseMove={onMove} onMouseLeave={onLeave}>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[160px] block">
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[190px] block">
         {/* y-grid */}
-        {[0, 25, 50, 75, 100].map(v => (
-          <g key={v}>
-            <line x1={padL} y1={yForPct(v)} x2={w - padR} y2={yForPct(v)} stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
-            <text x={padL - 8} y={yForPct(v) + 4} textAnchor="end" fontSize="10" fill="rgba(148,163,184,0.9)" fontWeight="700">
-              {v}%
-            </text>
-          </g>
-        ))}
+        {[0, 0.25, 0.5, 0.75, 1].map(t => {
+          const v = Math.round(yMax * t);
+          return (
+            <g key={v}>
+              <line x1={padL} y1={yForRooms(v)} x2={w - padR} y2={yForRooms(v)} stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+              <text x={padL - 8} y={yForRooms(v) + 4} textAnchor="end" fontSize="10" fill="rgba(148,163,184,0.9)" fontWeight="700">
+                {v}
+              </text>
+            </g>
+          );
+        })}
 
         {/* band */}
         {paths.band && <path d={paths.band} fill="rgba(59,130,246,0.12)" stroke="none" />}
@@ -246,29 +272,30 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
               stroke="rgba(226,232,240,0.55)"
               strokeWidth="1"
             />
-            {typeof data[hoverIdx].predictedPct === "number" && (
-              <circle cx={xFor(hoverIdx)} cy={yForPct(data[hoverIdx].predictedPct as number)} r="3.5" fill="rgba(59,130,246,0.95)" />
+            {typeof data[hoverIdx].predictedRooms === "number" && (
+              <circle cx={xFor(hoverIdx)} cy={yForRooms(data[hoverIdx].predictedRooms as number)} r="3.5" fill="rgba(59,130,246,0.95)" />
             )}
-            {typeof data[hoverIdx].onBooksPct === "number" && (
-              <circle cx={xFor(hoverIdx)} cy={yForPct(data[hoverIdx].onBooksPct as number)} r="3.5" fill="rgba(16,185,129,0.95)" />
+            {typeof data[hoverIdx].onBooksRooms === "number" && (
+              <circle cx={xFor(hoverIdx)} cy={yForRooms(data[hoverIdx].onBooksRooms as number)} r="3.5" fill="rgba(16,185,129,0.95)" />
             )}
           </g>
         )}
 
-        {/* x labels (first/middle/last) */}
+        {/* x labels (all dates) */}
         {data.length > 0 && (
           <g>
-            {[0, Math.floor((data.length - 1) / 2), data.length - 1].map(i => (
+            {data.map((p, i) => (
               <text
                 key={i}
                 x={xFor(i)}
                 y={h - 8}
-                textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"}
-                fontSize="10"
+                textAnchor="end"
+                fontSize="9"
                 fill="rgba(148,163,184,0.9)"
                 fontWeight="700"
+                transform={`rotate(-45 ${xFor(i)} ${h - 8})`}
               >
-                {data[i]?.date ?? ""}
+                {p.date}
               </text>
             ))}
           </g>
@@ -297,19 +324,23 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{hover.date}</div>
           <div className="mt-1 flex items-center justify-between gap-3">
             <span className="text-text-muted font-semibold">On books</span>
-            <span className="text-text font-bold tabular-nums">{typeof hover.onBooksPct === "number" ? pct(hover.onBooksPct) : "n/a"}</span>
+            <span className="text-text font-bold tabular-nums">{typeof hover.onBooksRooms === "number" ? int(hover.onBooksRooms) : "n/a"}</span>
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-3">
             <span className="text-text-muted font-semibold">Pred final</span>
-            <span className="text-text font-bold tabular-nums">{typeof hover.predictedPct === "number" ? pct(hover.predictedPct) : "n/a"}</span>
+            <span className="text-text font-bold tabular-nums">{typeof hover.predictedRooms === "number" ? int(hover.predictedRooms) : "n/a"}</span>
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-3">
             <span className="text-text-muted font-semibold">Band</span>
             <span className="text-text font-bold tabular-nums">
-              {typeof hover.predictedLowPct === "number" && typeof hover.predictedHighPct === "number"
-                ? `${pct(hover.predictedLowPct)}–${pct(hover.predictedHighPct)}`
+              {typeof hover.predictedLowRooms === "number" && typeof hover.predictedHighRooms === "number"
+                ? `${int(hover.predictedLowRooms)}–${int(hover.predictedHighRooms)}`
                 : "n/a"}
             </span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-3">
+            <span className="text-text-muted font-semibold">Total rooms</span>
+            <span className="text-text font-bold tabular-nums">{int(hover.totalRooms)}</span>
           </div>
         </div>
       )}
@@ -365,37 +396,16 @@ export function BirdseyeForecastInsights(props: {
 
       <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
         {cards.map(c => {
-          // Positive = on books above predicted final (ahead of / beating the simple model).
-          const vsForecastPp = c.onBooksAvg - c.predictedFinalAvg;
           return (
             <div key={c.label} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
               <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50 gap-2">
                 <span className="text-[10px] font-bold text-text uppercase tracking-widest">
                   {c.label === "SELECTED_TYPES" ? "Selected types" : "All rooms"}
                 </span>
-                <span
-                  className="text-[10px] font-black tabular-nums text-text text-right shrink-0"
-                  title="On books minus pred final; + means ahead of the model."
-                >
-                  vs pred {signedPct(vsForecastPp)}
-                </span>
               </div>
 
               <div className="px-3 py-2">
                 <ForecastLinesChart data={c.daily} />
-              </div>
-
-              <div className="px-3 pb-2 flex items-center justify-between gap-3 text-[10px] text-text-muted font-semibold">
-                <div className="uppercase tracking-wider">
-                  On books <span className="text-text font-bold normal-case tracking-normal ml-1">{pct(c.onBooksAvg)}</span>
-                </div>
-                <div className="uppercase tracking-wider">
-                  Pred final <span className="text-text font-bold normal-case tracking-normal ml-1">{pct(c.predictedFinalAvg)}</span>
-                </div>
-              </div>
-
-              <div className="px-3 pb-2 text-[10px] text-text-muted font-semibold">
-                Pred band {pct(c.predictedLowAvg)}–{pct(c.predictedHighAvg)}
               </div>
             </div>
           );

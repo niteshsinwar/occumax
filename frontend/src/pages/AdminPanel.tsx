@@ -44,6 +44,7 @@ export function AdminPanel() {
     d.setDate(d.getDate() + 21);
     return d.toISOString().slice(0, 10);
   });
+  const [seedFillPct, setSeedFillPct] = useState<number>(35);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,16 +96,15 @@ export function AdminPanel() {
   const handleSeedAnalytics = async () => {
     if (!seedStart || !seedEnd) { show("Select a start and end date", "error"); return; }
     if (seedEnd <= seedStart) { show("End date must be after start date", "error"); return; }
-    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd}? This will insert DEMO_ANALYTICS rows (1y/2y back).`)) return;
+    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd} at ~${seedFillPct}% occupancy? This will insert DEMO_ANALYTICS rows (1y/2y back).`)) return;
     setSeedLoading(true);
     try {
-      const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd });
+      const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd, fill_pct: seedFillPct });
       const d = res.data ?? {};
-      if (d.skipped) {
-        show("Demo analytics data already exists (skipped).", "info");
-      } else {
-        show(`Seeded analytics history: ${d.inserted_bookings ?? 0} bookings`, "success");
-      }
+      show(
+        `Seeded analytics history: ${d.inserted_bookings ?? 0} bookings (${d.updated_slots ?? 0} nights).`,
+        "success"
+      );
     } catch (e: unknown) {
       show(getErrorDetail(e) || "Failed to seed analytics history", "error");
     } finally {
@@ -148,6 +148,23 @@ export function AdminPanel() {
                   onChange={(e) => setSeedEnd(e.target.value)}
                 />
               </div>
+            </div>
+          </div>
+          <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
+            <div className="space-y-1 w-[220px]">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Occupancy</div>
+                <div className="text-[10px] font-bold text-text uppercase tracking-widest tabular-nums">{seedFillPct}%</div>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={seedFillPct}
+                onChange={(e) => setSeedFillPct(Number(e.target.value))}
+                className="w-full accent-accent"
+              />
             </div>
           </div>
           <button

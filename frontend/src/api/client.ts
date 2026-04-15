@@ -67,5 +67,5 @@ export const adminUpdateRoom    = (id: string, body: { category?: string; base_r
   api.patch(`/admin/rooms/${id}`, body);
 export const adminDeleteRoom    = (id: string) => api.delete(`/admin/rooms/${id}`);
 export const adminListCategories = () => api.get("/admin/categories");
-export const adminSeedAnalyticsHistory = (body: { start: string; end: string }) =>
+export const adminSeedAnalyticsHistory = (body: { start: string; end: string; fill_pct: number }) =>
   api.post("/admin/seed-analytics-history", body);
