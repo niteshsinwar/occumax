@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
@@ -68,16 +68,42 @@ async def seed_analytics_history(
     for r in rooms:
         rooms_by_cat[r.category].append(r)
 
-    # If demo data already exists for this requested range, skip to avoid duplicates.
-    existing_demo = (await db.execute(
+    hist_min = min(w[0] for w in hist_windows)
+    hist_max = max(w[1] for w in hist_windows)
+
+    # If demo data already exists for this requested run_tag, delete it and reseed.
+    # This keeps the admin tool idempotent for a given chosen range.
+    existing_booking_ids = (await db.execute(
         select(Booking.id).where(
             Booking.guest_name.like(f"{DEMO_PREFIX}[{run_tag}]%"),
-            Booking.check_out > min(w[0] for w in hist_windows),
-            Booking.check_in < max(w[1] for w in hist_windows),
+            Booking.check_out > hist_min,
+            Booking.check_in < hist_max,
         )
-    )).scalars().first()
-    if existing_demo:
-        return {"skipped": 1}
+    )).scalars().all()
+
+    deleted_bookings = 0
+    cleared_slots = 0
+    if existing_booking_ids:
+        clear_res = await db.execute(
+            update(Slot)
+            .where(Slot.booking_id.in_(existing_booking_ids))
+            .values(
+                block_type=BlockType.EMPTY,
+                booking_id=None,
+                channel=Channel.OTA,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        cleared_slots = int(clear_res.rowcount or 0)
+
+        del_res = await db.execute(
+            delete(Booking)
+            .where(Booking.id.in_(existing_booking_ids))
+            .execution_options(synchronize_session=False)
+        )
+        deleted_bookings = int(del_res.rowcount or 0)
+
+        await db.commit()
 
     rng = random.Random(seed)
 
@@ -85,8 +111,6 @@ async def seed_analytics_history(
     inserted_slots = 0
     updated_slots = 0
 
-    hist_min = min(w[0] for w in hist_windows)
-    hist_max = max(w[1] for w in hist_windows)
     existing_slots = (await db.execute(
         select(Slot).where(Slot.date >= hist_min, Slot.date < hist_max)
     )).scalars().all()
@@ -183,6 +207,8 @@ async def seed_analytics_history(
     await db.commit()
 
     return {
+        "deleted_bookings": deleted_bookings,
+        "cleared_slots": cleared_slots,
         "inserted_bookings": inserted_bookings,
         "inserted_slots": inserted_slots,
         "updated_slots": updated_slots,

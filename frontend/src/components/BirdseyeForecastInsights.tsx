@@ -1,4 +1,6 @@
 import type { OccupancyForecastResponse, RoomCategory } from "../types";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { useMemo, useRef, useState } from "react";
 
 function pct(n: number) {
   return `${n.toFixed(0)}%`;
@@ -13,6 +15,81 @@ function signedPct(diff: number) {
 
 function sum(nums: number[]) {
   return nums.reduce((a, b) => a + b, 0);
+}
+
+type DailyDatum = {
+  date: string;
+  onBooksPct: number | null;
+  predictedPct: number | null;
+  predictedLowPct: number | null;
+  predictedHighPct: number | null;
+};
+
+function clamp(n: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function buildDailySeriesFromPoints(points: OccupancyForecastResponse["series"][number]["points"]): DailyDatum[] {
+  return points.map(p => {
+    const onBooks =
+      typeof p.occupied_rooms_on_books === "number" && p.total_rooms > 0 ? (p.occupied_rooms_on_books / p.total_rooms) * 100 : null;
+    const predicted = typeof p.predicted_final_occ_pct === "number" ? p.predicted_final_occ_pct : null;
+    const lo = typeof p.predicted_final_occ_low_pct === "number" ? p.predicted_final_occ_low_pct : null;
+    const hi = typeof p.predicted_final_occ_high_pct === "number" ? p.predicted_final_occ_high_pct : null;
+    return {
+      date: p.date,
+      onBooksPct: onBooks,
+      predictedPct: predicted,
+      predictedLowPct: lo,
+      predictedHighPct: hi,
+    };
+  });
+}
+
+function buildDailySeriesFromSelectedSeries(series: OccupancyForecastResponse["series"], selected: RoomCategory[]): DailyDatum[] {
+  const set = new Set(selected);
+  const selectedSeries = series.filter(s => s.category !== null && set.has(s.category));
+  const byDate = new Map<
+    string,
+    { totalRooms: number; onBooksRooms: number; predictedRooms: number; lowRooms: number; highRooms: number; hasPred: boolean; hasBand: boolean }
+  >();
+
+  for (const s of selectedSeries) {
+    for (const p of s.points) {
+      const row =
+        byDate.get(p.date) ??
+        { totalRooms: 0, onBooksRooms: 0, predictedRooms: 0, lowRooms: 0, highRooms: 0, hasPred: false, hasBand: false };
+
+      row.totalRooms += p.total_rooms;
+      row.onBooksRooms += p.occupied_rooms_on_books ?? 0;
+
+      if (typeof p.predicted_final_occ_pct === "number") {
+        row.predictedRooms += (p.predicted_final_occ_pct / 100) * p.total_rooms;
+        row.hasPred = true;
+      }
+
+      const lo = p.predicted_final_occ_low_pct;
+      const hi = p.predicted_final_occ_high_pct;
+      if (typeof lo === "number" && typeof hi === "number") {
+        row.lowRooms += (Math.min(lo, hi) / 100) * p.total_rooms;
+        row.highRooms += (Math.max(lo, hi) / 100) * p.total_rooms;
+        row.hasBand = true;
+      }
+
+      byDate.set(p.date, row);
+    }
+  }
+
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, row]) => {
+      const denom = Math.max(1, row.totalRooms);
+      const onBooksPct = (row.onBooksRooms / denom) * 100;
+      const predictedPct = row.hasPred ? (row.predictedRooms / denom) * 100 : null;
+      const predictedLowPct = row.hasBand ? (row.lowRooms / denom) * 100 : null;
+      const predictedHighPct = row.hasBand ? (row.highRooms / denom) * 100 : null;
+      return { date, onBooksPct, predictedPct, predictedLowPct, predictedHighPct };
+    });
 }
 
 /**
@@ -56,8 +133,192 @@ function computeWindowSummary(points: OccupancyForecastResponse["series"][number
   return { onBooksAvg, predictedFinalAvg, predictedLowAvg, predictedHighAvg, likelihood };
 }
 
+function ForecastLinesChart(props: { data: DailyDatum[] }) {
+  const { data } = props;
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  const w = 600;
+  const h = 160;
+  const padL = 36;
+  const padR = 12;
+  const padT = 10;
+  const padB = 26;
+
+  const xFor = (i: number) => {
+    if (data.length <= 1) return padL;
+    return padL + (i / (data.length - 1)) * (w - padL - padR);
+  };
+
+  const yForPct = (pctVal: number) => {
+    const y0 = padT;
+    const y1 = h - padB;
+    return y1 - (clamp(pctVal, 0, 100) / 100) * (y1 - y0);
+  };
+
+  const paths = useMemo(() => {
+    const linePath = (key: keyof Pick<DailyDatum, "onBooksPct" | "predictedPct">) => {
+      let d = "";
+      let started = false;
+      for (let i = 0; i < data.length; i++) {
+        const v = data[i][key];
+        if (typeof v !== "number") {
+          started = false;
+          continue;
+        }
+        const x = xFor(i);
+        const y = yForPct(v);
+        if (!started) {
+          d += `M ${x.toFixed(2)} ${y.toFixed(2)} `;
+          started = true;
+        } else {
+          d += `L ${x.toFixed(2)} ${y.toFixed(2)} `;
+        }
+      }
+      return d.trim();
+    };
+
+    // Band area path (high forward, low backward) for contiguous defined points.
+    let band = "";
+    const defined = data
+      .map((p, i) => ({ i, lo: p.predictedLowPct, hi: p.predictedHighPct }))
+      .filter(p => typeof p.lo === "number" && typeof p.hi === "number");
+    if (defined.length) {
+      const top = defined.map(p => `L ${xFor(p.i).toFixed(2)} ${yForPct(p.hi as number).toFixed(2)}`).join(" ");
+      const bot = [...defined]
+        .reverse()
+        .map(p => `L ${xFor(p.i).toFixed(2)} ${yForPct(p.lo as number).toFixed(2)}`)
+        .join(" ");
+      const first = defined[0];
+      band = `M ${xFor(first.i).toFixed(2)} ${yForPct(first.hi as number).toFixed(2)} ${top} ${bot} Z`;
+      band = band.replace(/^M [^ ]+ [^ ]+ L /, "M "); // avoid a redundant first L
+    }
+
+    return {
+      band,
+      onBooks: linePath("onBooksPct"),
+      predicted: linePath("predictedPct"),
+    };
+  }, [data]);
+
+  const hover = hoverIdx !== null ? data[hoverIdx] : null;
+
+  const onMove = (e: ReactMouseEvent) => {
+    const el = wrapRef.current;
+    if (!el || data.length === 0) return;
+    const rect = el.getBoundingClientRect();
+    const x = clamp(e.clientX - rect.left, 0, rect.width);
+    const t = rect.width > 0 ? x / rect.width : 0;
+    const idx = Math.round(t * (data.length - 1));
+    setHoverIdx(clamp(idx, 0, data.length - 1));
+  };
+
+  const onLeave = () => setHoverIdx(null);
+
+  return (
+    <div ref={wrapRef} className="relative" onMouseMove={onMove} onMouseLeave={onLeave}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-[160px] block">
+        {/* y-grid */}
+        {[0, 25, 50, 75, 100].map(v => (
+          <g key={v}>
+            <line x1={padL} y1={yForPct(v)} x2={w - padR} y2={yForPct(v)} stroke="rgba(148,163,184,0.25)" strokeWidth="1" />
+            <text x={padL - 8} y={yForPct(v) + 4} textAnchor="end" fontSize="10" fill="rgba(148,163,184,0.9)" fontWeight="700">
+              {v}%
+            </text>
+          </g>
+        ))}
+
+        {/* band */}
+        {paths.band && <path d={paths.band} fill="rgba(59,130,246,0.12)" stroke="none" />}
+
+        {/* lines */}
+        {paths.predicted && <path d={paths.predicted} fill="none" stroke="rgba(59,130,246,0.95)" strokeWidth="2.25" />}
+        {paths.onBooks && <path d={paths.onBooks} fill="none" stroke="rgba(16,185,129,0.95)" strokeWidth="2.25" />}
+
+        {/* hover marker */}
+        {hoverIdx !== null && data.length > 0 && (
+          <g>
+            <line
+              x1={xFor(hoverIdx)}
+              y1={padT}
+              x2={xFor(hoverIdx)}
+              y2={h - padB}
+              stroke="rgba(226,232,240,0.55)"
+              strokeWidth="1"
+            />
+            {typeof data[hoverIdx].predictedPct === "number" && (
+              <circle cx={xFor(hoverIdx)} cy={yForPct(data[hoverIdx].predictedPct as number)} r="3.5" fill="rgba(59,130,246,0.95)" />
+            )}
+            {typeof data[hoverIdx].onBooksPct === "number" && (
+              <circle cx={xFor(hoverIdx)} cy={yForPct(data[hoverIdx].onBooksPct as number)} r="3.5" fill="rgba(16,185,129,0.95)" />
+            )}
+          </g>
+        )}
+
+        {/* x labels (first/middle/last) */}
+        {data.length > 0 && (
+          <g>
+            {[0, Math.floor((data.length - 1) / 2), data.length - 1].map(i => (
+              <text
+                key={i}
+                x={xFor(i)}
+                y={h - 8}
+                textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"}
+                fontSize="10"
+                fill="rgba(148,163,184,0.9)"
+                fontWeight="700"
+              >
+                {data[i]?.date ?? ""}
+              </text>
+            ))}
+          </g>
+        )}
+      </svg>
+
+      {/* legend */}
+      <div className="mt-2 flex items-center gap-4 text-[10px] font-bold uppercase tracking-widest text-text-muted">
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-3 h-0.5" style={{ background: "rgba(16,185,129,0.95)" }} />
+          On books
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-3 h-0.5" style={{ background: "rgba(59,130,246,0.95)" }} />
+          Pred final
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block w-3 h-2" style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)" }} />
+          Pred band
+        </div>
+      </div>
+
+      {/* tooltip */}
+      {hover && hoverIdx !== null && (
+        <div className="absolute right-2 top-2 bg-surface border border-border/70 shadow-subtle px-3 py-2 text-[11px]">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{hover.date}</div>
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <span className="text-text-muted font-semibold">On books</span>
+            <span className="text-text font-bold tabular-nums">{typeof hover.onBooksPct === "number" ? pct(hover.onBooksPct) : "n/a"}</span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-3">
+            <span className="text-text-muted font-semibold">Pred final</span>
+            <span className="text-text font-bold tabular-nums">{typeof hover.predictedPct === "number" ? pct(hover.predictedPct) : "n/a"}</span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-3">
+            <span className="text-text-muted font-semibold">Band</span>
+            <span className="text-text font-bold tabular-nums">
+              {typeof hover.predictedLowPct === "number" && typeof hover.predictedHighPct === "number"
+                ? `${pct(hover.predictedLowPct)}–${pct(hover.predictedHighPct)}`
+                : "n/a"}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
- * Occupancy forecast cards: on books vs predicted final, signed vs-pred gap, pred band, heuristic score.
+ * Occupancy forecast cards: on books vs predicted final with a per-day chart and band.
  */
 export function BirdseyeForecastInsights(props: {
   forecast: OccupancyForecastResponse;
@@ -72,17 +333,20 @@ export function BirdseyeForecastInsights(props: {
   const rollupSummary = computeWindowSummary(rollup?.points ?? []);
   const selectedSummary = computeWindowSummary(selectedSeries.flatMap(s => s.points));
 
+  const rollupDaily = useMemo(() => buildDailySeriesFromPoints(rollup?.points ?? []), [rollup?.points]);
+  const selectedDaily = useMemo(() => buildDailySeriesFromSelectedSeries(forecast.series, selectedCategories), [forecast.series, selectedCategories]);
+
   const cards: {
     label: string;
     onBooksAvg: number;
     predictedFinalAvg: number;
     predictedLowAvg: number;
     predictedHighAvg: number;
-    likelihood: number | null;
+    daily: DailyDatum[];
   }[] = [];
-  cards.push({ label: "ALL", ...rollupSummary });
+  cards.push({ label: "ALL", ...rollupSummary, daily: rollupDaily });
   if (selectedSeries.length > 0) {
-    cards.push({ label: "SELECTED_TYPES", ...selectedSummary });
+    cards.push({ label: "SELECTED_TYPES", ...selectedSummary, daily: selectedDaily });
   }
 
   return (
@@ -97,17 +361,12 @@ export function BirdseyeForecastInsights(props: {
         <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
           Pred final compares today’s calendar (slots) to same calendar dates ~1y and ~2y ago at the same lead time.
         </p>
-        <p className="text-[9px] text-text-muted normal-case tracking-normal font-medium mt-1 leading-relaxed">
-          “Score” is how closely those two prior years agree (55/70/85), not a statistical probability.
-        </p>
       </div>
 
       <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
         {cards.map(c => {
           // Positive = on books above predicted final (ahead of / beating the simple model).
           const vsForecastPp = c.onBooksAvg - c.predictedFinalAvg;
-          const likelihoodLabel =
-            typeof c.likelihood === "number" ? `score ${Math.round(c.likelihood)}` : "score n/a";
           return (
             <div key={c.label} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
               <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50 gap-2">
@@ -122,20 +381,21 @@ export function BirdseyeForecastInsights(props: {
                 </span>
               </div>
 
-              <div className="px-3 py-2 flex items-center justify-between gap-3 text-[11px]">
-                <div className="text-text-muted font-semibold uppercase tracking-wider text-[9px]">
-                  On books <span className="text-text font-bold normal-case tracking-normal text-[11px] ml-1">{pct(c.onBooksAvg)}</span>
+              <div className="px-3 py-2">
+                <ForecastLinesChart data={c.daily} />
+              </div>
+
+              <div className="px-3 pb-2 flex items-center justify-between gap-3 text-[10px] text-text-muted font-semibold">
+                <div className="uppercase tracking-wider">
+                  On books <span className="text-text font-bold normal-case tracking-normal ml-1">{pct(c.onBooksAvg)}</span>
                 </div>
-                <div className="text-text-muted font-semibold uppercase tracking-wider text-[9px]">
-                  Pred final{" "}
-                  <span className="text-text font-bold normal-case tracking-normal text-[11px] ml-1">
-                    {pct(c.predictedFinalAvg)}
-                  </span>
+                <div className="uppercase tracking-wider">
+                  Pred final <span className="text-text font-bold normal-case tracking-normal ml-1">{pct(c.predictedFinalAvg)}</span>
                 </div>
               </div>
 
               <div className="px-3 pb-2 text-[10px] text-text-muted font-semibold">
-                Pred band {pct(c.predictedLowAvg)}–{pct(c.predictedHighAvg)} · {likelihoodLabel}
+                Pred band {pct(c.predictedLowAvg)}–{pct(c.predictedHighAvg)}
               </div>
             </div>
           );

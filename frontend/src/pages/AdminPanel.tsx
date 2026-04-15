@@ -129,7 +129,7 @@ export function AdminPanel() {
           Manage rooms, inventory, and dynamic pricing rules
         </p>
 
-        <div className="mt-4 flex flex-col sm:flex-row sm:items-end sm:justify-end gap-3">
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-end sm:justify-start gap-3">
           <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
             <div className="space-y-1">
               <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Seed range</div>
