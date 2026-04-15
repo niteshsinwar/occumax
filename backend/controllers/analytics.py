@@ -220,12 +220,12 @@ async def _predict_final_occ_pct_for_date(
         else:
             likelihood = 55.0
 
-    return (
-        _clamp_pct((final_mean_rooms / total_rooms) * 100.0),
-        _clamp_pct((final_low_rooms / total_rooms) * 100.0),
-        _clamp_pct((final_high_rooms / total_rooms) * 100.0),
-        likelihood,
-    )
+    mean_pct = _clamp_pct((final_mean_rooms / total_rooms) * 100.0)
+    raw_low = _clamp_pct((final_low_rooms / total_rooms) * 100.0)
+    raw_high = _clamp_pct((final_high_rooms / total_rooms) * 100.0)
+    # Pickup inversion can swap raw room bounds; API always exposes low ≤ high.
+    band_lo, band_hi = min(raw_low, raw_high), max(raw_low, raw_high)
+    return (mean_pct, band_lo, band_hi, likelihood)
 
 
 def _rollup_counts(
