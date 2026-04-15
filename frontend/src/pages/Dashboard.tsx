@@ -15,7 +15,7 @@ const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUIT
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
- * Date span and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
+ * Date span (defaults to three weeks) and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
  */
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
@@ -23,7 +23,7 @@ export function Dashboard() {
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
-  const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(2);
+  const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
   const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
   const { show, Toasts } = useToast();
@@ -206,7 +206,7 @@ export function Dashboard() {
             <div className="bg-surface border border-border shadow-subtle">
               <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
                 <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-serif font-bold text-sm text-text">AI forecast</h3>
+                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
                   <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
                 </div>
                 <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
@@ -228,7 +228,7 @@ export function Dashboard() {
               No rooms match the selected types for this hotel.
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch mt-8">
               <div className="min-h-[320px] min-w-0">
                 <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
                   <HeatmapGrid
