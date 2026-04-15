@@ -5,6 +5,9 @@ export type AvailabilityBucket = "1" | "2" | "3" | "4" | "4+";
 
 const BUCKET_ORDER: AvailabilityBucket[] = ["1", "2", "3", "4", "4+"];
 
+/** Buckets shown in Bird's Eye "Availability at a glance" (1–4 nights only; `4+` is still computed but not listed). */
+export const BIRDSEYE_DISPLAY_BUCKET_ORDER: AvailabilityBucket[] = ["1", "2", "3", "4"];
+
 export interface EmptyRunInventorySnapshot {
   /** Count of k-night bookable windows per room category (buckets 1–4 are exact k; "4+" sums windows of length ≥5). */
   byBucket: Record<AvailabilityBucket, Partial<Record<RoomCategory, number>>>;
