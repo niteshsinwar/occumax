@@ -38,6 +38,10 @@ export const findSplitStay = (body: {
   category: string; check_in: string; check_out: string; guest_name?: string;
 }) => api.post("/receptionist/find-split", body);
 
+export const findSplitStayFlex = (body: {
+  category: string; check_in: string; check_out: string; guest_name?: string;
+}) => api.post("/receptionist/find-split-flex", body);
+
 export const listBookings = () => api.get("/receptionist/bookings");
 
 export const confirmSplitStay = (body: {

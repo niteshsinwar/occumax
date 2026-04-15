@@ -33,6 +33,7 @@ class BookingConfirm(BaseModel):
 class SplitSegmentOut(BaseModel):
     """One room segment within a split stay."""
     room_id:         str
+    category:        Optional[RoomCategory] = None
     floor:           int
     check_in:        date
     check_out:       date

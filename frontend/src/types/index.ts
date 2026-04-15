@@ -92,6 +92,7 @@ export interface ShuffleResult {
 
 export interface SplitSegment {
   room_id:         string;
+  category?:       RoomCategory | string | null;
   floor:           number;
   check_in:        string;
   check_out:       string;

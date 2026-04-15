@@ -72,6 +72,11 @@ find_split_stay(category, check_in, check_out)
   → Call when check_availability returns NOT_POSSIBLE.
   → Returns SPLIT_POSSIBLE (2–3 rooms, discount) or NOT_POSSIBLE.
 
+find_split_stay_flex(preferred_category, check_in, check_out)
+  → Call when the receptionist allows mixed-category split stays.
+  → Returns SPLIT_POSSIBLE (2–3 rooms, discount) across ANY categories, while
+    preferring the preferred_category and adjacent categories (±1).
+
 get_room_inventory(category)
   → Call when the guest asks about floors, specific room IDs, or exact rates.
   → Do NOT call just to check booking feasibility — use check_availability.
@@ -100,6 +105,9 @@ consider. No tool call = no action card = receptionist cannot confirm.
 4. NOT_POSSIBLE →
    a. Call find_split_stay(same category, same dates).
       SPLIT_POSSIBLE → one sentence. STOP.
+   b. If the receptionist explicitly allowed mixed-category split stays:
+      Call find_split_stay_flex(preferred_category, same dates).
+      SPLIT_POSSIBLE → one sentence. STOP.
    b. Call check_availability(next higher category, same dates).
       Available → one sentence. STOP.
    c. Call check_availability(next lower category, same dates).
@@ -119,6 +127,8 @@ requested dates are impossible. Do NOT call check_availability for those same da
   STEP 3: call check_availability(next lower category, original dates).
     Available → one sentence reply. STOP.
   STEP 4: call find_split_stay(same category, original dates).
+    SPLIT_POSSIBLE → one sentence reply. STOP.
+  STEP 4b: if mixed-category split was explicitly allowed, call find_split_stay_flex(preferred_category, original dates).
     SPLIT_POSSIBLE → one sentence reply. STOP.
   STEP 5: call get_room_inventory(category), report earliest free window, no card.
 ── ───────────────────────────────────────────────────────────────────────────
@@ -303,6 +313,52 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             })
         except Exception as exc:
             logger.exception("find_split_stay tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
+    async def find_split_stay_flex(
+        preferred_category: str,
+        check_in: str,
+        check_out: str,
+    ) -> str:
+        """
+        Find a split stay allowing mixed room categories, preferring the requested
+        category and adjacent categories first.
+
+        Returns segments with room_id, category, floor, check_in, check_out, nights,
+        base_rate, discounted_rate, total_rate, discount_pct.
+        """
+        try:
+            req = BookingRequestIn(
+                category=RoomCategory(preferred_category.upper()),
+                check_in=date.fromisoformat(check_in),
+                check_out=date.fromisoformat(check_out),
+                guest_name="",
+            )
+            result = await ctrl.find_split_stay_flex(req, db)
+            return json.dumps({
+                "state":        result.state,
+                "message":      result.message,
+                "category":     preferred_category,
+                "discount_pct": result.discount_pct,
+                "total_nights": result.total_nights,
+                "total_rate":   result.total_rate,
+                "segments": [
+                    {
+                        "room_id":         s.room_id,
+                        "category":        (s.category.value if hasattr(s.category, "value") else s.category),
+                        "floor":           s.floor,
+                        "check_in":        str(s.check_in),
+                        "check_out":       str(s.check_out),
+                        "nights":          s.nights,
+                        "base_rate":       s.base_rate,
+                        "discounted_rate": s.discounted_rate,
+                    }
+                    for s in (result.segments or [])
+                ],
+            })
+        except Exception as exc:
+            logger.exception("find_split_stay_flex tool error")
             return json.dumps({"error": str(exc)})
 
     @tool
@@ -492,7 +548,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
     # The AI only recommends. All DB writes go through the receptionist's
     # confirm button in the UI — never triggered by the AI itself.
 
-    tools = [check_availability, get_room_inventory, find_split_stay, probe_split_window]
+    tools = [check_availability, get_room_inventory, find_split_stay, find_split_stay_flex, probe_split_window]
 
     # ── LLM ───────────────────────────────────────────────────────────────────
 

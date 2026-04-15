@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { format, addDays } from "date-fns";
 import { checkAvailability, confirmBooking, confirmSplitStay, findSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
-import type { ShuffleResult, RoomCategory, ComparisonTable, Alternative, SplitSegment } from "../types";
+import type { ShuffleResult, RoomCategory, ComparisonTable, Alternative, SplitStayResult, SplitSegment } from "../types";
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User } from "lucide-react";
 
@@ -44,11 +44,21 @@ export function ReceptionistView() {
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
   const [loadingRecent,  setLoadingRecent]  = useState(false);
   const [lastConfirmed,  setLastConfirmed]  = useState<string | null>(null);
+  const [splitStay,      setSplitStay]      = useState<SplitStayResult | null>(null);
+  const [splitLoading,   setSplitLoading]   = useState(false);
+  const [showFallback,   setShowFallback]   = useState(false);
+  const [fallbackPrefs,  setFallbackPrefs]  = useState({
+    nearbyDatesPm1: true,
+    differentCategory: true,
+    splitStay: true,
+    allowMixedCategorySplit: false,
+  });
   const { show, Toasts } = useToast();
   const timers    = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // ── AI chat state — activates automatically on NOT_POSSIBLE ────────────────
   const [aiActive,     setAiActive]    = useState(false);
+  const [aiGuided,     setAiGuided]    = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const [chatInput,    setChatInput]   = useState("");
   const [chatLoading,  setChatLoading] = useState(false);
@@ -81,7 +91,10 @@ export function ReceptionistView() {
     setResult(null);
     setLastConfirmed(null);
     setAiActive(false);
+    setAiGuided(false);
     setChatMessages([]);
+    setSplitStay(null);
+    setShowFallback(false);
 
     setSteps({ direct: "running", shuffle: "idle" });
     timers.current.push(setTimeout(() => {
@@ -96,7 +109,17 @@ export function ReceptionistView() {
       setSteps({ direct: "done", shuffle: data.state === "DIRECT_AVAILABLE" ? "skipped" : "done" });
       setResult(data);
       if (data.state === "NOT_POSSIBLE") {
-        handleAiHandoff(data);
+        setShowFallback(true);
+        setSplitLoading(true);
+        try {
+          const name = guestName.trim() || "Walk-in Guest";
+          const sr = await findSplitStay({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
+          setSplitStay(sr.data as SplitStayResult);
+        } catch {
+          setSplitStay({ state: "NOT_POSSIBLE", segments: [], discount_pct: 0, total_nights: 0, total_rate: 0, message: "Split stay check failed." });
+        } finally {
+          setSplitLoading(false);
+        }
       }
     } catch {
       show("Failed to check availability", "error");
@@ -176,7 +199,7 @@ export function ReceptionistView() {
           })
       );
 
-      if (!isActionable && !isSplitCard && checkIn && checkOut && category) {
+      if (!aiGuided && !isActionable && !isSplitCard && checkIn && checkOut && category) {
         const name    = guestName.trim() || "Walk-in Guest";
         const nights  = Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000);
         // +1 day shift — same duration, one day later
@@ -273,44 +296,36 @@ export function ReceptionistView() {
     await fireAiMessage(text, chatMessages);
   };
 
-  // Called automatically when determinism returns NOT_POSSIBLE
-  const handleAiHandoff = async (notPossibleResult: ShuffleResult) => {
-    const name    = guestName.trim() || "Walk-in Guest";
-    const blocked = notPossibleResult.infeasible_dates?.join(", ") || `${checkIn} – ${checkOut}`;
+  const handleExploreWithAi = async () => {
+    if (!result || result.state !== "NOT_POSSIBLE") return;
+    const name = guestName.trim() || "Walk-in Guest";
+    const blocked = result.infeasible_dates?.join(", ") || `${checkIn} – ${checkOut}`;
+    const splitState = splitStay?.state ?? "UNKNOWN";
 
     setChatMessages([]);
     setAiActive(true);
+    setAiGuided(true);
     setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
 
-    // ── Step 1: try split stay deterministically — real algorithmic result ────
-    // Split stay engine is purely mathematical — no benefit routing through AI.
-    let splitResult: { state: string; segments?: unknown[]; discount_pct?: number; total_rate?: number; category?: string } | null = null;
-    try {
-      const sr = await findSplitStay({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
-      splitResult = { ...sr.data, category };
-    } catch { /* network error — fall through */ }
+    const handoffLines = [
+      "[HANDOFF]",
+      `Guest="${name}"`,
+      `preferred_category=${category}`,
+      `check_in=${checkIn}`,
+      `check_out=${checkOut}`,
+      `deterministic_check=NOT_POSSIBLE`,
+      `infeasible_dates=${blocked}`,
+      `split_same_category=${splitState}`,
+      `options.nearby_dates_pm1=${fallbackPrefs.nearbyDatesPm1}`,
+      `options.different_category=${fallbackPrefs.differentCategory}`,
+      `options.split_stay=${fallbackPrefs.splitStay}`,
+      `options.mixed_category_split=${fallbackPrefs.allowMixedCategorySplit}`,
+      "Rules: Only explore selected options. Prefer exact dates first, then minimal category delta (±1), then other categories, then date shift (±1).",
+      "If mixed_category_split=true and split_stay=true, you may use find_split_stay_flex(preferred_category, same dates).",
+      "Return the best actionable option as an action card.",
+    ];
 
-    if (splitResult?.state === "SPLIT_POSSIBLE") {
-      setChatMessages([{
-        role: "assistant",
-        content: `${category} split stay found across ${splitResult.segments?.length} rooms with ${splitResult.discount_pct}% discount.`,
-        action_data: { type: "split_stay_result", data: splitResult as Record<string, unknown> },
-      }]);
-      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-      return;
-    }
-
-    // ── Step 2: hand off to AI — minimal context, let AI reason freely ──────
-    // Only state the hard facts: what was requested and what is physically
-    // impossible. Do NOT pre-load specific rooms or dates — that anchors the AI
-    // and causes it to ignore follow-up user messages.
-    const handoff =
-      `[HANDOFF] Guest "${name}" needs ${category} from ${checkIn} to ${checkOut}. ` +
-      `Standard booking is NOT_POSSIBLE — ${category} is fully blocked on: ${blocked}. ` +
-      `Split stay is also NOT_POSSIBLE for these exact dates. ` +
-      `Please explore alternatives using the available tools and present the best option.`;
-
-    await fireAiMessage(handoff, []);
+    await fireAiMessage(handoffLines.join("\n"), []);
   };
 
   const nights = checkIn && checkOut ? Math.max(0, (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000) : 0;
@@ -407,6 +422,83 @@ export function ReceptionistView() {
             <div className="bg-surface-2 border border-occured/30 p-5 mt-6">
               <h4 className="text-xs font-bold text-occured flex items-center gap-2 mb-2 uppercase tracking-widest"><Info className="w-4 h-4"/> Block Conflict Detected</h4>
               <p className="text-sm text-text-muted">Total capacity for {category} is entirely consumed on: <span className="font-bold text-text">{result.infeasible_dates.join(", ")}</span>.</p>
+            </div>
+          )}
+
+          {result.state === "NOT_POSSIBLE" && (
+            <div className="mt-6 space-y-4">
+              <div className="bg-surface-2 border border-border p-5">
+                <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-3">Split stay (same category)</h4>
+                {splitLoading ? (
+                  <div className="text-xs text-text-muted flex items-center gap-2">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" /> Checking split-stay…
+                  </div>
+                ) : splitStay ? (
+                  <InlineSplitStayCard
+                    result={splitStay}
+                    category={category}
+                    defaultGuestName={guestName.trim() || "Walk-in Guest"}
+                  />
+                ) : (
+                  <div className="text-xs text-text-muted">Split-stay not checked yet.</div>
+                )}
+              </div>
+
+              {showFallback && (
+                <div className="bg-surface border border-border p-5">
+                  <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-3">Explore alternatives</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={fallbackPrefs.nearbyDatesPm1}
+                        onChange={(e) => setFallbackPrefs(p => ({ ...p, nearbyDatesPm1: e.target.checked }))}
+                      />
+                      <span className="font-medium text-text">Nearby dates (±1 day)</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={fallbackPrefs.differentCategory}
+                        onChange={(e) => setFallbackPrefs(p => ({ ...p, differentCategory: e.target.checked }))}
+                      />
+                      <span className="font-medium text-text">Different category (prefer ±1)</span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={fallbackPrefs.splitStay}
+                        onChange={(e) => setFallbackPrefs(p => ({ ...p, splitStay: e.target.checked }))}
+                      />
+                      <span className="font-medium text-text">Split stay</span>
+                    </label>
+                    <label className={`flex items-center gap-2 ${!fallbackPrefs.splitStay ? "opacity-40" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={fallbackPrefs.allowMixedCategorySplit}
+                        disabled={!fallbackPrefs.splitStay}
+                        onChange={(e) => setFallbackPrefs(p => ({ ...p, allowMixedCategorySplit: e.target.checked }))}
+                      />
+                      <span className="font-medium text-text">Allow mixed-category split</span>
+                    </label>
+                  </div>
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      className="bg-accent text-white font-bold uppercase tracking-widest text-[11px] px-6 py-3 hover:brightness-110 active:scale-95 disabled:opacity-40 transition-all"
+                      onClick={handleExploreWithAi}
+                      disabled={chatLoading || (!fallbackPrefs.nearbyDatesPm1 && !fallbackPrefs.differentCategory && !fallbackPrefs.splitStay)}
+                    >
+                      Explore selected with AI
+                    </button>
+                    <button
+                      className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
+                      onClick={() => setShowFallback(false)}
+                    >
+                      Hide
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -691,6 +783,117 @@ function AlternativesSection({ alternatives, onSelect }: { alternatives: Alterna
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function InlineSplitStayCard({
+  result,
+  category,
+  defaultGuestName,
+}: {
+  result: SplitStayResult;
+  category: RoomCategory;
+  defaultGuestName: string;
+}) {
+  const [guestName, setGuestName] = useState(defaultGuestName);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmed, setConfirmed] = useState<{ stay_group_id: string } | null>(null);
+  const [confirmErr, setConfirmErr] = useState<string | null>(null);
+  const { show } = useToast();
+
+  if (result.state !== "SPLIT_POSSIBLE") {
+    return (
+      <div className="text-xs text-occured border border-occured/20 bg-occured/5 p-3">
+        <div className="font-bold uppercase tracking-wider text-[10px] mb-1">Not possible</div>
+        <div className="text-text-muted">{result.message || "Split stay is not possible for these dates."}</div>
+      </div>
+    );
+  }
+
+  const handleConfirmSplit = async () => {
+    if (!guestName.trim()) {
+      setConfirmErr("Enter guest name to confirm.");
+      return;
+    }
+    if (!result.segments?.length) return;
+    setConfirmErr(null);
+    setConfirming(true);
+    try {
+      const r = await confirmSplitStay({
+        guest_name: guestName.trim(),
+        category,
+        discount_pct: result.discount_pct,
+        segments: result.segments as SplitSegment[],
+      });
+      setConfirmed({ stay_group_id: r.data.stay_group_id });
+      show(`Split stay confirmed — Group ${r.data.stay_group_id}`, "success");
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Confirm failed";
+      setConfirmErr(msg);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <div className="border border-accent/30 bg-accent/3">
+      <div className="flex items-center gap-2 px-3 py-2 bg-accent/10 border-b border-accent/20 text-xs font-bold uppercase tracking-wider text-accent">
+        <Sparkles className="w-3.5 h-3.5 shrink-0" />
+        Split Stay — {result.segments?.length} rooms · {result.discount_pct}% discount
+        <span className="ml-auto font-mono font-normal normal-case text-text">₹{result.total_rate?.toLocaleString()} total</span>
+      </div>
+
+      <div className="p-3 space-y-1.5">
+        {result.segments?.map((seg, i) => (
+          <div key={i} className="flex items-center gap-3 text-xs">
+            <div className="w-5 h-5 rounded-full bg-accent/20 text-accent font-bold flex items-center justify-center text-[10px] shrink-0">
+              {i + 1}
+            </div>
+            <div className="flex-1 grid grid-cols-4 gap-2">
+              <span className="font-mono font-bold text-text">Room {seg.room_id}</span>
+              <span className="text-text-muted">Floor {seg.floor}</span>
+              <span className="text-text-muted">{seg.check_in} → {seg.check_out}</span>
+              <span className="text-text font-medium">₹{seg.discounted_rate?.toLocaleString()}/night</span>
+            </div>
+            <span className="text-text-muted shrink-0">{seg.nights}n</span>
+          </div>
+        ))}
+      </div>
+
+      {confirmed ? (
+        <div className="bg-occugreen/10 border-t border-occugreen/30 p-3 text-xs">
+          <div className="flex items-center gap-2 text-occugreen font-bold uppercase tracking-wider mb-1">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Split Stay Committed
+          </div>
+          <div className="font-mono text-text">Group: {confirmed.stay_group_id}</div>
+        </div>
+      ) : (
+        <div className="border-t border-border bg-surface-2 p-3 text-xs space-y-2">
+          <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
+            Receptionist action — confirm to write all segments to database
+          </div>
+          <div className="flex gap-2 items-center">
+            <input
+              type="text"
+              placeholder="Guest name"
+              value={guestName}
+              onChange={e => setGuestName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleConfirmSplit()}
+              className="flex-1 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+            />
+            <button
+              onClick={handleConfirmSplit}
+              disabled={confirming}
+              className="flex items-center gap-1.5 bg-accent text-surface font-bold uppercase tracking-wider text-[10px] px-4 py-1.5 hover:opacity-90 active:scale-95 disabled:opacity-50 transition-all"
+            >
+              {confirming ? <Loader2 className="w-3 h-3 animate-spin" /> : <ClipboardCheck className="w-3 h-3" />}
+              Confirm Split Stay
+            </button>
+          </div>
+          {confirmErr && <div className="text-occured text-[10px]">{confirmErr}</div>}
+        </div>
+      )}
     </div>
   );
 }

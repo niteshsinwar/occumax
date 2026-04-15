@@ -13,6 +13,86 @@ from core.schemas import BookingRequestIn, ShuffleResult, BookingConfirm, SplitS
 from services.algorithm.calendar_optimiser import SlotInfo
 from services.algorithm.booking_placement import ShuffleEngine
 from services.algorithm.split_stay import SplitStayEngine
+from services.algorithm.split_stay_flex import SplitStayFlexEngine
+
+
+async def _find_direct_empty_room(
+    db: AsyncSession,
+    category: RoomCategory,
+    check_in: date,
+    check_out: date,
+) -> Optional[str]:
+    """
+    Fast path: find any room with no non-EMPTY slots in the requested window.
+
+    Notes
+    -----
+    The database may not have explicit Slot rows for EMPTY nights. We treat missing
+    Slot rows as EMPTY. Therefore, a room is directly available if there does not
+    exist any Slot in [check_in, check_out) whose block_type is not EMPTY.
+    """
+    non_empty_exists = (
+        select(Slot.id)
+        .where(
+            Slot.room_id == Room.id,
+            Slot.date >= check_in,
+            Slot.date < check_out,
+            Slot.block_type != BlockType.EMPTY,
+        )
+        .exists()
+    )
+
+    res = await db.execute(
+        select(Room.id)
+        .where(
+            Room.category == category,
+            Room.is_active == True,
+            ~non_empty_exists,
+        )
+        .order_by(Room.floor_number, Room.id)
+        .limit(1)
+    )
+    return res.scalar_one_or_none()
+
+
+async def _load_slots_for_categories(
+    db: AsyncSession,
+    categories: list[RoomCategory],
+    today: date,
+) -> list[SlotInfo]:
+    """
+    Load all slots across the scan window for the given categories.
+
+    This is used by cross-category split stays; we still load the full scan window
+    so blocks spanning outside the request range are visible where needed.
+    """
+    end = today + timedelta(days=settings.SCAN_WINDOW_DAYS)
+    result = await db.execute(
+        select(Slot, Room)
+        .join(Room, Slot.room_id == Room.id)
+        .where(
+            Room.category.in_(categories),
+            Room.is_active == True,
+            Slot.date >= today,
+            Slot.date < end,
+        )
+    )
+    rows = result.all()
+    return [
+        SlotInfo(
+            slot_id=slot.id,
+            room_id=slot.room_id,
+            category=room.category,
+            date=slot.date,
+            block_type=slot.block_type,
+            booking_id=slot.booking_id,
+            base_rate=room.base_rate,
+            current_rate=slot.current_rate,
+            channel=slot.channel,
+            min_stay_nights=slot.min_stay_nights,
+        )
+        for slot, room in rows
+    ]
 
 
 async def _load_category_slots(
@@ -281,6 +361,23 @@ async def check_availability(request: BookingRequestIn, db: AsyncSession) -> Shu
             detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days from today (max: {max_date})"
         )
 
+    # Fast path: direct availability without full-window load + shuffle enumeration.
+    direct_room_id = await _find_direct_empty_room(db, request.category, request.check_in, request.check_out)
+    if direct_room_id:
+        nights = (request.check_out - request.check_in).days
+        return ShuffleResult(
+            state="DIRECT_AVAILABLE",
+            room_id=direct_room_id,
+            message=(
+                f"Room {direct_room_id} is immediately available — no rearrangement needed. "
+                f"Guest gets {nights} consecutive night{'s' if nights != 1 else ''} in a {request.category.value} room."
+            ),
+            swap_plan=None,
+            comparison=None,
+            infeasible_dates=[],
+            alternatives=[],
+        )
+
     slots = await _load_category_slots(db, request.category, today)
 
     bad_dates = _infeasible_dates(slots, request.check_in, request.check_out)
@@ -496,6 +593,57 @@ async def find_split_stay(request: BookingRequestIn, db: AsyncSession) -> SplitS
                 nights          = s.nights,
                 base_rate       = s.base_rate,
                 discounted_rate = s.discounted_rate,
+            )
+            for s in plan.segments
+        ],
+    )
+
+
+async def find_split_stay_flex(request: BookingRequestIn, db: AsyncSession) -> SplitStayResult:
+    """
+    Phase 2 (flex) — propose a split stay across ANY categories, while strongly
+    preferring the guest's requested category and adjacent categories (±1).
+    """
+    today = date.today()
+
+    categories = [
+        RoomCategory.ECONOMY,
+        RoomCategory.STANDARD,
+        RoomCategory.STUDIO,
+        RoomCategory.DELUXE,
+        RoomCategory.PREMIUM,
+        RoomCategory.SUITE,
+    ]
+    slots = await _load_slots_for_categories(db, categories, today)
+
+    rooms_result = await db.execute(
+        select(Room.id, Room.floor_number)
+        .where(Room.category.in_(categories), Room.is_active == True)
+    )
+    floor_map: dict[str, int] = {r[0]: r[1] for r in rooms_result.all()}
+
+    engine = SplitStayFlexEngine(slots, floor_map, request.category)
+    plan = engine.search(request.check_in, request.check_out)
+
+    if plan.state != "SPLIT_POSSIBLE":
+        return SplitStayResult(state="NOT_POSSIBLE", message=plan.message)
+
+    return SplitStayResult(
+        state="SPLIT_POSSIBLE",
+        discount_pct=plan.discount_pct,
+        total_nights=plan.total_nights,
+        total_rate=plan.total_rate,
+        message=plan.message,
+        segments=[
+            SplitSegmentOut(
+                room_id=s.room_id,
+                category=s.category,
+                floor=s.floor,
+                check_in=s.check_in,
+                check_out=s.check_out,
+                nights=s.nights,
+                base_rate=s.base_rate,
+                discounted_rate=s.discounted_rate,
             )
             for s in plan.segments
         ],
