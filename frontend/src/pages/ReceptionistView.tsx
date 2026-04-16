@@ -45,6 +45,7 @@ export function ReceptionistView() {
   const [loadingRecent,  setLoadingRecent]  = useState(false);
   const [lastConfirmed,  setLastConfirmed]  = useState<string | null>(null);
   const [showFallback,   setShowFallback]   = useState(false);
+  const [showDeterministicAlternatives, setShowDeterministicAlternatives] = useState(false);
   const [fallbackPrefs,  setFallbackPrefs]  = useState({
     nearbyDatesPm1: true,
     differentCategory: true,
@@ -92,6 +93,7 @@ export function ReceptionistView() {
     setAiGuided(false);
     setChatMessages([]);
     setShowFallback(false);
+    setShowDeterministicAlternatives(false);
 
     setSteps({ direct: "running", shuffle: "idle" });
     timers.current.push(setTimeout(() => {
@@ -483,6 +485,14 @@ export function ReceptionistView() {
                     >
                       Explore selected with AI
                     </button>
+                      {result.alternatives && result.alternatives.length > 0 && (
+                        <button
+                          className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
+                          onClick={() => setShowDeterministicAlternatives((v) => !v)}
+                        >
+                          {showDeterministicAlternatives ? "Hide deterministic suggestions" : "Show deterministic suggestions"}
+                        </button>
+                      )}
                     <button
                       className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
                       onClick={() => { setChatMessages([]); setAiActive(false); setAiGuided(false); }}
@@ -490,13 +500,20 @@ export function ReceptionistView() {
                       Close AI panel
                     </button>
                   </div>
+
+                    {showDeterministicAlternatives && result.alternatives && (
+                      <AlternativesSection
+                        alternatives={result.alternatives}
+                        onSelect={alt => { setCheckIn(alt.check_in); setCheckOut(alt.check_out); setCategory(alt.category as RoomCategory); setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}
+                      />
+                    )}
                 </div>
                 </div>
               )}
             </div>
           )}
 
-          {result.state === "NOT_POSSIBLE" && result.alternatives && <AlternativesSection alternatives={result.alternatives} onSelect={alt => { setCheckIn(alt.check_in); setCheckOut(alt.check_out); setCategory(alt.category as RoomCategory); setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }} />}
+          {/* Deterministic alternatives are now opt-in via the Explore panel toggle */}
 
           {isAvailable && result.room_id && (
             <div className="flex flex-wrap gap-4 mt-8 pt-6 border-t border-border/50">
