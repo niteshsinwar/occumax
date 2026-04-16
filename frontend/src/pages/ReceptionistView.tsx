@@ -326,7 +326,7 @@ export function ReceptionistView() {
   const isAvailable = result && result.state !== "NOT_POSSIBLE";
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-6xl mx-auto space-y-8">
       <Toasts />
 
       {/* Header */}
@@ -346,8 +346,10 @@ export function ReceptionistView() {
         )}
       </div>
 
-      {/* ── Booking Form ─────────────────────────────────────────────────── */}
-      {<>
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-6 items-start">
+        <div className="min-w-0 space-y-8">
+          {/* ── Booking Form ─────────────────────────────────────────────────── */}
+          <>
 
       {/* Booking Wizard */}
       <div className="bg-surface border border-border mt-4 shadow-subtle p-6 rounded-sm relative overflow-hidden group">
@@ -555,7 +557,7 @@ export function ReceptionistView() {
         </div>
       )}
 
-      </>}
+          </>
 
       {/* ── AI PANEL — auto-activates on NOT_POSSIBLE ─────────────────── */}
       {aiActive && (
@@ -641,47 +643,51 @@ export function ReceptionistView() {
           </div>
         </div>
       )}
+        </div>
 
       {/* Recent Bookings Table */}
-      <div className="bg-surface border border-border shadow-subtle p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="font-serif font-bold text-xl text-text">Recent Ledger Activity</h3>
-          <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-4 py-2 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
-            {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Synchronize"}
-          </button>
-        </div>
-        {recentBookings.length === 0 ? (
-          <div className="py-12 text-center text-text-muted font-medium text-sm border-t border-border/50">No ledger activity found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-[10px] text-text-muted uppercase tracking-[0.15em] bg-surface-2 border-y border-border">
-                <tr>
-                  <th className="px-5 py-4 font-bold">Ledger ID</th>
-                  <th className="px-5 py-4 font-bold">Client Identity</th>
-                  <th className="px-5 py-4 font-bold">Parameters</th>
-                  <th className="px-5 py-4 font-bold text-center">System State</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {recentBookings.map((b) => (
-                  <tr key={b.id} className="hover:bg-surface-2/30 transition-colors">
-                    <td className="px-5 py-4 font-mono font-bold tracking-tighter text-text">{b.id}</td>
-                    <td className="px-5 py-4 font-serif font-medium text-text">{b.guest_name}</td>
-                    <td className="px-5 py-4 text-xs font-mono text-text-muted">
-                      {b.room_id} <span className="mx-2 text-border">•</span> {b.check_in}
-                    </td>
-                    <td className="px-5 py-4 text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text border-border'}`}>
-                        {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <aside className="min-w-0">
+          <div className="bg-surface border border-border shadow-subtle p-6 lg:sticky lg:top-6">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="font-serif font-bold text-xl text-text">Recent Ledger Activity</h3>
+              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-4 py-2 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
+                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Synchronize"}
+              </button>
+            </div>
+            {recentBookings.length === 0 ? (
+              <div className="py-12 text-center text-text-muted font-medium text-sm border-t border-border/50">No ledger activity found.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-[10px] text-text-muted uppercase tracking-[0.15em] bg-surface-2 border-y border-border">
+                    <tr>
+                      <th className="px-5 py-4 font-bold">Ledger ID</th>
+                      <th className="px-5 py-4 font-bold">Client Identity</th>
+                      <th className="px-5 py-4 font-bold">Parameters</th>
+                      <th className="px-5 py-4 font-bold text-center">System State</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {recentBookings.map((b) => (
+                      <tr key={b.id} className="hover:bg-surface-2/30 transition-colors">
+                        <td className="px-5 py-4 font-mono font-bold tracking-tighter text-text">{b.id}</td>
+                        <td className="px-5 py-4 font-serif font-medium text-text">{b.guest_name}</td>
+                        <td className="px-5 py-4 text-xs font-mono text-text-muted">
+                          {b.room_id} <span className="mx-2 text-border">•</span> {b.check_in}
+                        </td>
+                        <td className="px-5 py-4 text-center">
+                          <span className={`inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text border-border'}`}>
+                            {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
+        </aside>
       </div>
     </div>
   );
