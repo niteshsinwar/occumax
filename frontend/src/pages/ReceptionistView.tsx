@@ -442,40 +442,59 @@ export function ReceptionistView() {
 
                   <div className="p-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={fallbackPrefs.nearbyDatesPm1}
-                        onChange={(e) => setFallbackPrefs(p => ({ ...p, nearbyDatesPm1: e.target.checked }))}
-                      />
-                      <span className="font-medium text-text">Nearby dates (±1 day)</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={fallbackPrefs.differentCategory}
-                        onChange={(e) => setFallbackPrefs(p => ({ ...p, differentCategory: e.target.checked }))}
-                      />
-                      <span className="font-medium text-text">Different category (prefer ±1)</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={fallbackPrefs.splitStay}
-                        onChange={(e) => setFallbackPrefs(p => ({ ...p, splitStay: e.target.checked }))}
-                      />
-                      <span className="font-medium text-text">Split stay</span>
-                    </label>
-                    <label className={`flex items-center gap-2 ${!fallbackPrefs.splitStay ? "opacity-40" : ""}`}>
-                      <input
-                        type="checkbox"
-                        checked={fallbackPrefs.allowMixedCategorySplit}
-                        disabled={!fallbackPrefs.splitStay}
-                        onChange={(e) => setFallbackPrefs(p => ({ ...p, allowMixedCategorySplit: e.target.checked }))}
-                      />
-                      <span className="font-medium text-text">Allow mixed-category split</span>
-                    </label>
-                  </div>
+                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                          checked={fallbackPrefs.nearbyDatesPm1}
+                          onChange={(e) => setFallbackPrefs(p => ({ ...p, nearbyDatesPm1: e.target.checked }))}
+                        />
+                        <div className="leading-5">
+                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Nearby dates</div>
+                          <div className="text-text-muted">Search ±1 day (same stay length)</div>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                          checked={fallbackPrefs.differentCategory}
+                          onChange={(e) => setFallbackPrefs(p => ({ ...p, differentCategory: e.target.checked }))}
+                        />
+                        <div className="leading-5">
+                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Different category</div>
+                          <div className="text-text-muted">Any category, prefer ±1</div>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                          checked={fallbackPrefs.splitStay}
+                          onChange={(e) => setFallbackPrefs(p => ({ ...p, splitStay: e.target.checked }))}
+                        />
+                        <div className="leading-5">
+                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Split stay</div>
+                          <div className="text-text-muted">2–3 rooms if needed</div>
+                        </div>
+                      </label>
+
+                      <label className={`flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3 ${!fallbackPrefs.splitStay ? "opacity-40" : ""}`}>
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
+                          checked={fallbackPrefs.allowMixedCategorySplit}
+                          disabled={!fallbackPrefs.splitStay}
+                          onChange={(e) => setFallbackPrefs(p => ({ ...p, allowMixedCategorySplit: e.target.checked }))}
+                        />
+                        <div className="leading-5">
+                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Mixed-category split</div>
+                          <div className="text-text-muted">Allow room type changes between segments</div>
+                        </div>
+                      </label>
+                    </div>
 
                     <div className="mt-6 flex flex-wrap gap-3 border-t border-border/50 pt-5">
                     <button
