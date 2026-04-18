@@ -19,6 +19,7 @@ from config import settings
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
 from core.schemas.manager import SwapStep, GapInfo, OptimiseResult, CommitRequest, CommitResult, ChannelAllocateRequest, ChannelAllocateResult
 from core.schemas.analytics import ChannelRecommendResponse, ChannelRecommendation
+from core.channel_config import OTA_PARTNER_NAMES, GDS_PARTNER_NAMES
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 from services.ai.channel_agent import run_channel_agent
 
@@ -187,18 +188,16 @@ async def commit_plan(body: CommitRequest, db: AsyncSession) -> CommitResult:
 
 
 # ── Booking source → channel enum mapping ─────────────────────────────────────
-_OTA_PARTNERS = {"MakeMyTrip", "Goibibo", "Agoda", "Booking.com", "Expedia"}
-_GDS_PARTNERS = {"Amadeus", "Sabre", "Travelport"}
-
 
 def _resolve_channel(booking_source: str) -> tuple[Channel, str | None]:
     """
     Map a single 'booking source' label to (Channel enum, partner name | None).
     Business rule: there are only two routes — channel (OTA/GDS) or direct.
+    Partner lists come from core.channel_config — single source of truth.
     """
-    if booking_source in _OTA_PARTNERS:
+    if booking_source in OTA_PARTNER_NAMES:
         return Channel.OTA, booking_source
-    if booking_source in _GDS_PARTNERS:
+    if booking_source in GDS_PARTNER_NAMES:
         return Channel.GDS, booking_source
     if booking_source == "Walk-in":
         return Channel.WALKIN, None

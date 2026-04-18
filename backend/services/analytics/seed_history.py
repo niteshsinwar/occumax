@@ -28,6 +28,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
+from core.channel_config import OTA_PARTNER_NAMES_LIST, GDS_PARTNER_NAMES_LIST
 
 
 DEMO_PREFIX = "DEMO_ANALYTICS"
@@ -52,10 +53,10 @@ _LOS_WEIGHTS  = [10, 28, 30, 18, 7, 4, 3]
 _CHANNELS     = [Channel.OTA, Channel.DIRECT, Channel.GDS, Channel.WALKIN]
 _CHAN_WEIGHTS  = [60, 25, 10, 5]
 
-# Named partners per channel (realistic India market OTA mix)
-_OTA_PARTNERS   = ["MakeMyTrip", "Goibibo", "Agoda", "Booking.com", "Expedia"]
+# Named partners per channel — imported from single source of truth
+_OTA_PARTNERS   = OTA_PARTNER_NAMES_LIST   # ["MakeMyTrip", "Goibibo", "Agoda", "Booking.com", "Expedia"]
 _OTA_P_WEIGHTS  = [35, 25, 20, 15, 5]
-_GDS_PARTNERS   = ["Amadeus", "Sabre", "Travelport"]
+_GDS_PARTNERS   = GDS_PARTNER_NAMES_LIST   # ["Amadeus", "Sabre", "Travelport"]
 _GDS_P_WEIGHTS  = [55, 30, 15]
 
 

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate, getChannelRecommendations } from "../api/client";
+import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate, getChannelRecommendations, getChannelPartners } from "../api/client";
 import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult, ChannelPerformanceResponse, ChannelStat, PartnerStat, ChannelRecommendResponse, ChannelRecommendation } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { useToast } from "../components/shared/Toast";
@@ -93,12 +93,12 @@ export function ManagerDashboard() {
   const [channelLoading, setChannelLoading] = useState(false);
   const [channelWindow,  setChannelWindow]  = useState<7 | 30 | 60>(30);
 
-  // Channel allocation form state
-  const ALLOC_SOURCES = ["Direct","Walk-in","MakeMyTrip","Goibibo","Agoda","Booking.com","Expedia","Amadeus","Sabre","Travelport"];
-  const ALLOC_CATS    = ["STANDARD","STUDIO","DELUXE","SUITE","PREMIUM","ECONOMY"];
+  // Channel allocation form state — partner list fetched from backend
+  const [allocSources, setAllocSources] = useState<string[]>([]);
+  const ALLOC_CATS = ["STANDARD","STUDIO","DELUXE","SUITE","PREMIUM","ECONOMY"];
   const todayStr = new Date().toISOString().split("T")[0];
   const defaultOut = new Date(Date.now() + 3 * 86400000).toISOString().split("T")[0];
-  const [allocSource,   setAllocSource]   = useState("MakeMyTrip");
+  const [allocSource,   setAllocSource]   = useState("");
   const [allocCat,      setAllocCat]      = useState("DELUXE");
   const [allocIn,       setAllocIn]       = useState(todayStr);
   const [allocOut,      setAllocOut]      = useState(defaultOut);
@@ -165,6 +165,23 @@ export function ManagerDashboard() {
   useEffect(() => {
     if (activeTab === "channels") loadChannelData(channelWindow);
   }, [activeTab, channelWindow, loadChannelData]);
+
+  useEffect(() => {
+    getChannelPartners().then(res => {
+      const d = res.data as { ota: {name:string}[]; gds: {name:string}[]; direct: {name:string}[] };
+      const sources = [
+        ...d.direct.map(p => p.name),
+        ...d.ota.map(p => p.name),
+        ...d.gds.map(p => p.name),
+      ];
+      setAllocSources(sources);
+      setAllocSource(prev => prev || sources[2] || sources[0]); // default to first OTA
+    }).catch(() => {
+      const fallback = ["Direct","Walk-in","MakeMyTrip","Goibibo","Agoda","Booking.com","Expedia","Amadeus","Sabre","Travelport"];
+      setAllocSources(fallback);
+      setAllocSource(prev => prev || "MakeMyTrip");
+    });
+  }, []);
 
   const handleRunAiAnalysis = async () => {
     setAiRecsLoading(true);
@@ -737,7 +754,7 @@ export function ManagerDashboard() {
                       onChange={e => setAllocSource(e.target.value)}
                       className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
                     >
-                      {ALLOC_SOURCES.map(s => <option key={s}>{s}</option>)}
+                      {allocSources.map((s: string) => <option key={s}>{s}</option>)}
                     </select>
                   </div>
                   <div className="space-y-1.5">
