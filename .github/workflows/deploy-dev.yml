@@ -86,6 +86,11 @@ jobs:
             echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
             echo "CORS_ORIGINS=http://${DEV_HOST}" >> /opt/occumax/.env
 
+            # Recreate venv if missing (can happen after server resets)
+            if [ ! -f "/opt/occumax/venv/bin/pip" ]; then
+              python3 -m venv /opt/occumax/venv
+            fi
+
             # Install Python dependencies
             /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
 
