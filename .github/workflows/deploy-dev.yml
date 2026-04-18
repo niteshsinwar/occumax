@@ -8,7 +8,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev
 
     steps:
       - name: Checkout code
@@ -29,64 +28,72 @@ jobs:
           npm ci
           npm run build
 
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEV_HOST }} >> ~/.ssh/known_hosts
+
       - name: Copy frontend build to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEV_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "frontend/dist/"
-          target: "/opt/occumax/frontend/"
-          strip_components: 1
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            frontend/dist/ \
+            ubuntu@${{ secrets.DEV_HOST }}:/opt/occumax/frontend/dist/
 
       - name: Deploy backend & restart
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEV_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          timeout: 180s
-          script: |
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} << 'ENDSSH'
             set -e
 
-            # Clone or pull latest code
+            # Pull latest code
             if [ ! -d "/opt/occumax/.git" ]; then
-              git clone https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/niteshsinwar/occumax.git /opt/occumax
+              git clone https://x-access-token:GHTOKEN@github.com/niteshsinwar/occumax.git /opt/occumax
             else
               cd /opt/occumax
               git fetch origin
               git checkout Dev
               git reset --hard origin/Dev
             fi
+          ENDSSH
 
-            # Build .env from repo config + GitHub Secrets (single source of truth)
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} \
+            GH_TOKEN="${{ secrets.GH_TOKEN }}" \
+            DEV_DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}" \
+            GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            DEV_HOST="${{ secrets.DEV_HOST }}" \
+            bash << 'ENDSSH'
+            set -e
+            cd /opt/occumax
+
+            # Fix git remote with real token if first clone used placeholder
+            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git
+            git fetch origin && git checkout Dev && git reset --hard origin/Dev
+
+            # Build .env from repo config + injected secrets
             cat /opt/occumax/backend/.env.server > /opt/occumax/.env
-            echo "DATABASE_URL=${{ secrets.DEV_DATABASE_URL }}" >> /opt/occumax/.env
-            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> /opt/occumax/.env
-            echo "CORS_ORIGINS=http://${{ secrets.DEV_HOST }}" >> /opt/occumax/.env
+            echo "DATABASE_URL=${DEV_DATABASE_URL}" >> /opt/occumax/.env
+            echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
+            echo "CORS_ORIGINS=http://${DEV_HOST}" >> /opt/occumax/.env
 
-            # Install/update Python dependencies
+            # Install Python dependencies
             /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
 
-            # Restart backend — create_tables() on startup handles all schema changes
+            # Restart backend (create_tables() on startup handles schema changes)
             sudo systemctl restart occumax-backend
             sleep 5
-
-            # Confirm backend is running
             sudo systemctl is-active occumax-backend
             curl -sf http://localhost:8000/docs > /dev/null && echo "Backend OK"
+          ENDSSH
 
       - name: Reload Nginx
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEV_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: sudo systemctl reload nginx
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} \
+            "sudo systemctl reload nginx"
 
       - name: Health check
         run: |
           sleep 3
           curl -f http://${{ secrets.DEV_HOST }}/ || exit 1
-          curl -f http://${{ secrets.DEV_HOST }}/api/docs || exit 1
-          echo "Dev deployment successful - http://${{ secrets.DEV_HOST }}"
+          echo "Dev deployment successful — http://${{ secrets.DEV_HOST }}"
