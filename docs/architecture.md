@@ -55,10 +55,10 @@ cd backend && alembic revision -m "drop_xyz_from_table"
 
 ## API Endpoints
 
-Full interactive docs at `http://161.118.164.30/api/docs` (dev) or fetch the spec:
+Full interactive docs at `https://161.118.164.30.nip.io/api/docs` (dev) or fetch the spec:
 
 ```bash
-curl http://161.118.164.30/api/openapi.json
+curl https://161.118.164.30.nip.io/api/openapi.json
 ```
 
 Key endpoint groups:
@@ -109,7 +109,7 @@ Two LangGraph agents backed by Google Gemini (`GEMINI_API_KEY` secret):
 
 | Branch | URL | Database |
 | --- | --- | --- |
-| `Dev` | http://161.118.164.30 | Isolated PostgreSQL on dev server |
-| `main` | http://80.225.202.88 | Isolated PostgreSQL on prod server |
+| `Dev` | https://161.118.164.30.nip.io | Isolated PostgreSQL on dev server |
+| `main` | https://80.225.202.88.nip.io | Isolated PostgreSQL on prod server |
 
 No shared state between environments. A migration applied to dev does not touch production until `Dev` is merged to `main`.

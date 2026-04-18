@@ -21,8 +21,8 @@ You push, it deploys. Nothing else needed.
 
 | Branch | Server | URL |
 | --- | --- | --- |
-| `Dev` | Dev server | http://161.118.164.30 |
-| `main` | Production | http://80.225.202.88 |
+| `Dev` | Dev server | https://161.118.164.30.nip.io |
+| `main` | Production | https://80.225.202.88.nip.io |
 
 ---
 
@@ -60,11 +60,11 @@ gh run rerun <run-id> --repo niteshsinwar/occumax
 
 ```bash
 # Health check
-curl http://161.118.164.30/api/health
-curl http://80.225.202.88/api/health
+curl https://161.118.164.30.nip.io/api/health
+curl https://80.225.202.88.nip.io/api/health
 
 # OpenAPI spec (full list of endpoints + request shapes)
-curl http://161.118.164.30/api/openapi.json
+curl https://161.118.164.30.nip.io/api/openapi.json
 ```
 
 ---

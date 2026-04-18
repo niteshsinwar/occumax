@@ -74,5 +74,5 @@ cd frontend && npm run build
 cd backend && pytest tests/ -v
 
 # Hit the live dev API after pushing
-curl http://161.118.164.30/api/health
+curl https://161.118.164.30.nip.io/api/health
 ```

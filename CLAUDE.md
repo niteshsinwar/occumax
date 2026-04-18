@@ -22,8 +22,8 @@ Two live environments, each on its own server with its own database:
 
 | Environment | Branch | URL |
 | --- | --- | --- |
-| Development | `Dev` | http://161.118.164.30 |
-| Production | `main` | http://80.225.202.88 |
+| Development | `Dev` | https://161.118.164.30.nip.io |
+| Production | `main` | https://80.225.202.88.nip.io |
 
 Every git push triggers an automatic deploy. You never touch servers directly — everything goes through git.
 

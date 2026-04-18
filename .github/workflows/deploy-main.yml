@@ -23,7 +23,7 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         env:
-          VITE_API_URL: http://${{ secrets.MAIN_HOST }}/api
+          VITE_API_URL: https://${{ secrets.MAIN_HOST }}.nip.io/api
         run: |
           npm ci
           npm run build
@@ -84,7 +84,7 @@ jobs:
             cat /opt/occumax/backend/.env.server > /opt/occumax/.env
             echo "DATABASE_URL=${MAIN_DATABASE_URL}" >> /opt/occumax/.env
             echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
-            echo "CORS_ORIGINS=http://${MAIN_HOST}" >> /opt/occumax/.env
+            echo "CORS_ORIGINS=https://${MAIN_HOST}.nip.io" >> /opt/occumax/.env
 
             # Recreate venv if missing
             if [ ! -f "/opt/occumax/venv/bin/pip" ]; then
@@ -126,5 +126,5 @@ jobs:
       - name: Health check
         run: |
           sleep 3
-          curl -f http://${{ secrets.MAIN_HOST }}/ || exit 1
-          echo "Production deployment successful — http://${{ secrets.MAIN_HOST }}"
+          curl -f https://${{ secrets.MAIN_HOST }}.nip.io/ || exit 1
+          echo "Production deployment successful — https://${{ secrets.MAIN_HOST }}.nip.io"
