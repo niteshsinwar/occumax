@@ -35,6 +35,11 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.MAIN_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Prepare server directories
+        run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.MAIN_HOST }} \
+            "sudo mkdir -p /opt/occumax/frontend/dist && sudo chown -R ubuntu:ubuntu /opt/occumax"
+
       - name: Copy frontend build to server
         run: |
           rsync -az --delete \
@@ -43,18 +48,37 @@ jobs:
             ubuntu@${{ secrets.MAIN_HOST }}:/opt/occumax/frontend/dist/
 
       - name: Deploy backend & restart
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          MAIN_DATABASE_URL: ${{ secrets.MAIN_DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MAIN_HOST: ${{ secrets.MAIN_HOST }}
         run: |
           ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.MAIN_HOST }} \
-            GH_TOKEN="${{ secrets.GH_TOKEN }}" \
-            MAIN_DATABASE_URL="${{ secrets.MAIN_DATABASE_URL }}" \
-            GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-            MAIN_HOST="${{ secrets.MAIN_HOST }}" \
+            GH_TOKEN="$GH_TOKEN" \
+            MAIN_DATABASE_URL="$MAIN_DATABASE_URL" \
+            GEMINI_API_KEY="$GEMINI_API_KEY" \
+            MAIN_HOST="$MAIN_HOST" \
             bash << 'ENDSSH'
             set -e
-            cd /opt/occumax 2>/dev/null || git clone https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git /opt/occumax && cd /opt/occumax
 
-            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git
-            git fetch origin && git checkout main && git reset --hard origin/main
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git"
+
+            # Ensure /opt/occumax exists and is owned by ubuntu
+            sudo mkdir -p /opt/occumax
+            sudo chown ubuntu:ubuntu /opt/occumax
+
+            # If dir exists but is not a git repo, init git inside it
+            if [ ! -d "/opt/occumax/.git" ]; then
+              git -C /opt/occumax init
+              git -C /opt/occumax remote add origin "$REPO_URL"
+            fi
+
+            cd /opt/occumax
+            git remote set-url origin "$REPO_URL"
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
 
             # Build .env from repo config + injected secrets
             cat /opt/occumax/backend/.env.server > /opt/occumax/.env
@@ -62,14 +86,27 @@ jobs:
             echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
             echo "CORS_ORIGINS=http://${MAIN_HOST}" >> /opt/occumax/.env
 
+            # Recreate venv if missing
+            if [ ! -f "/opt/occumax/venv/bin/pip" ]; then
+              python3 -m venv /opt/occumax/venv
+            fi
+
             # Install Python dependencies
             /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
 
-            # Restart backend (create_tables() on startup handles schema changes)
+            # Restart backend (create_tables() on startup handles all schema changes)
             sudo systemctl restart occumax-backend
-            sleep 5
-            sudo systemctl is-active occumax-backend
-            curl -sf http://localhost:8000/docs > /dev/null && echo "Backend OK"
+
+            # Wait up to 30s for backend to be ready
+            for i in $(seq 1 10); do
+              sleep 3
+              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+                echo "Backend OK"
+                break
+              fi
+              echo "Waiting for backend... attempt $i"
+            done
+            curl -sf http://localhost:8000/health || (echo "Backend failed to start" && sudo journalctl -u occumax-backend -n 20 --no-pager && exit 1)
           ENDSSH
 
       - name: Reload Nginx
