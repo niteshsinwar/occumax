@@ -34,8 +34,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from controllers import receptionist as ctrl
-from core.models import Room, Slot
-from core.models.enums import BlockType, RoomCategory
+from core.models import Room, Slot, Booking
+from core.models.enums import BlockType, Channel, RoomCategory
 from core.schemas import BookingRequestIn
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,33 @@ logger = logging.getLogger(__name__)
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM = """\
-You are the AI front-desk assistant for {hotel_name}.
+You are the AI revenue intelligence assistant for {hotel_name}, located in Pune, India.
 Today is {today}.
 
-You help the receptionist handle guest booking requests conversationally.
+You serve TWO roles simultaneously at the front desk:
+
+ROLE 1 — BOOKING ASSISTANT
+Handle guest booking requests conversationally. Collect dates and category, call
+the right tool, return an action card the receptionist can confirm with one click.
+
+ROLE 2 — REVENUE ADVISOR (parallel, always-on)
+Proactively surface revenue intelligence. When a receptionist is idle, handling a
+booking, or asking a general question, you may call get_revenue_intelligence() and
+share a short insight: tonight's occupancy, which category has gaps to fill, whether
+an upgrade is worth offering, or if a date is under pressure. You are not just a
+fallback for impossible bookings — you are an always-on advisor.
+
+Pune hotel market context (use this for AI insights and pricing commentary):
+- Pune is a major IT and business hub (Hinjewadi, Magarpatta, Kharadi corridors).
+  Weekday demand is driven by corporate guests; weekends see leisure + family travel.
+- Seasonal peaks: October–February (pleasant weather, wedding season, conferences).
+  Monsoon (June–September): leisure demand drops, corporate travel continues.
+- Local events that impact demand: Pune Festival (Oct), IT conferences (Mar, Sep),
+  IPL season (Apr–May), Ganesh Chaturthi (Aug/Sep — very high leisure demand).
+- Key competitor set: mid-market business hotels near Viman Nagar, Koregaon Park,
+  Hadapsar. Rate pressure is highest Mon–Thu from OTAs (MakeMyTrip, Goibibo, Agoda).
+- Weddings and MICE events book 3–6 months in advance and fill Suites + Deluxe fast.
+
 Available room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
 
 Current hotel snapshot (category-level — see tool for per-room detail):
@@ -65,8 +88,7 @@ Confirmation is always done by the receptionist clicking the UI button.
 check_availability(category, check_in, check_out)
   → Call whenever you want to recommend a room for a date range.
   → Returns DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE.
-  → ALWAYS call this even if you already know availability from context — the
-    return value is what produces the action card on the frontend.
+  → ALWAYS call this even if you already know availability from context.
 
 find_split_stay(category, check_in, check_out)
   → Call when check_availability returns NOT_POSSIBLE.
@@ -74,28 +96,37 @@ find_split_stay(category, check_in, check_out)
 
 find_split_stay_flex(preferred_category, check_in, check_out)
   → Call when the receptionist allows mixed-category split stays.
-  → Returns SPLIT_POSSIBLE (2–3 rooms, discount) across ANY categories, while
-    preferring the preferred_category and adjacent categories (±1).
+  → Returns SPLIT_POSSIBLE across ANY categories, preferring preferred_category.
 
 get_room_inventory(category)
   → Call when the guest asks about floors, specific room IDs, or exact rates.
   → Do NOT call just to check booking feasibility — use check_availability.
 
 probe_split_window(category, anchor_check_in, duration_nights)
-  → Call when the guest asks about split stay discounts and find_split_stay
-    returned NOT_POSSIBLE for their dates.
-  → Automatically tries ±5 day shifts to find the nearest window where a
-    genuine 2-room split stay (5–10% discount) is possible.
+  → Call when find_split_stay returned NOT_POSSIBLE for the guest's dates.
+  → Tries ±5 day shifts to find the nearest split stay window.
   → Also call when guest asks "any date/category with split stay discount?"
-  → Returns SPLIT_POSSIBLE with the actual segments — produces a confirm card.
+
+get_revenue_intelligence()
+  → Call proactively when the receptionist asks a general question, greets you,
+    or there is no active booking request in progress.
+  → Returns: per-category occupancy %, orphan gap nights, upgrade availability,
+    tonight ADR, week revenue on books, Pune market context hints.
+  → Use this to give a brief (1–2 sentence) insight: what's filling up, what's
+    empty, which upgrades are available, whether to push a certain category.
+  → Do NOT call this when a specific booking action is already in progress.
 ── ───────────────────────────────────────────────────────────────────────────
 
-── CARDINAL RULE — one tool call per room mentioned ──────────────────────────
-You MUST call check_availability (or find_split_stay) for EVERY option you intend
-to present. Never mention a room, date range, or category verbally without a tool
-call that confirms it. If you get NOT_POSSIBLE for the original request, call
-check_availability AGAIN for any shifted dates or alternative categories you
-consider. No tool call = no action card = receptionist cannot confirm.
+── Revenue advisor behaviour ─────────────────────────────────────────────────
+• If the receptionist says "hi", "hello", "what's looking good today?", "what
+  should I push?", or anything non-booking: call get_revenue_intelligence() and
+  give a brief, friendly, actionable insight. E.g.:
+  "Suite occupancy is light this weekend — if a guest upgrades, offer it at 10%
+  off. Deluxe is nearly full for Friday, so hold the rate there."
+• After completing a booking, if there's an upgrade opportunity (guest booked
+  Standard but Deluxe has rooms), proactively mention it.
+• Reference Pune market context where relevant: corporate demand, IPL, wedding
+  season, IT conference weeks, monsoon slow periods.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── Normal booking flow ───────────────────────────────────────────────────────
@@ -103,34 +134,23 @@ consider. No tool call = no action card = receptionist cannot confirm.
 2. Call check_availability → produces action card.
 3. DIRECT_AVAILABLE / SHUFFLE_POSSIBLE → one sentence + "Confirm with the button."
 4. NOT_POSSIBLE →
-   a. Call find_split_stay(same category, same dates).
-      SPLIT_POSSIBLE → one sentence. STOP.
-   b. If the receptionist explicitly allowed mixed-category split stays:
-      Call find_split_stay_flex(preferred_category, same dates).
-      SPLIT_POSSIBLE → one sentence. STOP.
-   b. Call check_availability(next higher category, same dates).
-      Available → one sentence. STOP.
-   c. Call check_availability(next lower category, same dates).
-      Available → one sentence. STOP.
-   d. Call check_availability(same category, check_in+1 day, same duration).
-      Available → one sentence. STOP.
-   e. None worked → call get_room_inventory(category), report earliest free window.
+   a. Call find_split_stay(same category, same dates). SPLIT_POSSIBLE → done.
+   b. If mixed-category split allowed: call find_split_stay_flex. SPLIT_POSSIBLE → done.
+   c. Call check_availability(next higher category, same dates). Available → done.
+   d. Call check_availability(next lower category, same dates). Available → done.
+   e. Call check_availability(same category, check_in+1 day, same duration). Available → done.
+   f. None worked → call get_room_inventory(category), report earliest free window.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── [HANDOFF] mode ────────────────────────────────────────────────────────────
 Message starts with [HANDOFF] — deterministic engine already confirmed the exact
 requested dates are impossible. Do NOT call check_availability for those same dates.
-  STEP 1: call check_availability(same category, check_in+1 day, same duration).
-    Available → one sentence reply. STOP.
-  STEP 2: call check_availability(next higher category, original dates).
-    Available → one sentence reply. STOP.
-  STEP 3: call check_availability(next lower category, original dates).
-    Available → one sentence reply. STOP.
-  STEP 4: call find_split_stay(same category, original dates).
-    SPLIT_POSSIBLE → one sentence reply. STOP.
-  STEP 4b: if mixed-category split was explicitly allowed, call find_split_stay_flex(preferred_category, original dates).
-    SPLIT_POSSIBLE → one sentence reply. STOP.
-  STEP 5: call get_room_inventory(category), report earliest free window, no card.
+  STEP 1: check_availability(same category, check_in+1 day, same duration). Available → done.
+  STEP 2: check_availability(next higher category, original dates). Available → done.
+  STEP 3: check_availability(next lower category, original dates). Available → done.
+  STEP 4: find_split_stay(same category, original dates). SPLIT_POSSIBLE → done.
+  STEP 4b: find_split_stay_flex(preferred_category, original dates) if mixed allowed. Done.
+  STEP 5: get_room_inventory(category), report earliest free window, no card.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── Output rules (always) ─────────────────────────────────────────────────────
@@ -138,7 +158,9 @@ requested dates are impossible. Do NOT call check_availability for those same da
 • No bullet points, no markdown headers, no lettered options.
 • Never invent room IDs or rates — only report tool results.
 • Never say "I'll confirm" or "booking is done" — you only recommend.
-• End actionable replies with: "Confirm with the button below when ready."
+• For bookings: end with "Confirm with the button below when ready."
+• For revenue insights: end with a concrete suggestion the receptionist can act on.
+• Reference Pune context naturally — don't over-explain it.
 ── ───────────────────────────────────────────────────────────────────────────
 """
 
@@ -544,11 +566,161 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             logger.exception("probe_split_window tool error")
             return json.dumps({"error": str(exc)})
 
+    @tool
+    async def get_revenue_intelligence() -> str:
+        """
+        Return a live revenue snapshot for the hotel — use this when the receptionist
+        asks a general question, greets you, or there is no active booking in progress.
+
+        Returns tonight's occupancy and ADR, per-category fill rates, orphan gap
+        counts, upgrade availability, and week revenue on-books.
+
+        Use the data to give a short (1–2 sentence) actionable insight:
+        which category to push today, whether an upgrade is worth offering,
+        or if a particular date is under pressure.
+        """
+        try:
+            today = date.today()
+            week_end = today + timedelta(days=7)
+            scan_end = today + timedelta(days=20)
+
+            # Active rooms
+            all_rooms = (await db.execute(
+                select(Room.id, Room.category, Room.base_rate)
+                .where(Room.is_active == True)
+            )).all()
+
+            room_cats: dict[str, str] = {r[0]: r[1].value if hasattr(r[1], "value") else str(r[1]) for r in all_rooms}
+            total_rooms = len(all_rooms)
+
+            # Today's slots
+            today_slots = (await db.execute(
+                select(Slot.room_id, Slot.block_type, Slot.current_rate, Slot.channel)
+                .join(Room, Room.id == Slot.room_id)
+                .where(Room.is_active == True, Slot.date == today)
+            )).all()
+
+            cat_total: dict[str, int] = {}
+            cat_booked: dict[str, int] = {}
+            cat_rates: dict[str, list[float]] = {}
+            tonight_occupied = 0
+            tonight_rates: list[float] = []
+
+            for r in all_rooms:
+                cat = r[1].value if hasattr(r[1], "value") else str(r[1])
+                cat_total[cat] = cat_total.get(cat, 0) + 1
+
+            for s in today_slots:
+                cat = room_cats.get(s.room_id, "UNKNOWN")
+                if s.block_type != BlockType.EMPTY:
+                    cat_booked[cat] = cat_booked.get(cat, 0) + 1
+                    tonight_occupied += 1
+                    tonight_rates.append(float(s.current_rate))
+                    cat_rates.setdefault(cat, []).append(float(s.current_rate))
+
+            tonight_occ_pct = round((tonight_occupied / max(1, total_rooms)) * 100, 1)
+            tonight_adr = round(sum(tonight_rates) / len(tonight_rates), 0) if tonight_rates else 0.0
+
+            # Per-category summary
+            categories_summary = []
+            for cat, total in sorted(cat_total.items()):
+                booked = cat_booked.get(cat, 0)
+                empty = total - booked
+                occ_pct = round((booked / max(1, total)) * 100, 1)
+                avg_rate = round(sum(cat_rates.get(cat, [])) / max(1, len(cat_rates.get(cat, []))), 0)
+                categories_summary.append({
+                    "category": cat,
+                    "total_rooms": total,
+                    "booked_tonight": booked,
+                    "empty_tonight": empty,
+                    "occ_pct": occ_pct,
+                    "avg_rate_tonight": avg_rate,
+                    "upgrade_available": empty > 0,
+                })
+
+            # Week revenue on-books
+            week_slots = (await db.execute(
+                select(Slot.current_rate, Slot.block_type)
+                .join(Room, Room.id == Slot.room_id)
+                .where(
+                    Room.is_active == True,
+                    Slot.date >= today,
+                    Slot.date < week_end,
+                    Slot.block_type != BlockType.EMPTY,
+                )
+            )).all()
+            week_revenue = round(sum(float(s.current_rate) for s in week_slots), 0)
+            week_booked_nights = len(week_slots)
+
+            # Orphan gaps in next 20 days
+            scan_slots = (await db.execute(
+                select(Slot.room_id, Slot.date, Slot.block_type)
+                .join(Room, Room.id == Slot.room_id)
+                .where(
+                    Room.is_active == True,
+                    Slot.date >= today,
+                    Slot.date < scan_end,
+                )
+                .order_by(Slot.room_id, Slot.date)
+            )).all()
+
+            by_room: dict[str, list] = {}
+            for s in scan_slots:
+                by_room.setdefault(s.room_id, []).append(s)
+
+            orphan_nights = 0
+            for room_id, rows in by_room.items():
+                for i, row in enumerate(rows):
+                    if row.block_type != BlockType.EMPTY:
+                        continue
+                    before = rows[i - 1].block_type if i > 0 else None
+                    after  = rows[i + 1].block_type if i < len(rows) - 1 else None
+                    if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
+                        orphan_nights += 1
+
+            # Recent pickup (last 7 days)
+            cutoff = today - timedelta(days=7)
+            recent_bookings = (await db.execute(
+                select(Booking.room_category, Booking.channel)
+                .where(Booking.created_at >= cutoff, Booking.is_live == True)
+            )).all()
+            recent_by_cat: dict[str, int] = {}
+            recent_by_channel: dict[str, int] = {}
+            for b in recent_bookings:
+                cat = b.room_category.value if hasattr(b.room_category, "value") else str(b.room_category)
+                ch = b.channel.value if b.channel and hasattr(b.channel, "value") else (str(b.channel) if b.channel else "OTA")
+                recent_by_cat[cat] = recent_by_cat.get(cat, 0) + 1
+                recent_by_channel[ch] = recent_by_channel.get(ch, 0) + 1
+
+            return json.dumps({
+                "tonight": {
+                    "occupancy_pct": tonight_occ_pct,
+                    "adr": tonight_adr,
+                    "occupied_rooms": tonight_occupied,
+                    "total_rooms": total_rooms,
+                },
+                "categories": categories_summary,
+                "week_revenue_on_books": week_revenue,
+                "week_booked_nights": week_booked_nights,
+                "orphan_nights_next_20_days": orphan_nights,
+                "last_7_day_pickup_by_category": recent_by_cat,
+                "last_7_day_pickup_by_channel": recent_by_channel,
+                "market_note": (
+                    "Hotel is in Pune, India. Weekdays = corporate IT sector guests "
+                    "(rate-inelastic). Weekends = leisure from Mumbai/Nashik (price-sensitive). "
+                    "Peak: Oct-Feb wedding/conference season. Monsoon (Jun-Sep) slows leisure. "
+                    "OTA pressure highest on Economy/Standard Mon-Thu."
+                ),
+            })
+        except Exception as exc:
+            logger.exception("get_revenue_intelligence tool error")
+            return json.dumps({"error": str(exc)})
+
     # confirm_booking and confirm_split_stay are intentionally NOT tools.
     # The AI only recommends. All DB writes go through the receptionist's
     # confirm button in the UI — never triggered by the AI itself.
 
-    tools = [check_availability, get_room_inventory, find_split_stay, find_split_stay_flex, probe_split_window]
+    tools = [check_availability, get_room_inventory, find_split_stay, find_split_stay_flex, probe_split_window, get_revenue_intelligence]
 
     # ── LLM ───────────────────────────────────────────────────────────────────
 
