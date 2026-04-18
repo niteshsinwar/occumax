@@ -30,32 +30,32 @@ function AppLayout() {
                   to="/dashboard"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
-                  <Grid3x3 className="w-4 h-4" /> Dashboard
+                  <Grid3x3 className="w-4 h-4" /> Overview
                 </NavLink>
                 <NavLink
                   to="/manager"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
-                  <LayoutDashboard className="w-4 h-4" /> Manager
+                  <LayoutDashboard className="w-4 h-4" /> Revenue
                 </NavLink>
                 <NavLink
                   to="/receptionist"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
-                  <Users className="w-4 h-4" /> Receptionist
+                  <Users className="w-4 h-4" /> Front Desk
                 </NavLink>
                 <NavLink
                   to="/admin"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
-                  <Settings className="w-4 h-4" /> Admin
+                  <Settings className="w-4 h-4" /> Settings
                 </NavLink>
               </nav>
             </div>
             <div className="flex items-center">
               <div className="text-[9px] font-bold text-text-muted uppercase tracking-[0.2em] bg-surface-2 px-4 py-1.5 rounded-sm border border-border shadow-subtle relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-text" />
-                V2 Yield Operations
+                <div className="absolute top-0 left-0 w-1 h-full bg-occugreen" />
+                Live
               </div>
             </div>
           </div>
@@ -85,16 +85,16 @@ function AppLayout() {
                 Opti<span className="text-accent italic font-light">host</span>
               </div>
               <p className="text-xs text-text-muted font-medium leading-relaxed max-w-xs">
-                The pinnacle of deterministic property yield engineering. Harness the power of continuous combinatorial algorithms to eliminate fragmentation and achieve absolute matrix convergence.
+                Smart booking and revenue management for independent hotels. Fill more rooms, earn more per room, spend less time on admin.
               </p>
             </div>
             <div className="md:ml-auto">
               <h4 className="font-bold text-[10px] text-text uppercase tracking-[0.15em] mb-4">System</h4>
               <ul className="space-y-2 text-xs font-medium text-text-muted">
-                <li>V2 Matrix Optimization Engine</li>
-                <li>Zero-Latency Booking Resolution</li>
-                <li>HHI Automated Reallocation</li>
-                <li>Oracle Cloud · Mumbai Region</li>
+                <li>AI-powered room optimisation</li>
+                <li>Dynamic pricing recommendations</li>
+                <li>Occupancy forecasting & analytics</li>
+                <li>AI front desk assistant</li>
               </ul>
             </div>
             <div className="md:ml-auto">
@@ -107,8 +107,8 @@ function AppLayout() {
             </div>
           </div>
           <div className="border-t border-border mt-10 pt-6 flex flex-col md:flex-row justify-between items-center text-[10px] uppercase font-bold tracking-widest text-text-muted">
-            <p>&copy; {new Date().getFullYear()} Genius Hacks • Art Royalty & Aesthetics</p>
-            <p className="mt-2 md:mt-0">Confidential · Enterprise Class Infrastructure</p>
+            <p>&copy; {new Date().getFullYear()} Optihost · Built for independent hotels</p>
+            <p className="mt-2 md:mt-0">Made with care for hospitality</p>
           </div>
         </div>
       </footer>

@@ -61,6 +61,26 @@ class PaceResponse(BaseModel):
     series: list[PaceSeries]
 
 
+class RevenueSummaryResponse(BaseModel):
+    as_of: date
+    # Today
+    today_occupancy_pct: float
+    today_adr: float
+    today_rooms_occupied: int
+    today_total_rooms: int
+    # This week (next 7 nights)
+    week_occupancy_pct: float
+    week_revenue_on_books: float
+    week_rooms_booked: int
+    week_total_room_nights: int
+    # Gap risk
+    orphan_nights_at_risk: int
+    orphan_revenue_at_risk: float
+    # MTD
+    mtd_revenue: float
+    mtd_days: int
+
+
 class LosBucket(BaseModel):
     nights: int
     count: int

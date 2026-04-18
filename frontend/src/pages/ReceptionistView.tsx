@@ -332,16 +332,16 @@ export function ReceptionistView() {
       {/* Header */}
       <div className="border-b border-border/50 pb-4 flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-serif font-bold text-text">Front Desk Registry</h1>
+          <h1 className="text-3xl font-serif font-bold text-text">Front Desk</h1>
           <p className="text-xs text-text-muted mt-1 uppercase tracking-widest font-medium">
             {aiActive
-              ? <span className="flex items-center gap-1.5 text-accent"><Sparkles className="w-3 h-3" /> AI Agent Engaged — Exploring Alternatives</span>
-              : "Deterministic Availability Scanning & Reservation Assembly"}
+              ? <span className="flex items-center gap-1.5 text-accent"><Sparkles className="w-3 h-3" /> AI Assistant — Searching for Alternatives</span>
+              : "Room Availability & Reservations"}
           </p>
         </div>
         {aiActive && (
           <span className="text-[9px] font-bold bg-accent/10 text-accent border border-accent/20 px-3 py-1.5 uppercase tracking-widest flex items-center gap-1.5 shrink-0">
-            <Sparkles className="w-2.5 h-2.5" /> AI POWERED
+            <Sparkles className="w-2.5 h-2.5" /> AI ACTIVE
           </span>
         )}
       </div>
@@ -356,11 +356,11 @@ export function ReceptionistView() {
         <div className="absolute top-0 left-0 w-1 h-full bg-accent/30" />
         <div className="flex items-center justify-between mb-6 pb-6 border-b border-border/50">
           <div className="flex items-center gap-4 text-xs font-bold uppercase tracking-wider">
-            <StepPill label="1. Direct check" state={steps.direct} />
+            <StepPill label="1. Checking rooms" state={steps.direct} />
             <ArrowRight className="w-4 h-4 text-border" />
-            <StepPill label="2. Deep analysis" state={steps.shuffle} />
+            <StepPill label="2. Looking deeper" state={steps.shuffle} />
           </div>
-          <span className="text-[9px] font-bold tracking-[0.1em] bg-surface-2 text-text px-3 py-1 border border-border">HHI FRAGMENT SCAN</span>
+          <span className="text-[9px] font-bold tracking-[0.1em] bg-surface-2 text-text-muted px-3 py-1 border border-border/50">{steps.direct === "idle" && steps.shuffle === "idle" ? "Ready" : steps.direct === "running" || steps.shuffle === "running" ? "Searching..." : "Done"}</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -379,17 +379,17 @@ export function ReceptionistView() {
             <input type="date" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={checkOut} min={checkIn} max={maxDate} onChange={(e) => setCheckOut(e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Ledger</label>
+            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Name</label>
             <input type="text" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none font-serif" placeholder="Walk-in Guest" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-4">
           <div className="text-xs font-bold uppercase tracking-widest text-text-muted">
-            {nights > 0 ? <span className="flex items-center gap-2"><Calendar className="w-4 h-4"/> {nights} nights <span className="mx-1 text-border">•</span> {category}</span> : "Configure parameter array"}
+            {nights > 0 ? <span className="flex items-center gap-2"><Calendar className="w-4 h-4"/> {nights} nights <span className="mx-1 text-border">•</span> {category}</span> : "Select dates to continue"}
           </div>
           <button className="bg-text text-surface font-semibold hover:opacity-90 active:scale-95 disabled:opacity-40 shadow-sm flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm transition-all uppercase tracking-widest text-xs" onClick={handleCheck} disabled={checking || nights < 1}>
-            {checking ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Scanning</> : "Execute Availability Search"}
+            {checking ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching...</> : "Check Availability"}
           </button>
         </div>
       </div>
@@ -404,9 +404,9 @@ export function ReceptionistView() {
             </div>
             <div>
               <h3 className={`text-xl font-serif font-bold ${isAvailable ? 'text-text' : 'text-occured'}`}>
-                {result.state === "DIRECT_AVAILABLE" && "Direct Block Available"}
-                {result.state === "SHUFFLE_POSSIBLE" && "Availability Extracted via Restructure"}
-                {result.state === "NOT_POSSIBLE" && "Absolute Capacity Reached"}
+                {result.state === "DIRECT_AVAILABLE" && "Room Available"}
+                {result.state === "SHUFFLE_POSSIBLE" && "Room Available via Swap"}
+                {result.state === "NOT_POSSIBLE" && "No Rooms Available"}
               </h3>
               <p className="text-xs tracking-wide uppercase font-bold text-text-muted mt-2">{result.message}</p>
             </div>
@@ -416,8 +416,8 @@ export function ReceptionistView() {
 
           {result.state === "NOT_POSSIBLE" && result.infeasible_dates && (
             <div className="bg-surface-2 border border-occured/30 p-5 mt-6">
-              <h4 className="text-xs font-bold text-occured flex items-center gap-2 mb-2 uppercase tracking-widest"><Info className="w-4 h-4"/> Block Conflict Detected</h4>
-              <p className="text-sm text-text-muted">Total capacity for {category} is entirely consumed on: <span className="font-bold text-text">{result.infeasible_dates.join(", ")}</span>.</p>
+              <h4 className="text-xs font-bold text-occured flex items-center gap-2 mb-2 uppercase tracking-widest"><Info className="w-4 h-4"/> Fully Booked On These Dates</h4>
+              <p className="text-sm text-text-muted">All {category} rooms are occupied on: <span className="font-bold text-text">{result.infeasible_dates.join(", ")}</span>.</p>
             </div>
           )}
 
@@ -539,9 +539,9 @@ export function ReceptionistView() {
           {isAvailable && result.room_id && (
             <div className="flex flex-wrap gap-4 mt-8 pt-6 border-t border-border/50">
               <button className="flex-1 bg-occugreen text-white font-bold hover:brightness-110 active:scale-95 disabled:opacity-40 shadow-sm flex items-center justify-center gap-2 px-6 py-4 transition-all uppercase tracking-widest text-[11px]" onClick={handleConfirm} disabled={confirming}>
-                {confirming ? <><Loader2 className="w-4 h-4 animate-spin" /> Committing Transaction</> : <span>Authorize Booking &rarr; Room {result.room_id}</span>}
+                {confirming ? <><Loader2 className="w-4 h-4 animate-spin" /> Confirming...</> : <span>Confirm Booking — Room {result.room_id}</span>}
               </button>
-              <button className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-8 py-4 transition-colors" onClick={() => { setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}>Abort</button>
+              <button className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-8 py-4 transition-colors" onClick={() => { setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}>Cancel</button>
             </div>
           )}
         </div>
@@ -551,9 +551,9 @@ export function ReceptionistView() {
       {lastConfirmed && (
         <div className="bg-surface border border-occugreen/30 p-10 text-center shadow-subtle flex flex-col items-center">
           <CheckCircle2 className="w-12 h-12 text-occugreen mb-4" />
-          <h2 className="text-3xl font-serif font-bold text-text mb-2">Reservation Finalized</h2>
-          <p className="text-text-muted tracking-wide text-sm font-medium mb-8">System Ledger ID: <span className="text-text font-mono font-bold bg-surface-2 border border-border px-3 py-1">{lastConfirmed}</span></p>
-          <button className="bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-xs hover:bg-border active:scale-95 px-8 py-3 shadow-sm transition-all" onClick={() => { setLastConfirmed(null); setGuestName(""); }}>Initialize Next Request</button>
+          <h2 className="text-3xl font-serif font-bold text-text mb-2">Booking Confirmed</h2>
+          <p className="text-text-muted tracking-wide text-sm font-medium mb-8">Booking ID: <span className="text-text font-mono font-bold bg-surface-2 border border-border px-3 py-1">{lastConfirmed}</span></p>
+          <button className="bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-xs hover:bg-border active:scale-95 px-8 py-3 shadow-sm transition-all" onClick={() => { setLastConfirmed(null); setGuestName(""); }}>New Booking</button>
         </div>
       )}
 
@@ -566,8 +566,7 @@ export function ReceptionistView() {
           <div className="bg-accent/5 border-b border-accent/20 px-6 py-3 flex items-center gap-3">
             <Sparkles className="w-3.5 h-3.5 text-accent shrink-0" />
             <p className="text-xs text-accent font-medium">
-              Deterministic scan exhausted for <span className="font-bold">{category}</span> &nbsp;
-              {checkIn} → {checkOut} &nbsp;·&nbsp; AI agent is finding alternatives
+              No {category} rooms found for <span className="font-bold">{checkIn} → {checkOut}</span> &nbsp;·&nbsp; AI assistant is searching for alternatives
             </p>
             <button
               onClick={() => { setAiActive(false); setChatMessages([]); }}
@@ -585,7 +584,7 @@ export function ReceptionistView() {
                 <h3 className="font-serif font-bold text-lg text-text">AI Front Desk Agent</h3>
               </div>
               <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest">
-                Gemini 2.5 · LangGraph · session history — lost on refresh by design
+                Gemini 2.5 · Powered by AI
               </p>
             </div>
             {chatMessages.length > 0 && (
@@ -645,45 +644,35 @@ export function ReceptionistView() {
       )}
         </div>
 
-      {/* Recent Bookings Table */}
+      {/* Recent Bookings Sidebar */}
         <aside className="min-w-0">
-          <div className="bg-surface border border-border shadow-subtle p-6 lg:sticky lg:top-6">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-serif font-bold text-xl text-text">Recent Ledger Activity</h3>
-              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-4 py-2 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
-                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Synchronize"}
+          <div className="bg-surface border border-border shadow-subtle p-5 lg:sticky lg:top-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-serif font-bold text-lg text-text">Recent Bookings</h3>
+              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-3 py-1.5 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
+                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Refresh"}
               </button>
             </div>
             {recentBookings.length === 0 ? (
-              <div className="py-12 text-center text-text-muted font-medium text-sm border-t border-border/50">No ledger activity found.</div>
+              <div className="py-10 text-center text-text-muted font-medium text-sm border-t border-border/50">No recent bookings.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-[10px] text-text-muted uppercase tracking-[0.15em] bg-surface-2 border-y border-border">
-                    <tr>
-                      <th className="px-5 py-4 font-bold">Ledger ID</th>
-                      <th className="px-5 py-4 font-bold">Client Identity</th>
-                      <th className="px-5 py-4 font-bold">Parameters</th>
-                      <th className="px-5 py-4 font-bold text-center">System State</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {recentBookings.map((b) => (
-                      <tr key={b.id} className="hover:bg-surface-2/30 transition-colors">
-                        <td className="px-5 py-4 font-mono font-bold tracking-tighter text-text">{b.id}</td>
-                        <td className="px-5 py-4 font-serif font-medium text-text">{b.guest_name}</td>
-                        <td className="px-5 py-4 text-xs font-mono text-text-muted">
-                          {b.room_id} <span className="mx-2 text-border">•</span> {b.check_in}
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text border-border'}`}>
-                            {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-2">
+                {recentBookings.map((b) => (
+                  <div key={b.id} className="border border-border bg-surface-2/40 px-4 py-3 hover:bg-surface-2/70 transition-colors">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <span className="font-serif font-medium text-sm text-text truncate">{b.guest_name}</span>
+                      <span className={`shrink-0 inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text-muted border-border'}`}>
+                        {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono">
+                      <span className="font-bold text-text">Room {b.room_id}</span>
+                      <span className="text-border">·</span>
+                      <span>{b.check_in}</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5 font-mono">{b.id}</div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -697,8 +686,8 @@ function ComparisonSection({ comparison }: { comparison: ComparisonTable }) {
   const { dates, rows, summary } = comparison;
   return (
     <div className="bg-surface-2 border border-border p-5 mt-8">
-      <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-1">Rearrangement Blueprint</h4>
-      <p className="text-[10px] text-text-muted mb-4">Each room shows its current state (BEFORE) and what it will look like after this booking is confirmed (AFTER).</p>
+      <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-1">Room Swap Plan</h4>
+      <p className="text-[10px] text-text-muted mb-4">Shows current state (BEFORE) and what changes after this booking is confirmed (AFTER).</p>
 
       {/* Plain-English move summary */}
       {summary && summary.length > 0 && (
@@ -952,7 +941,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
         ) : (
           <div className="border-t border-border bg-surface-2 p-3 text-xs space-y-2">
             <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
-              Receptionist action — confirm to write all segments to database
+              Enter guest name and confirm to book all segments
             </div>
             <div className="flex gap-2 items-center">
               <input
@@ -1060,7 +1049,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
           ) : (
             <div className="border border-border bg-surface-2 p-3 mt-2 text-xs space-y-2">
               <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
-                Receptionist action — confirm to write to database
+                Enter guest name and confirm to book
               </div>
               <div className="flex gap-2 items-center">
                 <input
@@ -1096,6 +1085,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
 
 function ChatBubble({ msg }: { msg: ChatMsg }) {
   const isUser = msg.role === "user";
+  if (isUser && msg.content.startsWith("[HANDOFF]")) return null;
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className={`w-7 h-7 flex items-center justify-center shrink-0 mt-0.5 border ${

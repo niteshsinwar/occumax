@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { analysePricing, commitPricing } from "../api/client";
 import type { PricingRecommendation, PricingAnalyseResponse } from "../types";
 import { useToast } from "./shared/Toast";
@@ -6,6 +6,16 @@ import {
   TrendingUp, TrendingDown, DollarSign, Sparkles,
   CheckCircle2, XCircle, Edit2, Loader2,
 } from "lucide-react";
+
+const ANALYSIS_STEPS = [
+  "Reviewing booking pace for the next 30 days...",
+  "Checking pickup trends vs. last year...",
+  "Scanning for local events and seasonal demand...",
+  "Analysing competitor rate patterns...",
+  "Evaluating orphan gaps and fill-rate pressure...",
+  "Calculating optimal rate adjustments...",
+  "Finalising recommendations...",
+];
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -43,7 +53,29 @@ export function PricingPanel() {
   const [analysing,  setAnalysing]  = useState(false);
   const [committing, setCommitting] = useState(false);
   const [committed,  setCommitted]  = useState<{ updated: number; skipped: number } | null>(null);
+  const [stepIdx,    setStepIdx]    = useState(0);
+  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
+  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { show, Toasts } = useToast();
+
+  useEffect(() => {
+    if (analysing) {
+      setStepIdx(0);
+      setCompletedSteps([]);
+      let current = 0;
+      stepTimerRef.current = setInterval(() => {
+        setCompletedSteps(prev => [...prev, current]);
+        current += 1;
+        setStepIdx(current);
+        if (current >= ANALYSIS_STEPS.length - 1) {
+          clearInterval(stepTimerRef.current!);
+        }
+      }, 600);
+    } else {
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+    }
+    return () => { if (stepTimerRef.current) clearInterval(stepTimerRef.current); };
+  }, [analysing]);
 
   const runAnalysis = async () => {
     setAnalysing(true);
@@ -182,14 +214,46 @@ export function PricingPanel() {
         </div>
       )}
 
-      {/* ── loading ────────────────────────────────────────────────────── */}
+      {/* ── loading: step-by-step analysis sequence ─────────────────── */}
       {analysing && (
-        <div className="flex-1 flex flex-col items-center justify-center py-24 text-center">
-          <div className="w-10 h-10 border-2 border-border border-t-accent rounded-full animate-spin mb-6" />
-          <h3 className="font-serif font-bold text-lg text-text">Analysing Demand Signals</h3>
-          <p className="text-xs text-text-muted mt-2 max-w-xs leading-relaxed">
-            Gemini is evaluating occupancy, pickup pace, and lead time across all categories…
-          </p>
+        <div className="flex-1 flex flex-col items-center justify-center py-16 px-8">
+          <div className="w-full max-w-sm">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-8 h-8 border-2 border-border border-t-accent rounded-full animate-spin shrink-0" />
+              <div>
+                <div className="text-sm font-bold text-text font-serif">AI Pricing Analysis</div>
+                <div className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Powered by Gemini</div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {ANALYSIS_STEPS.map((step, i) => {
+                const done    = completedSteps.includes(i);
+                const active  = i === stepIdx;
+                const hidden  = i > stepIdx;
+                return (
+                  <div
+                    key={step}
+                    className={`flex items-center gap-3 transition-all duration-500 ${hidden ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+                  >
+                    <div className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center border transition-all duration-300 ${
+                      done   ? "bg-occugreen border-occugreen"  :
+                      active ? "border-accent bg-accent/10 animate-pulse" :
+                               "border-border bg-surface-2"
+                    }`}>
+                      {done && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                    </div>
+                    <span className={`text-xs transition-colors duration-300 ${
+                      done   ? "text-text-muted line-through decoration-text-muted/40" :
+                      active ? "text-text font-medium"  :
+                               "text-text-muted/40"
+                    }`}>
+                      {step}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 

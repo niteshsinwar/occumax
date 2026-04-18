@@ -119,20 +119,20 @@ export function AdminPanel() {
       {/* Header */}
       <div className="mb-8 pb-4 border-b border-border/50">
         <div className="flex items-start justify-between gap-6">
-          <h1 className="text-3xl font-serif font-bold text-text">Platform Config</h1>
+          <h1 className="text-3xl font-serif font-bold text-text">Hotel Settings</h1>
           <div className="hidden sm:block text-[9px] font-bold text-text-muted uppercase tracking-[0.2em] bg-surface-2 px-4 py-1.5 rounded-sm border border-border shadow-subtle relative overflow-hidden">
             <div className="absolute top-0 left-0 w-1 h-full bg-text" />
             Admin controls
           </div>
         </div>
         <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">
-          Manage rooms, inventory, and dynamic pricing rules
+          Add rooms, set base rates, and load historical data for better forecasting
         </p>
 
         <div className="mt-4 flex flex-col sm:flex-row sm:items-end sm:justify-start gap-3">
           <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
             <div className="space-y-1">
-              <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Seed range</div>
+              <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Historical data range</div>
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <input
                   type="date"
@@ -171,10 +171,10 @@ export function AdminPanel() {
             className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2"
             onClick={handleSeedAnalytics}
             disabled={seedLoading}
-            title="Generate demo historical bookings so AI forecast shows non-zero predictions"
+            title="Load past booking history so the AI forecast and analytics have real data to work with"
           >
             <Sparkles className={`w-3.5 h-3.5 ${seedLoading ? "animate-pulse text-accent" : "text-accent"}`} />
-            Seed AI History
+            Load History for AI
           </button>
           <button className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2" onClick={load} disabled={loading}>
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-accent' : 'text-accent'}`} /> Refresh Data

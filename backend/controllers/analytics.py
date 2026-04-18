@@ -23,6 +23,7 @@ from core.schemas.analytics import (
     PaceResponse,
     PaceSeries,
     PacePoint,
+    RevenueSummaryResponse,
     EventInsightsResponse,
     LosBucket,
 )
@@ -530,3 +531,121 @@ async def get_event_insights(
         arrival_weekday_histogram=arrival_hist,
     )
 
+
+async def get_revenue_summary(
+    db: AsyncSession,
+    as_of: date,
+) -> RevenueSummaryResponse:
+    """
+    Hotel-wide revenue snapshot computed entirely from existing slot + booking tables.
+    No schema changes required.
+    """
+    week_end = as_of + timedelta(days=7)
+    month_start = as_of.replace(day=1)
+
+    # ── Total active rooms ────────────────────────────────────────────────────
+    total_rooms_row = (await db.execute(
+        select(func.count(Room.id)).where(Room.is_active == True)
+    )).scalar_one()
+    total_rooms = int(total_rooms_row or 0)
+
+    if total_rooms == 0:
+        return RevenueSummaryResponse(
+            as_of=as_of,
+            today_occupancy_pct=0, today_adr=0,
+            today_rooms_occupied=0, today_total_rooms=0,
+            week_occupancy_pct=0, week_revenue_on_books=0,
+            week_rooms_booked=0, week_total_room_nights=total_rooms * 7,
+            orphan_nights_at_risk=0, orphan_revenue_at_risk=0,
+            mtd_revenue=0, mtd_days=(as_of - month_start).days + 1,
+        )
+
+    # ── Today: occupancy + ADR ────────────────────────────────────────────────
+    today_slots = (await db.execute(
+        select(Slot.current_rate, Slot.block_type)
+        .join(Room, Room.id == Slot.room_id)
+        .where(Room.is_active == True, Slot.date == as_of)
+    )).all()
+
+    today_occupied = [r for r in today_slots if r.block_type != BlockType.EMPTY]
+    today_rooms_occupied = len(today_occupied)
+    today_adr = float(mean([r.current_rate for r in today_occupied])) if today_occupied else 0.0
+    today_occupancy_pct = (today_rooms_occupied / total_rooms) * 100.0
+
+    # ── This week: revenue on-books + occupancy ───────────────────────────────
+    week_slots = (await db.execute(
+        select(Slot.current_rate, Slot.block_type, Slot.date)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= as_of,
+            Slot.date < week_end,
+        )
+    )).all()
+
+    week_booked = [r for r in week_slots if r.block_type != BlockType.EMPTY]
+    week_rooms_booked = len(week_booked)
+    week_revenue_on_books = float(sum(r.current_rate for r in week_booked))
+    week_total_room_nights = total_rooms * 7
+    week_occupancy_pct = (week_rooms_booked / max(1, week_total_room_nights)) * 100.0
+
+    # ── MTD revenue (booked slots this calendar month up to today) ────────────
+    mtd_slots = (await db.execute(
+        select(func.sum(Slot.current_rate))
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= month_start,
+            Slot.date <= as_of,
+            Slot.block_type != BlockType.EMPTY,
+        )
+    )).scalar_one()
+    mtd_revenue = float(mtd_slots or 0.0)
+    mtd_days = (as_of - month_start).days + 1
+
+    # ── Orphan nights at risk (next 20 days) ─────────────────────────────────
+    # An orphan is an EMPTY slot bounded by non-EMPTY on both sides in the same room.
+    scan_end = as_of + timedelta(days=20)
+    scan_slots = (await db.execute(
+        select(Slot.room_id, Slot.date, Slot.block_type, Slot.current_rate)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= as_of,
+            Slot.date < scan_end,
+        )
+        .order_by(Slot.room_id, Slot.date)
+    )).all()
+
+    # Group by room
+    by_room: dict[str, list[tuple]] = defaultdict(list)
+    for row in scan_slots:
+        by_room[row.room_id].append(row)
+
+    orphan_nights = 0
+    orphan_rev = 0.0
+    for room_id, rows in by_room.items():
+        for i, row in enumerate(rows):
+            if row.block_type != BlockType.EMPTY:
+                continue
+            before = rows[i - 1].block_type if i > 0 else None
+            after = rows[i + 1].block_type if i < len(rows) - 1 else None
+            if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
+                orphan_nights += 1
+                orphan_rev += float(row.current_rate)
+
+    return RevenueSummaryResponse(
+        as_of=as_of,
+        today_occupancy_pct=round(today_occupancy_pct, 1),
+        today_adr=round(today_adr, 0),
+        today_rooms_occupied=today_rooms_occupied,
+        today_total_rooms=total_rooms,
+        week_occupancy_pct=round(week_occupancy_pct, 1),
+        week_revenue_on_books=round(week_revenue_on_books, 0),
+        week_rooms_booked=week_rooms_booked,
+        week_total_room_nights=week_total_room_nights,
+        orphan_nights_at_risk=orphan_nights,
+        orphan_revenue_at_risk=round(orphan_rev, 0),
+        mtd_revenue=round(mtd_revenue, 0),
+        mtd_days=mtd_days,
+    )

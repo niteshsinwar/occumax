@@ -65,6 +65,9 @@ export const analysePricing = () => api.get("/manager/pricing/analyse");
 export const commitPricing  = (items: { category: string; date: string; new_rate: number }[]) =>
   api.post("/manager/pricing/commit", { items });
 
+export const getRevenueSummary = (as_of?: string) =>
+  api.get("/analytics/revenue-summary", as_of ? { params: { as_of } } : undefined);
+
 // Admin
 export const adminListRooms     = () => api.get("/admin/rooms");
 export const adminAddRoom       = (body: { id: string; category: string; base_rate: number; floor_number: number }) =>

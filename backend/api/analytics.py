@@ -10,7 +10,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.schemas import OccupancyForecastResponse, PaceResponse, EventInsightsResponse
+from core.schemas import OccupancyForecastResponse, PaceResponse, EventInsightsResponse, RevenueSummaryResponse
 from services.database import get_db
 from controllers import analytics as ctrl
 
@@ -47,3 +47,13 @@ async def get_event_insights(
     db: AsyncSession = Depends(get_db),
 ):
     return await ctrl.get_event_insights(db=db, start=start, end=end, as_of=as_of, category=category)
+
+
+@router.get("/revenue-summary", response_model=RevenueSummaryResponse)
+async def get_revenue_summary(
+    as_of: date | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    from datetime import date as date_type
+    effective_as_of = as_of or date_type.today()
+    return await ctrl.get_revenue_summary(db=db, as_of=effective_as_of)

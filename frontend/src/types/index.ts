@@ -215,3 +215,19 @@ export interface PaceResponse {
   series: PaceSeries[];
 }
 
+export interface RevenueSummaryResponse {
+  as_of: string;
+  today_occupancy_pct: number;
+  today_adr: number;
+  today_rooms_occupied: number;
+  today_total_rooms: number;
+  week_occupancy_pct: number;
+  week_revenue_on_books: number;
+  week_rooms_booked: number;
+  week_total_room_nights: number;
+  orphan_nights_at_risk: number;
+  orphan_revenue_at_risk: number;
+  mtd_revenue: number;
+  mtd_days: number;
+}
+
