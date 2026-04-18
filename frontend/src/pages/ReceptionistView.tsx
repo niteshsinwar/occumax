@@ -55,8 +55,7 @@ export function ReceptionistView() {
   const { show, Toasts } = useToast();
   const timers    = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // ── AI chat state — activates automatically on NOT_POSSIBLE ────────────────
-  const [aiActive,     setAiActive]    = useState(false);
+  // ── AI chat state — always-on parallel assistant ─────────────────────────
   const [aiGuided,     setAiGuided]    = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const [chatInput,    setChatInput]   = useState("");
@@ -89,7 +88,6 @@ export function ReceptionistView() {
     setChecking(true);
     setResult(null);
     setLastConfirmed(null);
-    setAiActive(false);
     setAiGuided(false);
     setChatMessages([]);
     setShowFallback(false);
@@ -297,7 +295,6 @@ export function ReceptionistView() {
     const splitState = "NOT_CHECKED";
 
     setChatMessages([]);
-    setAiActive(true);
     setAiGuided(true);
     setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
 
@@ -334,16 +331,14 @@ export function ReceptionistView() {
         <div>
           <h1 className="text-3xl font-serif font-bold text-text">Front Desk</h1>
           <p className="text-xs text-text-muted mt-1 uppercase tracking-widest font-medium">
-            {aiActive
-              ? <span className="flex items-center gap-1.5 text-accent"><Sparkles className="w-3 h-3" /> AI Assistant — Searching for Alternatives</span>
-              : "Room Availability & Reservations"}
+            <span className="flex items-center gap-1.5">
+              Room Availability &amp; Reservations
+            </span>
           </p>
         </div>
-        {aiActive && (
-          <span className="text-[9px] font-bold bg-accent/10 text-accent border border-accent/20 px-3 py-1.5 uppercase tracking-widest flex items-center gap-1.5 shrink-0">
-            <Sparkles className="w-2.5 h-2.5" /> AI ACTIVE
-          </span>
-        )}
+        <span className="text-[9px] font-bold bg-accent/10 text-accent border border-accent/20 px-3 py-1.5 uppercase tracking-widest flex items-center gap-1.5 shrink-0">
+          <Sparkles className="w-2.5 h-2.5" /> AI Ready
+        </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-6 items-start">
@@ -516,7 +511,7 @@ export function ReceptionistView() {
                       )}
                     <button
                       className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
-                      onClick={() => { setChatMessages([]); setAiActive(false); setAiGuided(false); }}
+                      onClick={() => { setChatMessages([]); setAiGuided(false); }}
                     >
                       Close AI panel
                     </button>
@@ -559,37 +554,32 @@ export function ReceptionistView() {
 
           </>
 
-      {/* ── AI PANEL — auto-activates on NOT_POSSIBLE ─────────────────── */}
-      {aiActive && (
-        <div ref={aiPanelRef} className="bg-surface border border-accent/30 shadow-subtle">
-          {/* Handoff banner */}
-          <div className="bg-accent/5 border-b border-accent/20 px-6 py-3 flex items-center gap-3">
-            <Sparkles className="w-3.5 h-3.5 text-accent shrink-0" />
-            <p className="text-xs text-accent font-medium">
-              No {category} rooms found for <span className="font-bold">{checkIn} → {checkOut}</span> &nbsp;·&nbsp; AI assistant is searching for alternatives
+      {/* ── AI PANEL — always-on parallel revenue assistant ──────────────── */}
+      <div ref={aiPanelRef} className="bg-surface border border-accent/30 shadow-subtle">
+          {/* Handoff banner — only shown on NOT_POSSIBLE */}
+          {aiGuided && result?.state === "NOT_POSSIBLE" && (
+          <div className="bg-occuorange/5 border-b border-occuorange/20 px-6 py-3 flex items-center gap-3">
+            <Sparkles className="w-3.5 h-3.5 text-occuorange shrink-0" />
+            <p className="text-xs text-occuorange font-medium">
+              No {category} rooms for <span className="font-bold">{checkIn} → {checkOut}</span> — AI is searching for the best alternative
             </p>
-            <button
-              onClick={() => { setAiActive(false); setChatMessages([]); }}
-              className="ml-auto text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-2 py-1 bg-surface hover:bg-surface-2 shrink-0"
-            >
-              Dismiss
-            </button>
           </div>
+          )}
 
           {/* Panel header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-2/60">
             <div>
               <div className="flex items-center gap-2">
                 <Bot className="w-4 h-4 text-accent" />
-                <h3 className="font-serif font-bold text-lg text-text">AI Front Desk Agent</h3>
+                <h3 className="font-serif font-bold text-lg text-text">AI Revenue Assistant</h3>
               </div>
               <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest">
-                Gemini 2.5 · Powered by AI
+                Gemini 2.5 · Live hotel intelligence
               </p>
             </div>
             {chatMessages.length > 0 && (
               <button
-                onClick={() => { setChatMessages([]); }}
+                onClick={() => { setChatMessages([]); setAiGuided(false); }}
                 className="text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-2 py-1 bg-surface hover:bg-surface-2"
               >
                 Clear chat
@@ -602,9 +592,21 @@ export function ReceptionistView() {
             {chatMessages.length === 0 && !chatLoading && (
               <div className="flex-1 flex flex-col items-center justify-center text-center">
                 <Bot className="w-10 h-10 text-accent/25 mb-4" />
-                <p className="text-sm font-serif text-text-muted max-w-xs leading-relaxed">
-                  Consulting AI for alternatives…
+                <p className="text-sm font-serif font-bold text-text mb-1">Always on. Ask anything.</p>
+                <p className="text-xs text-text-muted max-w-xs leading-relaxed">
+                  Ask about room availability, tonight's occupancy, which category to push, upgrade opportunities, or anything about today's bookings.
                 </p>
+                <div className="mt-4 grid grid-cols-1 gap-2 w-full max-w-xs">
+                  {["What's looking good to sell today?", "Any upgrades available tonight?", "How's our occupancy this week?"].map(q => (
+                    <button
+                      key={q}
+                      onClick={() => { setChatInput(q); }}
+                      className="text-left text-[10px] text-accent border border-accent/20 bg-accent/5 px-3 py-2 hover:bg-accent/10 transition-colors font-medium"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             {chatMessages.map((msg, i) => <ChatBubble key={i} msg={msg} />)}
@@ -641,7 +643,6 @@ export function ReceptionistView() {
             </button>
           </div>
         </div>
-      )}
         </div>
 
       {/* Recent Bookings Sidebar */}
