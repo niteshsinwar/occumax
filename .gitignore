@@ -1,19 +1,32 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/**/*.pyc
-backend/backend.log
 backend/*.egg-info/
+backend/.pytest_cache/
 
-# Env / secrets
+# ── Secrets (never commit) ────────────────────────────────────────────────────
 backend/.env
 .env
+*.env.local
 
-# Node
+# ── Logs & runtime artifacts ──────────────────────────────────────────────────
+backend/backend.log
+*.log
+
+# ── Node ──────────────────────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
 frontend/.env.local
+frontend/.env
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.cursor/
+.vscode/
+.idea/
+*.swp
