@@ -96,13 +96,18 @@ jobs:
 
             # Run schema migrations (handles additive AND destructive changes)
             cd /opt/occumax/backend
-            # Stamp at baseline if DB has tables but no alembic_version tracking yet
             CURRENT=$(DATABASE_URL="${DEV_DATABASE_URL}" /opt/occumax/venv/bin/alembic current 2>&1 || true)
             if echo "$CURRENT" | grep -qE '[0-9a-f]{12}'; then
               echo "Alembic already tracking: $CURRENT"
             else
-              echo "No alembic revision found — stamping at initial schema baseline"
-              DATABASE_URL="${DEV_DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp f1a134d3b52e
+              DB_URL=$(echo "${DEV_DATABASE_URL}" | sed 's|postgresql+asyncpg://|postgresql://|;s|asyncpg://|postgresql://|')
+              TABLE_EXISTS=$(psql "$DB_URL" -tAc "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='rooms' AND table_schema='public')" 2>/dev/null || echo "f")
+              if [ "$TABLE_EXISTS" = "t" ]; then
+                echo "Tables exist but untracked — stamping baseline"
+                DATABASE_URL="${DEV_DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp f1a134d3b52e
+              else
+                echo "Fresh DB — running all migrations from scratch"
+              fi
             fi
             DATABASE_URL="${DEV_DATABASE_URL}" /opt/occumax/venv/bin/alembic upgrade head
 
