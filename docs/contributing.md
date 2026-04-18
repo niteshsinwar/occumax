@@ -3,16 +3,19 @@
 ## Branch Strategy
 
 ```
-main          ← production (protected, PR only)
-  └─ Dev      ← integration / staging (auto-deploys to dev server)
+main          ← production (auto-deploys to prod server)
+  └─ Dev      ← staging (auto-deploys to dev server)
        └─ feature/your-feature-name   ← your work
 ```
 
 1. Branch off `Dev` → `feature/your-feature-name`
-2. Open a PR against `Dev`
-3. Get at least 1 review
-4. Merge → auto-deploys to dev server (161.118.164.30)
-5. When `Dev` is stable → PR from `Dev` to `main` → auto-deploys to production
+2. Make changes, commit, push your feature branch
+3. Open a PR against `Dev`
+4. Get at least 1 review
+5. Merge → auto-deploys to dev server and runs all migrations
+6. When `Dev` is confirmed stable → PR from `Dev` to `main` → deploys to production
+
+---
 
 ## Commit Style
 
@@ -20,36 +23,56 @@ main          ← production (protected, PR only)
 feat: add split-stay flex booking endpoint
 fix: correct gap cost calculation for 2-night windows
 refactor: extract pricing logic into separate service
-docs: update architecture diagram
-chore: bump fastapi to 0.116
+docs: update architecture doc
+chore: bump fastapi version
 ```
 
 Types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`
 
+---
+
 ## Backend Changes
 
-- **New route**: add handler in `api/`, orchestration in `controllers/`, logic in `services/`
-- **Schema change**: edit `core/models/` → commit → deploy handles it automatically
-- **New config**: add to `config.py` + `backend/.env.server` (non-sensitive) or GitHub Secrets (sensitive)
+| Task | Steps |
+| --- | --- |
+| New route | Add handler in `api/`, orchestration in `controllers/`, logic in `services/` |
+| New schema column | Edit `core/models/` → `alembic revision --autogenerate` → review → commit both |
+| Drop/rename column | `alembic revision -m "..."` → write migration by hand → commit |
+| New config value | Add to `config.py` + `backend/.env.server` (non-sensitive) |
+| New dependency | Add to `requirements.txt`, commit |
+
+---
 
 ## Frontend Changes
 
-- **New page**: add file in `pages/`, register route in `App.tsx`
-- **New API call**: add to `api/client.ts` or a dedicated `api/*.ts` module
-- **New type**: add to `types/index.ts`
+| Task | Steps |
+| --- | --- |
+| New page | Add file in `pages/`, register route in `App.tsx` |
+| New API call | Add to `api/client.ts` |
+| New shared type | Add to `types/index.ts` |
+
+---
 
 ## Environment Variables
 
-Never commit `.env` files. Non-sensitive config goes in `backend/.env.server` (tracked). Sensitive values go in GitHub Secrets → Settings → Secrets and variables → Actions.
+| Kind | Where it lives | How to change |
+| --- | --- | --- |
+| Non-sensitive (hotel name, algo params) | `backend/.env.server` — committed to git | Edit file, commit, push |
+| Sensitive (DB URL, API keys) | GitHub Secrets | Ask the project owner |
 
-## Running Tests
+Never commit `.env`. It is gitignored and generated at deploy time from `.env.server` + GitHub Secrets.
+
+---
+
+## Verifying your changes
 
 ```bash
-# Backend
-cd backend
-pytest tests/ -v
+# Type-check frontend
+cd frontend && npm run build
 
-# Frontend (type check)
-cd frontend
-npm run build
+# Run backend tests
+cd backend && pytest tests/ -v
+
+# Hit the live dev API after pushing
+curl http://161.118.164.30/api/health
 ```
