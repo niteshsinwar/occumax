@@ -37,6 +37,8 @@ jobs:
 
       - name: Copy frontend build to server
         run: |
+          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} \
+            "mkdir -p /opt/occumax/frontend/dist"
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key" \
             frontend/dist/ \
