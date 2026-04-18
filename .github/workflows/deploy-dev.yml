@@ -94,7 +94,11 @@ jobs:
             # Install Python dependencies
             /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
 
-            # Restart backend (create_tables() on startup handles schema changes)
+            # Run schema migrations (handles additive AND destructive changes)
+            cd /opt/occumax/backend
+            /opt/occumax/venv/bin/alembic upgrade head
+
+            # Restart backend
             sudo systemctl restart occumax-backend
 
             # Wait up to 30s for backend to be ready
