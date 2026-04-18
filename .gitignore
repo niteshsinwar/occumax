@@ -29,3 +29,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# ── Claude Code (agent layer) ─────────────────────────────────────────────────
+# .claude/ is tracked intentionally — contains project config for Claude Code
+

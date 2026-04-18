@@ -61,13 +61,14 @@ jobs:
 
             REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git"
 
-            # If dir exists but is not a git repo, remove and reclone
-            if [ -d "/opt/occumax" ] && [ ! -d "/opt/occumax/.git" ]; then
-              sudo rm -rf /opt/occumax
-            fi
+            # Ensure /opt/occumax exists and is owned by ubuntu
+            sudo mkdir -p /opt/occumax
+            sudo chown ubuntu:ubuntu /opt/occumax
 
+            # If dir exists but is not a git repo, init git inside it
             if [ ! -d "/opt/occumax/.git" ]; then
-              git clone "$REPO_URL" /opt/occumax
+              git -C /opt/occumax init
+              git -C /opt/occumax remote add origin "$REPO_URL"
             fi
 
             cd /opt/occumax
