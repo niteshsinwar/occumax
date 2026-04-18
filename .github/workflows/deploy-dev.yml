@@ -35,10 +35,13 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.DEV_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Copy frontend build to server
+      - name: Prepare server directories
         run: |
           ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} \
-            "mkdir -p /opt/occumax/frontend/dist"
+            "sudo mkdir -p /opt/occumax/frontend/dist && sudo chown -R ubuntu:ubuntu /opt/occumax"
+
+      - name: Copy frontend build to server
+        run: |
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key" \
             frontend/dist/ \
