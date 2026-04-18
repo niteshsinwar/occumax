@@ -96,9 +96,17 @@ jobs:
 
             # Restart backend (create_tables() on startup handles schema changes)
             sudo systemctl restart occumax-backend
-            sleep 5
-            sudo systemctl is-active occumax-backend
-            curl -sf http://localhost:8000/docs > /dev/null && echo "Backend OK"
+
+            # Wait up to 30s for backend to be ready
+            for i in $(seq 1 10); do
+              sleep 3
+              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+                echo "Backend OK"
+                break
+              fi
+              echo "Waiting for backend... attempt $i"
+            done
+            curl -sf http://localhost:8000/health || (echo "Backend failed to start" && sudo journalctl -u occumax-backend -n 20 --no-pager && exit 1)
           ENDSSH
 
       - name: Reload Nginx
