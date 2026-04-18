@@ -49,4 +49,12 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "hotel": settings.HOTEL_NAME, "schema_version": "eb84ad0808aa"}
+    from services.database import AsyncSessionLocal
+    from sqlalchemy import text
+    try:
+        async with AsyncSessionLocal() as db:
+            row = await db.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+            version = row.scalar_one_or_none() or "unknown"
+    except Exception:
+        version = "unknown"
+    return {"status": "ok", "hotel": settings.HOTEL_NAME, "schema_version": version}
