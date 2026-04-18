@@ -73,11 +73,18 @@ Edit the SQLAlchemy models in `backend/core/models/`, commit, and push. The back
 
 Non-sensitive settings (hotel name, window days, gap costs) live in `backend/.env.server` — tracked in git. Edit and commit to apply to the target environment. Sensitive values (DB URL, API keys) live in GitHub Secrets only.
 
-## Contributing
+## Documentation
 
-See [docs/contributing.md](docs/contributing.md) and [docs/architecture.md](docs/architecture.md).
+| Doc | Purpose |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Request flow, layer responsibilities, schema management |
+| [docs/deployment.md](docs/deployment.md) | CI/CD, debugging deploys, updating secrets, server setup |
+| [docs/oracle-infrastructure.md](docs/oracle-infrastructure.md) | All Oracle Cloud resource IDs, SSH, networking, CLI commands |
+| [docs/contributing.md](docs/contributing.md) | Branch strategy, commit style, team workflow |
+| [CLAUDE.md](CLAUDE.md) | Agent guide — read by Claude Code automatically |
 
-Branch strategy:
-- `Dev` → development & testing → auto-deploys to dev server
-- `main` → production → auto-deploys to production server
-- Feature branches → open PR against `Dev`
+## Branch Strategy
+
+- Feature branches → PR against `Dev`
+- `Dev` → auto-deploys to dev server on push
+- `main` → auto-deploys to production on push
