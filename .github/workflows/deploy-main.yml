@@ -1,0 +1,92 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_URL: http://${{ secrets.MAIN_HOST }}/api
+        run: |
+          npm ci
+          npm run build
+
+      - name: Copy frontend build to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.MAIN_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "frontend/dist/"
+          target: "/opt/occumax/frontend/"
+          strip_components: 1
+
+      - name: Deploy backend & restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.MAIN_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          timeout: 180s
+          script: |
+            set -e
+
+            # Clone or pull latest code
+            if [ ! -d "/opt/occumax/.git" ]; then
+              git clone https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/niteshsinwar/occumax.git /opt/occumax
+            else
+              cd /opt/occumax
+              git fetch origin
+              git checkout main
+              git reset --hard origin/main
+            fi
+
+            # Build .env from repo config + GitHub Secrets (single source of truth)
+            cat /opt/occumax/backend/.env.server > /opt/occumax/.env
+            echo "DATABASE_URL=${{ secrets.MAIN_DATABASE_URL }}" >> /opt/occumax/.env
+            echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> /opt/occumax/.env
+            echo "CORS_ORIGINS=http://${{ secrets.MAIN_HOST }}" >> /opt/occumax/.env
+
+            # Install/update Python dependencies
+            /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
+
+            # Restart backend — create_tables() on startup handles all schema changes
+            sudo systemctl restart occumax-backend
+            sleep 5
+
+            # Confirm backend is running
+            sudo systemctl is-active occumax-backend
+            curl -sf http://localhost:8000/docs > /dev/null && echo "Backend OK"
+
+      - name: Reload Nginx
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.MAIN_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: sudo systemctl reload nginx
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -f http://${{ secrets.MAIN_HOST }}/ || exit 1
+          curl -f http://${{ secrets.MAIN_HOST }}/api/docs || exit 1
+          echo "Production deployment successful - http://${{ secrets.MAIN_HOST }}"
