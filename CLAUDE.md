@@ -152,24 +152,42 @@ Update GitHub Secret. See `docs/deployment.md#updating-github-secrets` for the s
 
 ---
 
-## Running locally
+## Running locally (hot-reload dev)
+
+Two processes run in parallel — backend on :8000, frontend on :5173.
+Both hot-reload instantly on file save without any push required.
 
 ```bash
-# Backend
+# Terminal 1 — Backend (auto-reloads on any .py file change)
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.server .env
-# Add to .env: DATABASE_URL=postgresql+asyncpg://... and GEMINI_API_KEY=...
-alembic upgrade head        # apply migrations to local DB
+# Add to .env:
+#   DATABASE_URL=postgresql+asyncpg://user:pass@localhost/occumax
+#   GEMINI_API_KEY=your-key
+alembic upgrade head          # sync local DB schema
 uvicorn main:app --reload --port 8000
 
-# Frontend (separate terminal)
+# Terminal 2 — Frontend (HMR on any .tsx/.ts/.css change)
 cd frontend
 npm install
 echo "VITE_API_URL=http://localhost:8000" > .env.local
-npm run dev
+npm run dev                   # opens http://localhost:5173
 ```
+
+### What to change to see it live locally
+
+| Change type | What to edit | When visible |
+| --- | --- | --- |
+| Backend logic/API | Any `backend/**/*.py` | Instantly (uvicorn --reload) |
+| Frontend UI | Any `frontend/src/**/*.tsx` | Instantly (Vite HMR) |
+| Add DB column | Edit model → `alembic revision --autogenerate -m "..."` → `alembic upgrade head` | After alembic runs |
+| Non-sensitive config | `backend/.env.server` → copy to `.env` → restart uvicorn | After restart |
+| Sensitive config | Edit `.env` directly (never commit) | After restart |
+
+**Rule:** local changes are visible instantly. To deploy to dev server, `git push origin Dev`.
+Schema changes need `alembic upgrade head` run locally AND pushed to be applied on the server via CI.
 
 ---
 

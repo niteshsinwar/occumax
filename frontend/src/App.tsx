@@ -94,6 +94,7 @@ function AppLayout() {
                 <li>V2 Matrix Optimization Engine</li>
                 <li>Zero-Latency Booking Resolution</li>
                 <li>HHI Automated Reallocation</li>
+                <li>Oracle Cloud · Mumbai Region</li>
               </ul>
             </div>
             <div className="md:ml-auto">

@@ -49,4 +49,4 @@ async def startup():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "hotel": settings.HOTEL_NAME}
+    return {"status": "ok", "hotel": settings.HOTEL_NAME, "schema_version": "eb84ad0808aa"}

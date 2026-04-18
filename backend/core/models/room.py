@@ -14,5 +14,6 @@ class Room(Base):
     base_rate: Mapped[float] = mapped_column(Float)
     floor_number: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)  # new column test
 
     slots: Mapped[list["Slot"]] = relationship("Slot", back_populates="room")

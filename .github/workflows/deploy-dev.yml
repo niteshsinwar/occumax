@@ -96,7 +96,7 @@ jobs:
 
             # Run schema migrations (handles additive AND destructive changes)
             cd /opt/occumax/backend
-            /opt/occumax/venv/bin/alembic upgrade head
+            DATABASE_URL="${DEV_DATABASE_URL}" /opt/occumax/venv/bin/alembic upgrade head
 
             # Restart backend
             sudo systemctl restart occumax-backend
