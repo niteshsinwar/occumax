@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from controllers import receptionist as ctrl
 from core.models import Room, Slot, Booking
-from core.models.enums import BlockType, Channel, RoomCategory
+from core.models.enums import BlockType, RoomCategory
 from core.schemas import BookingRequestIn
 
 logger = logging.getLogger(__name__)
@@ -678,19 +678,22 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
                         orphan_nights += 1
 
-            # Recent pickup (last 7 days)
+            # Recent pickup (last 7 days) — by category only (Booking has no channel column)
             cutoff = today - timedelta(days=7)
             recent_bookings = (await db.execute(
-                select(Booking.room_category, Booking.channel)
+                select(Booking.room_category)
                 .where(Booking.created_at >= cutoff, Booking.is_live == True)
             )).all()
             recent_by_cat: dict[str, int] = {}
-            recent_by_channel: dict[str, int] = {}
             for b in recent_bookings:
                 cat = b.room_category.value if hasattr(b.room_category, "value") else str(b.room_category)
-                ch = b.channel.value if b.channel and hasattr(b.channel, "value") else (str(b.channel) if b.channel else "OTA")
                 recent_by_cat[cat] = recent_by_cat.get(cat, 0) + 1
-                recent_by_channel[ch] = recent_by_channel.get(ch, 0) + 1
+
+            # Channel breakdown from today's slots (Slot has channel column)
+            channel_counts: dict[str, int] = {}
+            for s in today_slots:
+                ch = s.channel.value if s.channel and hasattr(s.channel, "value") else "OTA"
+                channel_counts[ch] = channel_counts.get(ch, 0) + 1
 
             return json.dumps({
                 "tonight": {
@@ -704,7 +707,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                 "week_booked_nights": week_booked_nights,
                 "orphan_nights_next_20_days": orphan_nights,
                 "last_7_day_pickup_by_category": recent_by_cat,
-                "last_7_day_pickup_by_channel": recent_by_channel,
+                "tonight_channel_mix": channel_counts,
                 "market_note": (
                     "Hotel is in Pune, India. Weekdays = corporate IT sector guests "
                     "(rate-inelastic). Weekends = leisure from Mumbai/Nashik (price-sensitive). "
