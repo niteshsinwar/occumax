@@ -45,33 +45,36 @@ jobs:
             ubuntu@${{ secrets.DEV_HOST }}:/opt/occumax/frontend/dist/
 
       - name: Deploy backend & restart
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DEV_DATABASE_URL: ${{ secrets.DEV_DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEV_HOST: ${{ secrets.DEV_HOST }}
         run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} << 'ENDSSH'
-            set -e
-
-            # Pull latest code
-            if [ ! -d "/opt/occumax/.git" ]; then
-              git clone https://x-access-token:GHTOKEN@github.com/niteshsinwar/occumax.git /opt/occumax
-            else
-              cd /opt/occumax
-              git fetch origin
-              git checkout Dev
-              git reset --hard origin/Dev
-            fi
-          ENDSSH
-
           ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.DEV_HOST }} \
-            GH_TOKEN="${{ secrets.GH_TOKEN }}" \
-            DEV_DATABASE_URL="${{ secrets.DEV_DATABASE_URL }}" \
-            GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-            DEV_HOST="${{ secrets.DEV_HOST }}" \
+            GH_TOKEN="$GH_TOKEN" \
+            DEV_DATABASE_URL="$DEV_DATABASE_URL" \
+            GEMINI_API_KEY="$GEMINI_API_KEY" \
+            DEV_HOST="$DEV_HOST" \
             bash << 'ENDSSH'
             set -e
-            cd /opt/occumax
 
-            # Fix git remote with real token if first clone used placeholder
-            git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git
-            git fetch origin && git checkout Dev && git reset --hard origin/Dev
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git"
+
+            # If dir exists but is not a git repo, remove and reclone
+            if [ -d "/opt/occumax" ] && [ ! -d "/opt/occumax/.git" ]; then
+              sudo rm -rf /opt/occumax
+            fi
+
+            if [ ! -d "/opt/occumax/.git" ]; then
+              git clone "$REPO_URL" /opt/occumax
+            fi
+
+            cd /opt/occumax
+            git remote set-url origin "$REPO_URL"
+            git fetch origin
+            git checkout Dev
+            git reset --hard origin/Dev
 
             # Build .env from repo config + injected secrets
             cat /opt/occumax/backend/.env.server > /opt/occumax/.env
