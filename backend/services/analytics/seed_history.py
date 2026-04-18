@@ -151,7 +151,7 @@ async def seed_analytics_history(
         clear_res = await db.execute(
             update(Slot)
             .where(Slot.booking_id.in_(existing_booking_ids))
-            .values(block_type=BlockType.EMPTY, booking_id=None, channel=Channel.OTA)
+            .values(block_type=BlockType.EMPTY, booking_id=None, channel=Channel.DIRECT)
             .execution_options(synchronize_session=False)
         )
         cleared_slots = int(clear_res.rowcount or 0)

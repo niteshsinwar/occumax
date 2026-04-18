@@ -19,7 +19,7 @@ class Slot(Base):
     booking_id: Mapped[Optional[str]] = mapped_column(ForeignKey("bookings.id"), nullable=True)
     current_rate: Mapped[float] = mapped_column(Float)
     floor_rate: Mapped[float] = mapped_column(Float, default=0.0)
-    channel: Mapped[Channel] = mapped_column(Enum(Channel), default=Channel.OTA)
+    channel: Mapped[Channel] = mapped_column(Enum(Channel), default=Channel.DIRECT)
     channel_partner: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     min_stay_active: Mapped[bool] = mapped_column(Boolean, default=False)
     min_stay_nights: Mapped[int] = mapped_column(Integer, default=1)
