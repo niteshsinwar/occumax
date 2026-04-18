@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { format, addDays } from "date-fns";
-import { checkAvailability, confirmBooking, confirmSplitStay, findSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
+import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
 import type { ShuffleResult, RoomCategory, ComparisonTable, Alternative, SplitSegment } from "../types";
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User } from "lucide-react";
@@ -182,109 +182,6 @@ export function ReceptionistView() {
       };
       setChatMessages(prev => [...prev, aMsg]);
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-
-      // ── Post-process: if AI returned no actionable card, run deterministic
-      // fallback pipeline silently and append a card to the chat.
-      // Covers: AI mentions alternative verbally without calling the tool,
-      // or AI's tool chain ends on NOT_POSSIBLE without trying shifted dates.
-      const ad = res.data.action_data;
-      const isActionable = ad?.type === "availability_result" && (ad.data as Record<string,unknown>)?.state !== "NOT_POSSIBLE";
-      const isSplitCard  = ad?.type === "split_stay_result";
-
-      // Deduplication: build a fingerprint of every card already shown in chat
-      // so we never inject the exact same room+dates twice in the same session.
-      const shownCards = new Set(
-        chatMessages
-          .filter(m => m.action_data?.type === "availability_result")
-          .map(m => {
-            const d = m.action_data!.data as Record<string, unknown>;
-            const req = d.request as Record<string, unknown> | undefined;
-            return `${d.room_id}|${req?.check_in}|${req?.check_out}`;
-          })
-      );
-
-      if (!aiGuided && !isActionable && !isSplitCard && checkIn && checkOut && category) {
-        const name    = guestName.trim() || "Walk-in Guest";
-        const nights  = Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000);
-        // +1 day shift — same duration, one day later
-        const shiftedIn  = new Date(checkIn);
-        shiftedIn.setDate(shiftedIn.getDate() + 1);
-        const shiftedOut = new Date(shiftedIn);
-        shiftedOut.setDate(shiftedOut.getDate() + nights);
-        const shiftedCheckIn  = shiftedIn.toISOString().slice(0, 10);
-        const shiftedCheckOut = shiftedOut.toISOString().slice(0, 10);
-
-        const LADDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"] as const;
-        const idx    = LADDER.indexOf(category as typeof LADDER[number]);
-        const upCat  = idx < LADDER.length - 1 ? LADDER[idx + 1] : null;
-        const dnCat  = idx > 0 ? LADDER[idx - 1] : null;
-
-        // Ordered fallback attempts
-        const attempts: Array<{ label: string; fn: () => Promise<unknown> }> = [
-          // split stay (exact dates)
-          { label: "split", fn: async () => {
-            const r = await findSplitStay({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state === "SPLIT_POSSIBLE") return { type: "split", data: r.data };
-            return null;
-          }},
-          // same category, same dates
-          { label: `${category} exact`, fn: async () => {
-            const r = await checkAvailability({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: category, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }},
-          // same category, +1 day shift
-          { label: `${category} +1d`, fn: async () => {
-            const r = await checkAvailability({ category, check_in: shiftedCheckIn, check_out: shiftedCheckOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: category, ci: shiftedCheckIn, co: shiftedCheckOut, data: r.data };
-            return null;
-          }},
-          // one category up, exact dates
-          ...(upCat ? [{ label: upCat, fn: async () => {
-            const r = await checkAvailability({ category: upCat, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: upCat, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }}] : []),
-          // one category down, exact dates
-          ...(dnCat ? [{ label: dnCat, fn: async () => {
-            const r = await checkAvailability({ category: dnCat, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: dnCat, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }}] : []),
-        ];
-
-        for (const attempt of attempts) {
-          try {
-            const result = await attempt.fn() as { type: string; data: Record<string, unknown>; cat?: string; ci?: string; co?: string } | null;
-            if (!result) continue;
-
-            let card: ChatMsg;
-            if (result.type === "split") {
-              const sd = result.data as { segments?: unknown[]; discount_pct?: number };
-              card = {
-                role: "assistant",
-                content: `${category} split stay available across ${sd.segments?.length} rooms with ${sd.discount_pct}% discount.`,
-                action_data: { type: "split_stay_result", data: { ...result.data, category } as Record<string, unknown> },
-              };
-            } else {
-              const avail = result.data as unknown as ShuffleResult;
-              const fingerprint = `${avail.room_id}|${result.ci}|${result.co}`;
-              if (shownCards.has(fingerprint)) continue; // already shown this exact card
-              card = {
-                role: "assistant",
-                content: `Room ${avail.room_id} (${result.cat}) is available ${result.ci} → ${result.co}.`,
-                action_data: {
-                  type: "availability_result",
-                  data: { ...avail, request: { category: result.cat, check_in: result.ci, check_out: result.co } } as Record<string, unknown>,
-                },
-              };
-            }
-            setChatMessages(prev => [...prev, card]);
-            setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-            break; // first success wins
-          } catch { /* continue to next attempt */ }
-        }
-      }
     } catch {
       show("AI agent error — please try again", "error");
     } finally {
