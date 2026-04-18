@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, api, getRevenueSummary } from "../api/client";
 import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
-import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
+import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
@@ -30,7 +30,7 @@ export function Dashboard() {
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
-  const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
+  const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async () => {
@@ -178,56 +178,86 @@ export function Dashboard() {
       <Toasts />
 
       {slotModal && (
-        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]">
-          <div className="bg-surface border border-border shadow-2xl p-6 w-full max-w-sm">
-            <h2 className="font-serif font-bold text-xl text-text mb-2">Configure Slot</h2>
-            <div className="text-sm text-text-muted mb-6 flex items-center gap-2">
-              Room {slotModal.room} · {slotModal.date}
-              <span
-                className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 border ${
-                  slotModal.block === "EMPTY"
-                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                    : slotModal.block === "SOFT"
-                      ? "bg-sky-100 text-sky-800 border-sky-300"
-                      : "bg-stone-100 text-stone-700 border-stone-300"
-                }`}
-              >
-                {slotModal.block}
+        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]" onClick={() => setSlotModal(null)}>
+          <div className="bg-surface border border-border shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-lg text-text">Room {slotModal.room}</h2>
+                <p className="text-[10px] text-text-muted uppercase tracking-widest mt-0.5">{slotModal.category} · {slotModal.date}</p>
+              </div>
+              <span className={`text-[10px] uppercase tracking-wider font-bold px-2.5 py-1 border ${
+                slotModal.block === "EMPTY" ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                : slotModal.block === "SOFT" ? "bg-sky-100 text-sky-800 border-sky-300"
+                : "bg-stone-100 text-stone-700 border-stone-300"
+              }`}>
+                {slotModal.block === "EMPTY" ? "Available" : slotModal.block === "SOFT" ? "Booked" : "Blocked"}
               </span>
             </div>
-            {slotModal.block === "SOFT" ? (
-              <div className="bg-occuorange/10 border border-occuorange/20 text-occuorange text-xs font-semibold p-3 mb-6">
-                Active guest reservation. Cannot override manually.
+
+            {/* Slot details */}
+            <div className="px-6 py-4 space-y-2.5 border-b border-border">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-muted font-medium">Night rate</span>
+                <span className="font-mono font-bold text-text">₹{slotModal.rate.toLocaleString()}</span>
               </div>
-            ) : (
-              <div className="flex gap-2 mb-6">
-                {slotModal.block !== "EMPTY" && (
-                  <button
-                    type="button"
-                    className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("EMPTY")}
-                  >
-                    <Unlock className="w-3.5 h-3.5" /> Free
-                  </button>
-                )}
-                {slotModal.block !== "HARD" && (
-                  <button
-                    type="button"
-                    className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("HARD")}
-                  >
-                    <Lock className="w-3.5 h-3.5" /> Block
-                  </button>
-                )}
+              {slotModal.block === "SOFT" && slotModal.channel && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text-muted font-medium">Booked via</span>
+                  <span className={`font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 border ${
+                    slotModal.channel === "OTA"    ? "bg-amber-50 text-amber-700 border-amber-200" :
+                    slotModal.channel === "DIRECT" ? "bg-teal-50 text-teal-700 border-teal-200" :
+                    slotModal.channel === "GDS"    ? "bg-violet-50 text-violet-700 border-violet-200" :
+                    slotModal.channel === "WALKIN" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                                    "bg-surface-2 text-text-muted border-border"
+                  }`}>{slotModal.channel}</span>
+                </div>
+              )}
+              {slotModal.block === "SOFT" && slotModal.booking_id && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text-muted font-medium">Booking ID</span>
+                  <span className="font-mono font-bold text-text bg-surface-2 border border-border px-2 py-0.5">{slotModal.booking_id}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-muted font-medium">Slot ID</span>
+                <span className="font-mono text-text-muted text-[10px]">{slotModal.id}</span>
               </div>
-            )}
-            <button
-              type="button"
-              className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
-              onClick={() => setSlotModal(null)}
-            >
-              Dismiss
-            </button>
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 py-4 space-y-2">
+              {slotModal.block === "SOFT" ? (
+                <p className="text-xs text-occuorange font-semibold bg-occuorange/8 border border-occuorange/20 px-3 py-2.5">
+                  Active booking — cannot override manually. Cancel via Front Desk.
+                </p>
+              ) : (
+                <div className="flex gap-2">
+                  {slotModal.block !== "EMPTY" && (
+                    <button type="button"
+                      className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                      onClick={() => handleSlotPatch("EMPTY")}
+                    >
+                      <Unlock className="w-3.5 h-3.5" /> Mark Available
+                    </button>
+                  )}
+                  {slotModal.block !== "HARD" && (
+                    <button type="button"
+                      className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                      onClick={() => handleSlotPatch("HARD")}
+                    >
+                      <Lock className="w-3.5 h-3.5" /> Block
+                    </button>
+                  )}
+                </div>
+              )}
+              <button type="button"
+                className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
+                onClick={() => setSlotModal(null)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -284,7 +314,7 @@ export function Dashboard() {
               <DollarSign className="w-3 h-3 text-accent" /> Avg rate today
             </div>
             <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              £{revenue.today_adr.toLocaleString()}
+              ₹{revenue.today_adr.toLocaleString()}
             </div>
             <div className="text-[10px] text-text-muted">per occupied room</div>
           </div>
@@ -293,7 +323,7 @@ export function Dashboard() {
               <TrendingUp className="w-3 h-3 text-accent" /> Next 7 nights
             </div>
             <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              £{revenue.week_revenue_on_books.toLocaleString()}
+              ₹{revenue.week_revenue_on_books.toLocaleString()}
             </div>
             <div className="text-[10px] text-text-muted">{revenue.week_occupancy_pct.toFixed(0)}% booked · {revenue.week_rooms_booked} nights</div>
           </div>
@@ -305,7 +335,7 @@ export function Dashboard() {
               {revenue.orphan_nights_at_risk}
             </div>
             <div className="text-[10px] text-text-muted">
-              {revenue.orphan_nights_at_risk > 0 ? `£${revenue.orphan_revenue_at_risk.toLocaleString()} at risk` : "No orphan gaps detected"}
+              {revenue.orphan_nights_at_risk > 0 ? `₹${revenue.orphan_revenue_at_risk.toLocaleString()} at risk` : "No orphan gaps detected"}
             </div>
           </div>
         </div>

@@ -1,6 +1,4 @@
 from __future__ import annotations
-from datetime import date
-from typing import Optional
 from pydantic import BaseModel
 
 
@@ -35,3 +33,18 @@ class CommitRequest(BaseModel):
 class CommitResult(BaseModel):
     applied: int
     slots_updated: int
+
+
+class ChannelAllocateRequest(BaseModel):
+    booking_source: str    # "MakeMyTrip" | "Goibibo" | "Direct" | "Walk-in" | "Amadeus" …
+    category: str          # DELUXE | SUITE | etc.
+    check_in: str          # ISO date
+    check_out: str         # ISO date
+    room_count: int = 1    # rooms to pre-allocate
+
+
+class ChannelAllocateResult(BaseModel):
+    allocated: int        # booking slots created
+    rooms: list[str]      # room IDs allocated
+    booking_ids: list[str]
+    message: str

@@ -81,6 +81,37 @@ class RevenueSummaryResponse(BaseModel):
     mtd_days: int
 
 
+class PartnerStat(BaseModel):
+    partner: str
+    room_nights: int
+    gross_revenue: float
+    net_revenue: float
+    avg_rate: float
+    share_of_channel_pct: float
+
+
+class ChannelStat(BaseModel):
+    channel: str
+    room_nights: int
+    gross_revenue: float
+    commission_pct: float
+    net_revenue: float
+    avg_rate: float
+    share_pct: float  # % of total occupied room nights
+    partners: list[PartnerStat] = []
+
+
+class ChannelPerformanceResponse(BaseModel):
+    as_of: date
+    window_start: date
+    window_end: date
+    channels: list[ChannelStat]
+    total_gross_revenue: float
+    total_net_revenue: float
+    total_room_nights: int
+    recommendation: str
+
+
 class LosBucket(BaseModel):
     nights: int
     count: int

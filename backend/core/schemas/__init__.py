@@ -12,6 +12,7 @@ from core.schemas.analytics import (
     PaceResponse,
     EventInsightsResponse,
     RevenueSummaryResponse,
+    ChannelPerformanceResponse,
 )
 from core.schemas.dashboard_optimise import (
     DashboardOptimisePreviewRequest,
@@ -25,5 +26,6 @@ __all__ = [
     "SplitSegmentOut", "SplitStayResult", "SplitStayConfirm",
     "SwapStep", "GapInfo", "OptimiseResult", "CommitRequest", "CommitResult",
     "OccupancyForecastResponse", "PaceResponse", "EventInsightsResponse", "RevenueSummaryResponse",
+    "ChannelPerformanceResponse",
     "DashboardOptimisePreviewRequest", "DashboardOptimisePreviewResponse",
 ]

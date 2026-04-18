@@ -7,6 +7,24 @@ import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCir
 
 const CATEGORIES: RoomCategory[] = ["STANDARD", "STUDIO", "DELUXE", "SUITE"];
 
+// Single "Booking Source" maps to channel + partner — two routes: channel or direct
+const BOOKING_SOURCES = [
+  { label: "Direct",       channel: "DIRECT", partner: null },
+  { label: "Walk-in",      channel: "WALKIN", partner: null },
+  { label: "MakeMyTrip",   channel: "OTA",    partner: "MakeMyTrip" },
+  { label: "Goibibo",      channel: "OTA",    partner: "Goibibo" },
+  { label: "Agoda",        channel: "OTA",    partner: "Agoda" },
+  { label: "Booking.com",  channel: "OTA",    partner: "Booking.com" },
+  { label: "Expedia",      channel: "OTA",    partner: "Expedia" },
+  { label: "Amadeus",      channel: "GDS",    partner: "Amadeus" },
+  { label: "Sabre",        channel: "GDS",    partner: "Sabre" },
+  { label: "Travelport",   channel: "GDS",    partner: "Travelport" },
+];
+
+function resolveSource(label: string) {
+  return BOOKING_SOURCES.find(s => s.label === label) ?? BOOKING_SOURCES[0];
+}
+
 // ── AI chat types ─────────────────────────────────────────────────────────────
 interface ChatMsg {
   role: "user" | "assistant";
@@ -37,6 +55,7 @@ export function ReceptionistView() {
   const [checkIn,        setCheckIn]        = useState(today);
   const [checkOut,       setCheckOut]       = useState(defaultOut);
   const [guestName,      setGuestName]      = useState("");
+  const [bookingSource,  setBookingSource]  = useState("Direct");
   const [checking,       setChecking]       = useState(false);
   const [confirming,     setConfirming]     = useState(false);
   const [result,         setResult]         = useState<ShuffleResult | null>(null);
@@ -125,9 +144,10 @@ export function ReceptionistView() {
   const handleConfirm = async () => {
     if (!result?.room_id) return;
     setConfirming(true);
+    const src = resolveSource(bookingSource);
     try {
       const res = await confirmBooking({
-        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest" },
+        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest", channel: src.channel, channel_partner: src.partner },
         room_id: result.room_id, swap_plan: result.swap_plan ?? undefined,
       });
       setLastConfirmed(res.data.booking_id);
@@ -377,6 +397,12 @@ export function ReceptionistView() {
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Name</label>
             <input type="text" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none font-serif" placeholder="Walk-in Guest" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
           </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Booking Source</label>
+            <select className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={bookingSource} onChange={e => setBookingSource(e.target.value)}>
+              {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}{s.channel === "OTA" ? " (OTA)" : s.channel === "GDS" ? " (GDS)" : ""}</option>)}
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center justify-between pt-4">
@@ -444,7 +470,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.nearbyDatesPm1}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, nearbyDatesPm1: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, nearbyDatesPm1: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${e.target.checked}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Nearby dates</div>
@@ -457,7 +487,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.differentCategory}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, differentCategory: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, differentCategory: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${e.target.checked}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Different category</div>
@@ -470,7 +504,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.splitStay}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, splitStay: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, splitStay: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${e.target.checked}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Split stay</div>
@@ -484,7 +522,11 @@ export function ReceptionistView() {
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.allowMixedCategorySplit}
                           disabled={!fallbackPrefs.splitStay}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, allowMixedCategorySplit: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, allowMixedCategorySplit: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${e.target.checked}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Mixed-category split</div>
@@ -828,10 +870,11 @@ function StepPill({ label, state }: { label: string; state: StepState }) {
 
 function ActionCard({ data }: { data: { type: string; data: Record<string, unknown> } }) {
   // Confirm-from-chat state — agent only recommends; receptionist must click to commit
-  const [guestName,   setGuestName]   = useState("");
-  const [confirming,  setConfirming]  = useState(false);
-  const [confirmed,   setConfirmed]   = useState<{ booking_id: string; room_id: string } | null>(null);
-  const [confirmErr,  setConfirmErr]  = useState<string | null>(null);
+  const [guestName,      setGuestName]      = useState("");
+  const [bookingSource,  setBookingSource]  = useState("Direct");
+  const [confirming,     setConfirming]     = useState(false);
+  const [confirmed,      setConfirmed]      = useState<{ booking_id: string; room_id: string } | null>(null);
+  const [confirmErr,     setConfirmErr]     = useState<string | null>(null);
   const { show } = useToast();
 
   if (data.type === "booking_confirmed") {
@@ -876,13 +919,15 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!d.segments?.length) return;
       setConfirmErr(null);
       setConfirming(true);
+      const splitSrc = resolveSource(bookingSource);
       try {
-        // Derive category from first segment's room_id prefix — or ask; for now use the form's active category
         const r = await confirmSplitStay({
-          guest_name:   guestName.trim(),
-          category:     d.category,
-          discount_pct: d.discount_pct,
-          segments:     d.segments,
+          guest_name:      guestName.trim(),
+          category:        d.category,
+          discount_pct:    d.discount_pct,
+          segments:        d.segments,
+          channel:         splitSrc.channel,
+          channel_partner: splitSrc.partner,
         });
         setConfirmed({ booking_id: r.data.stay_group_id, room_id: `${d.segments.length} rooms` });
         show(`Split stay confirmed — Group ${r.data.stay_group_id}`, "success");
@@ -986,13 +1031,16 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!guestName.trim()) { setConfirmErr("Enter guest name to confirm."); return; }
       setConfirmErr(null);
       setConfirming(true);
+      const src = resolveSource(bookingSource);
       try {
         const r = await confirmBooking({
           request: {
-            category:   d.request.category,
-            check_in:   d.request.check_in,
-            check_out:  d.request.check_out,
-            guest_name: guestName.trim(),
+            category:        d.request.category,
+            check_in:        d.request.check_in,
+            check_out:       d.request.check_out,
+            guest_name:      guestName.trim(),
+            channel:         src.channel,
+            channel_partner: src.partner,
           },
           room_id:   d.room_id,
           swap_plan: (d.swap_plan ?? []) as unknown[],
@@ -1052,15 +1100,22 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
               <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
                 Enter guest name and confirm to book
               </div>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 <input
                   type="text"
                   placeholder="Guest name"
                   value={guestName}
                   onChange={e => setGuestName(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleConfirm()}
-                  className="flex-1 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+                  className="flex-1 min-w-32 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
                 />
+                <select
+                  value={bookingSource}
+                  onChange={e => setBookingSource(e.target.value)}
+                  className="bg-surface border border-border px-2 py-1.5 text-xs text-text focus:outline-none focus:border-accent"
+                >
+                  {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
+                </select>
                 <button
                   onClick={handleConfirm}
                   disabled={confirming}
@@ -1086,7 +1141,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
 
 function ChatBubble({ msg }: { msg: ChatMsg }) {
   const isUser = msg.role === "user";
-  if (isUser && msg.content.startsWith("[HANDOFF]")) return null;
+  if (isUser && (msg.content.startsWith("[HANDOFF]") || msg.content.startsWith("[PREFS]"))) return null;
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className={`w-7 h-7 flex items-center justify-center shrink-0 mt-0.5 border ${

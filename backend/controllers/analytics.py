@@ -26,6 +26,9 @@ from core.schemas.analytics import (
     RevenueSummaryResponse,
     EventInsightsResponse,
     LosBucket,
+    ChannelStat,
+    PartnerStat,
+    ChannelPerformanceResponse,
 )
 from services.analytics.forecasting import build_expected_occupancy
 
@@ -648,4 +651,139 @@ async def get_revenue_summary(
         orphan_revenue_at_risk=round(orphan_rev, 0),
         mtd_revenue=round(mtd_revenue, 0),
         mtd_days=mtd_days,
+    )
+
+
+# OTA commission rates by channel (industry standard for India)
+_COMMISSION: dict[str, float] = {
+    "OTA":    0.18,  # MakeMyTrip/Goibibo avg 18%
+    "GDS":    0.10,  # GDS global distribution avg 10%
+    "DIRECT": 0.00,  # Direct booking — zero commission
+    "WALKIN": 0.00,  # Walk-in — zero commission
+    "CLOSED": 0.00,
+}
+
+
+async def get_channel_performance(
+    db: AsyncSession,
+    as_of: date,
+    window_days: int = 30,
+) -> ChannelPerformanceResponse:
+    """
+    Channel revenue breakdown for the past `window_days` days.
+    Computes gross revenue, commission-adjusted net revenue, and ADR per channel.
+    """
+    window_start = as_of - timedelta(days=window_days)
+
+    # Occupied slots with channel + partner info in the window
+    rows = (await db.execute(
+        select(Slot.channel, Slot.channel_partner, Slot.current_rate)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.block_type != BlockType.EMPTY,
+            Slot.date >= window_start,
+            Slot.date <= as_of,
+        )
+    )).all()
+
+    # Aggregate by (channel, partner)
+    channel_nights: dict[str, int] = {}
+    channel_gross: dict[str, float] = {}
+    partner_nights: dict[str, dict[str, int]] = {}    # {channel: {partner: nights}}
+    partner_gross: dict[str, dict[str, float]] = {}   # {channel: {partner: gross}}
+
+    for row in rows:
+        ch = row.channel.value if row.channel and hasattr(row.channel, "value") else "DIRECT"
+        pt = row.channel_partner or ("Direct" if ch == "DIRECT" else ("Walk-in" if ch == "WALKIN" else ch))
+        channel_nights[ch] = channel_nights.get(ch, 0) + 1
+        channel_gross[ch] = channel_gross.get(ch, 0.0) + float(row.current_rate)
+        _pn = partner_nights.setdefault(ch, {})
+        _pn[pt] = _pn.get(pt, 0) + 1
+        _pg = partner_gross.setdefault(ch, {})
+        _pg[pt] = _pg.get(pt, 0.0) + float(row.current_rate)
+
+    total_nights = sum(channel_nights.values())
+
+    stats: list[ChannelStat] = []
+    total_gross = 0.0
+    total_net = 0.0
+
+    for ch in sorted(channel_nights.keys()):
+        nights = channel_nights[ch]
+        gross = channel_gross[ch]
+        comm_pct = _COMMISSION.get(ch, 0.0)
+        net = gross * (1 - comm_pct)
+        avg_rate = round(gross / nights, 0) if nights else 0.0
+        share = round((nights / max(1, total_nights)) * 100, 1)
+
+        # Build per-partner breakdown
+        ch_partners: list[PartnerStat] = []
+        for pt, pt_nights in sorted(partner_nights.get(ch, {}).items(), key=lambda x: -x[1]):
+            pt_gross = partner_gross[ch].get(pt, 0.0)
+            pt_net = pt_gross * (1 - comm_pct)
+            ch_partners.append(PartnerStat(
+                partner=pt,
+                room_nights=pt_nights,
+                gross_revenue=round(pt_gross, 0),
+                net_revenue=round(pt_net, 0),
+                avg_rate=round(pt_gross / pt_nights, 0) if pt_nights else 0.0,
+                share_of_channel_pct=round((pt_nights / nights) * 100, 1),
+            ))
+
+        stats.append(ChannelStat(
+            channel=ch,
+            room_nights=nights,
+            gross_revenue=round(gross, 0),
+            commission_pct=round(comm_pct * 100, 0),
+            net_revenue=round(net, 0),
+            avg_rate=avg_rate,
+            share_pct=share,
+            partners=ch_partners,
+        ))
+        total_gross += gross
+        total_net += net
+
+    # Sort by room nights descending
+    stats.sort(key=lambda s: s.room_nights, reverse=True)
+
+    # Generate a recommendation
+    ota_share = next((s.share_pct for s in stats if s.channel == "OTA"), 0.0)
+    direct_share = next((s.share_pct for s in stats if s.channel == "DIRECT"), 0.0)
+    ota_stat = next((s for s in stats if s.channel == "OTA"), None)
+    commission_leak = round(total_gross - total_net, 0)
+
+    if ota_share > 60:
+        recommendation = (
+            f"OTA dependency is high at {ota_share}% of bookings. "
+            f"₹{int(commission_leak):,} lost to commissions this period. "
+            "Offer a 5% direct booking discount to shift guests off OTA — net revenue improves immediately."
+        )
+    elif direct_share > 50:
+        recommendation = (
+            f"Strong direct booking mix at {direct_share}%. "
+            f"Net revenue is ₹{int(total_net):,} vs gross ₹{int(total_gross):,} — minimal commission drain. "
+            "Keep incentivising direct with loyalty perks or early-bird rates."
+        )
+    elif ota_stat and ota_stat.avg_rate < (total_gross / max(1, total_nights)) * 0.95:
+        recommendation = (
+            "OTA bookings are arriving at a lower ADR than other channels. "
+            "Review rate parity — OTAs may be discounting without your approval. "
+            "Check rate caps in your OTA extranet."
+        )
+    else:
+        recommendation = (
+            f"Channel mix is balanced. Commission cost is ₹{int(commission_leak):,} this period. "
+            "Focus on pushing direct for high-value room categories (Deluxe/Suite) to maximise net yield."
+        )
+
+    return ChannelPerformanceResponse(
+        as_of=as_of,
+        window_start=window_start,
+        window_end=as_of,
+        channels=stats,
+        total_gross_revenue=round(total_gross, 0),
+        total_net_revenue=round(total_net, 0),
+        total_room_nights=total_nights,
+        recommendation=recommendation,
     )

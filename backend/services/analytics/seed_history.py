@@ -52,6 +52,12 @@ _LOS_WEIGHTS  = [10, 28, 30, 18, 7, 4, 3]
 _CHANNELS     = [Channel.OTA, Channel.DIRECT, Channel.GDS, Channel.WALKIN]
 _CHAN_WEIGHTS  = [60, 25, 10, 5]
 
+# Named partners per channel (realistic India market OTA mix)
+_OTA_PARTNERS   = ["MakeMyTrip", "Goibibo", "Agoda", "Booking.com", "Expedia"]
+_OTA_P_WEIGHTS  = [35, 25, 20, 15, 5]
+_GDS_PARTNERS   = ["Amadeus", "Sabre", "Travelport"]
+_GDS_P_WEIGHTS  = [55, 30, 15]
+
 
 def _target_fill(d: date) -> float:
     """Per-day target occupancy fraction, driven by DoW and season."""
@@ -219,6 +225,12 @@ async def seed_analytics_history(
                     check_in  = cur
                     check_out = cur + timedelta(days=los)
                     channel   = room_rng.choices(_CHANNELS, weights=_CHAN_WEIGHTS, k=1)[0]
+                    if channel == Channel.OTA:
+                        partner = room_rng.choices(_OTA_PARTNERS, weights=_OTA_P_WEIGHTS, k=1)[0]
+                    elif channel == Channel.GDS:
+                        partner = room_rng.choices(_GDS_PARTNERS, weights=_GDS_P_WEIGHTS, k=1)[0]
+                    else:
+                        partner = None
 
                     # Rate variation: OTA/GDS gets slight discount, DIRECT/WALKIN can go higher
                     rate_mul = {
@@ -259,6 +271,7 @@ async def seed_analytics_history(
                                 current_rate=effective_rate,
                                 floor_rate=0.0,
                                 channel=channel,
+                                channel_partner=partner,
                                 min_stay_active=False,
                                 min_stay_nights=1,
                             )
@@ -267,10 +280,11 @@ async def seed_analytics_history(
                             inserted_slots += 1
 
                         if slot.block_type == BlockType.EMPTY and slot.booking_id is None:
-                            slot.block_type   = BlockType.SOFT
-                            slot.booking_id   = booking.id
-                            slot.channel      = channel
-                            slot.current_rate = effective_rate
+                            slot.block_type      = BlockType.SOFT
+                            slot.booking_id      = booking.id
+                            slot.channel         = channel
+                            slot.channel_partner = partner
+                            slot.current_rate    = effective_rate
                             updated_slots    += 1
 
                         dcur += timedelta(days=1)

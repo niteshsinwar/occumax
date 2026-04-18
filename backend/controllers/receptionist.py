@@ -489,6 +489,13 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
                 slot.block_type = BlockType.EMPTY
                 slot.booking_id = None
 
+    # Resolve channel enum and partner from request
+    try:
+        req_channel = Channel(req.channel or "DIRECT")
+    except ValueError:
+        req_channel = Channel.DIRECT
+    req_partner = req.channel_partner or None
+
     # PASS 2: FILL all destination segments in the shuffle plan
     if body.swap_plan:
         for swap in body.swap_plan:
@@ -497,18 +504,29 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
             if not (to_room and bid):
                 continue
 
-            # We need to know the dates to fill. 
+            # We need to know the dates to fill.
             # The swap_plan dict has 'dates'.
             dates = swap.get("dates", [])
+
+            # Fetch the moved booking's original channel so we preserve it
+            src_res = await db.execute(
+                select(Slot).where(Slot.booking_id == bid).limit(1)
+            )
+            src_slot = src_res.scalar_one_or_none()
+            moved_channel = src_slot.channel if src_slot else Channel.DIRECT
+            moved_partner = src_slot.channel_partner if src_slot else None
+
             for d_str in dates:
                 d = date.fromisoformat(d_str)
                 target_slot_id = f"{to_room}_{d}"
                 tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
                 target_slot = tr.scalar_one_or_none()
-                
+
                 if target_slot:
-                    target_slot.block_type = BlockType.SOFT
-                    target_slot.booking_id = bid
+                    target_slot.block_type      = BlockType.SOFT
+                    target_slot.booking_id      = bid
+                    target_slot.channel         = moved_channel
+                    target_slot.channel_partner = moved_partner
                 else:
                     room_res = await db.execute(select(Room).where(Room.id == to_room))
                     room_obj = room_res.scalar_one_or_none()
@@ -519,7 +537,8 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
                         block_type=BlockType.SOFT,
                         booking_id=bid,
                         current_rate=room_obj.base_rate if room_obj else 0.0,
-                        channel=Channel.DIRECT,
+                        channel=moved_channel,
+                        channel_partner=moved_partner,
                     ))
             
             # Sync the Booking model for the moved guest
@@ -539,8 +558,10 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
         tr = await db.execute(select(Slot).where(Slot.id == slot_id))
         slot = tr.scalar_one_or_none()
         if slot:
-            slot.block_type = BlockType.SOFT
-            slot.booking_id = booking_id
+            slot.block_type      = BlockType.SOFT
+            slot.booking_id      = booking_id
+            slot.channel         = req_channel
+            slot.channel_partner = req_partner
         else:
             db.add(Slot(
                 id=slot_id,
@@ -549,7 +570,8 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
                 block_type=BlockType.SOFT,
                 booking_id=booking_id,
                 current_rate=base_rate,
-                channel=Channel.DIRECT,
+                channel=req_channel,
+                channel_partner=req_partner,
             ))
         cur += timedelta(days=1)
 
@@ -660,6 +682,12 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
     group_id = str(uuid.uuid4())[:8].upper()
     booking_ids: list[str] = []
 
+    try:
+        split_channel = Channel(body.channel or "DIRECT")
+    except ValueError:
+        split_channel = Channel.DIRECT
+    split_partner = body.channel_partner or None
+
     for idx, seg in enumerate(body.segments):
         if seg.check_in < today:
             raise HTTPException(status_code=400, detail="Segment check_in is in the past")
@@ -696,17 +724,20 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
             tr      = await db.execute(select(Slot).where(Slot.id == slot_id))
             slot    = tr.scalar_one_or_none()
             if slot:
-                slot.block_type = BlockType.SOFT
-                slot.booking_id = booking_id
+                slot.block_type      = BlockType.SOFT
+                slot.booking_id      = booking_id
+                slot.channel         = split_channel
+                slot.channel_partner = split_partner
             else:
                 db.add(Slot(
-                    id           = slot_id,
-                    room_id      = seg.room_id,
-                    date         = cur,
-                    block_type   = BlockType.SOFT,
-                    booking_id   = booking_id,
-                    current_rate = rate,
-                    channel      = Channel.DIRECT,
+                    id              = slot_id,
+                    room_id         = seg.room_id,
+                    date            = cur,
+                    block_type      = BlockType.SOFT,
+                    booking_id      = booking_id,
+                    current_rate    = rate,
+                    channel         = split_channel,
+                    channel_partner = split_partner,
                 ))
             cur += timedelta(days=1)
 

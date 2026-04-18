@@ -29,7 +29,7 @@ export const checkAvailability = (body: {
 }) => api.post("/receptionist/check", body);
 
 export const confirmBooking = (body: {
-  request: { category: string; check_in: string; check_out: string; guest_name?: string };
+  request: { category: string; check_in: string; check_out: string; guest_name?: string; channel?: string; channel_partner?: string | null };
   room_id: string;
   swap_plan?: unknown[];
 }) => api.post("/receptionist/confirm", body);
@@ -45,15 +45,25 @@ export const findSplitStayFlex = (body: {
 export const listBookings = () => api.get("/receptionist/bookings");
 
 export const confirmSplitStay = (body: {
-  guest_name:   string;
-  category:     string;
-  discount_pct: number;
+  guest_name:      string;
+  category:        string;
+  discount_pct:    number;
+  channel?:        string;
+  channel_partner?: string | null;
   segments: {
     room_id: string; floor: number;
     check_in: string; check_out: string;
     nights: number; base_rate: number; discounted_rate: number;
   }[];
 }) => api.post("/receptionist/confirm-split", body);
+
+export const channelAllocate = (body: {
+  booking_source: string;
+  category: string;
+  check_in: string;
+  check_out: string;
+  room_count: number;
+}) => api.post("/manager/channel-allocate", body);
 
 // AI Agent
 export const getAiContext = () => api.get("/ai/context");
@@ -67,6 +77,9 @@ export const commitPricing  = (items: { category: string; date: string; new_rate
 
 export const getRevenueSummary = (as_of?: string) =>
   api.get("/analytics/revenue-summary", as_of ? { params: { as_of } } : undefined);
+
+export const getChannelPerformance = (params?: { as_of?: string; window_days?: number }) =>
+  api.get("/analytics/channel-performance", params ? { params } : undefined);
 
 // Admin
 export const adminListRooms     = () => api.get("/admin/rooms");

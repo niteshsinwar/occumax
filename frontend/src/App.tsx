@@ -36,7 +36,7 @@ function AppLayout() {
                   to="/manager"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
-                  <LayoutDashboard className="w-4 h-4" /> Revenue
+                  <LayoutDashboard className="w-4 h-4" /> Manager
                 </NavLink>
                 <NavLink
                   to="/receptionist"

@@ -138,6 +138,18 @@ export function PricingPanel() {
 
   const grouped = result ? groupByCategory(result.recommendations) : [];
 
+  // Demand signals derived from recommendations
+  const signals = result ? (() => {
+    const recs = result.recommendations;
+    const highDemand  = recs.filter(r => r.occupancy_pct > 80);
+    const lowDemand   = recs.filter(r => r.occupancy_pct < 30);
+    const increasing  = recs.filter(r => r.change_pct > 0);
+    const decreasing  = recs.filter(r => r.change_pct < 0);
+    const highCats    = [...new Set(highDemand.map(r => r.category))];
+    const lowCats     = [...new Set(lowDemand.map(r => r.category))];
+    return { highDemand, lowDemand, increasing, decreasing, highCats, lowCats };
+  })() : null;
+
   // Build a flat index to look up rowState by rec index
   const flatIndex = (catIdx: number, rowIdx: number) => {
     if (!result) return 0;
@@ -285,6 +297,28 @@ export function PricingPanel() {
       {/* ── comparison table ──────────────────────────────────────────── */}
       {result && !committed && (
         <div className="flex-1 overflow-y-auto">
+
+          {/* Demand signals strip */}
+          {signals && (signals.highDemand.length > 0 || signals.lowDemand.length > 0) && (
+            <div className="px-6 py-3 border-b border-border bg-surface-2/40 flex flex-wrap gap-3 items-center">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-text-muted shrink-0">Demand Signals</span>
+              {signals.highCats.length > 0 && (
+                <span className="flex items-center gap-1.5 text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-2.5 py-1">
+                  <TrendingUp className="w-3 h-3" />
+                  {signals.highCats.join(", ")} — high demand · {signals.increasing.length} date{signals.increasing.length !== 1 ? "s" : ""} to increase
+                </span>
+              )}
+              {signals.lowCats.length > 0 && (
+                <span className="flex items-center gap-1.5 text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-2.5 py-1">
+                  <TrendingDown className="w-3 h-3" />
+                  {signals.lowCats.join(", ")} — low fill · {signals.decreasing.length} date{signals.decreasing.length !== 1 ? "s" : ""} need discounting
+                </span>
+              )}
+              <span className="ml-auto text-[9px] text-text-muted font-medium shrink-0">
+                Pune market · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+              </span>
+            </div>
+          )}
 
           {/* AI summary banner */}
           <div className="px-6 py-4 bg-accent/5 border-b border-accent/20 text-sm text-text leading-relaxed">

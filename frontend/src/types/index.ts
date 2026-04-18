@@ -2,6 +2,8 @@ export type BlockType = "HARD" | "SOFT" | "EMPTY";
 export type RoomCategory = "DELUXE" | "SUITE" | "STUDIO" | "STANDARD" | "PREMIUM" | "ECONOMY";
 
 
+export type Channel = "OTA" | "DIRECT" | "GDS" | "WALKIN" | "CLOSED";
+
 export interface HeatmapCell {
   slot_id: string;
   room_id: string;
@@ -10,6 +12,7 @@ export interface HeatmapCell {
   category: RoomCategory;
   current_rate: number;
   booking_id: string | null;
+  channel: Channel | null;
 }
 
 export interface HeatmapRow {
@@ -213,6 +216,37 @@ export interface PaceSeries {
 export interface PaceResponse {
   as_of: string;
   series: PaceSeries[];
+}
+
+export interface PartnerStat {
+  partner: string;
+  room_nights: number;
+  gross_revenue: number;
+  net_revenue: number;
+  avg_rate: number;
+  share_of_channel_pct: number;
+}
+
+export interface ChannelStat {
+  channel: string;
+  room_nights: number;
+  gross_revenue: number;
+  commission_pct: number;
+  net_revenue: number;
+  avg_rate: number;
+  share_pct: number;
+  partners: PartnerStat[];
+}
+
+export interface ChannelPerformanceResponse {
+  as_of: string;
+  window_start: string;
+  window_end: string;
+  channels: ChannelStat[];
+  total_gross_revenue: number;
+  total_net_revenue: number;
+  total_room_nights: number;
+  recommendation: string;
 }
 
 export interface RevenueSummaryResponse {

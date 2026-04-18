@@ -1,12 +1,12 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, fireOptimise, commitPlan, api } from "../api/client";
-import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult } from "../types";
+import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate } from "../api/client";
+import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult, ChannelPerformanceResponse, ChannelStat, PartnerStat } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { useToast } from "../components/shared/Toast";
 import { PricingPanel } from "../components/PricingPanel";
-import { Zap, CheckCircle2, XCircle, Lock, Unlock, TrendingUp, DollarSign } from "lucide-react";
+import { Zap, CheckCircle2, XCircle, Lock, Unlock, TrendingUp, DollarSign, BarChart2, RefreshCw, Sparkles, AlertTriangle } from "lucide-react";
 
-type ManagerTab = "yield" | "pricing";
+type ManagerTab = "yield" | "pricing" | "channels";
 
 type Stage = "idle" | "processing" | "preview" | "applied" | "converged";
 
@@ -89,6 +89,23 @@ export function ManagerDashboard() {
   const [slotModal,     setSlotModal]     = useState<{ id: string; room: string; date: string; block: string } | null>(null);
   const [appliedGains,  setAppliedGains]  = useState<{ gapsElim: number; nightsFreed: number; shuffleCount: number } | null>(null);
   const [convergedState, setConvergedState] = useState<"clean" | "stuck">("clean");
+  const [channelData,    setChannelData]    = useState<ChannelPerformanceResponse | null>(null);
+  const [channelLoading, setChannelLoading] = useState(false);
+  const [channelWindow,  setChannelWindow]  = useState<7 | 30 | 60>(30);
+
+  // Channel allocation form state
+  const ALLOC_SOURCES = ["Direct","Walk-in","MakeMyTrip","Goibibo","Agoda","Booking.com","Expedia","Amadeus","Sabre","Travelport"];
+  const ALLOC_CATS    = ["STANDARD","STUDIO","DELUXE","SUITE","PREMIUM","ECONOMY"];
+  const todayStr = new Date().toISOString().split("T")[0];
+  const defaultOut = new Date(Date.now() + 3 * 86400000).toISOString().split("T")[0];
+  const [allocSource,   setAllocSource]   = useState("MakeMyTrip");
+  const [allocCat,      setAllocCat]      = useState("DELUXE");
+  const [allocIn,       setAllocIn]       = useState(todayStr);
+  const [allocOut,      setAllocOut]      = useState(defaultOut);
+  const [allocCount,    setAllocCount]    = useState(1);
+  const [allocLoading,  setAllocLoading]  = useState(false);
+  const [allocResult,   setAllocResult]   = useState<{ message: string; rooms: string[]; booking_ids: string[] } | null>(null);
+
   const { show, Toasts } = useToast();
 
   // ── Data loading ────────────────────────────────────────────────────────
@@ -103,6 +120,45 @@ export function ManagerDashboard() {
   }, [show]);
 
   useEffect(() => { loadHeatmap(); }, [loadHeatmap]);
+
+  const loadChannelData = useCallback(async (window_days: number) => {
+    setChannelLoading(true);
+    try {
+      const res = await getChannelPerformance({ window_days });
+      setChannelData(res.data as ChannelPerformanceResponse);
+    } catch {
+      show("Failed to load channel data", "error");
+    } finally {
+      setChannelLoading(false);
+    }
+  }, [show]);
+
+  const handleAllocate = async () => {
+    if (!allocIn || !allocOut || allocCount < 1) return;
+    setAllocLoading(true);
+    setAllocResult(null);
+    try {
+      const res = await channelAllocate({
+        booking_source: allocSource,
+        category: allocCat,
+        check_in: allocIn,
+        check_out: allocOut,
+        room_count: allocCount,
+      });
+      setAllocResult(res.data);
+      show(res.data.message, "success");
+      loadChannelData(channelWindow);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Allocation failed";
+      show(msg, "error");
+    } finally {
+      setAllocLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "channels") loadChannelData(channelWindow);
+  }, [activeTab, channelWindow, loadChannelData]);
 
   // ── Optimization trigger ────────────────────────────────────────────────
   // Backend runs HHI optimisation inline and returns OptimiseResult.
@@ -245,7 +301,7 @@ export function ManagerDashboard() {
       {/* ── TAB BAR ───────────────────────────────────────────────────── */}
       <div className="flex items-end justify-between mb-8 border-b border-border/50">
         <div className="flex gap-0">
-          {(["yield", "pricing"] as ManagerTab[]).map(tab => (
+          {(["yield", "pricing", "channels"] as ManagerTab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -255,8 +311,9 @@ export function ManagerDashboard() {
                   : "border-transparent text-text-muted hover:text-text hover:border-border"
               }`}
             >
-              {tab === "yield"   && <><Zap        className="w-3.5 h-3.5" /> Room Optimisation</>}
-              {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
+              {tab === "yield"    && <><Zap        className="w-3.5 h-3.5" /> Room Optimisation</>}
+              {tab === "pricing"  && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
+              {tab === "channels" && <><BarChart2  className="w-3.5 h-3.5" /> Channels</>}
             </button>
           ))}
         </div>
@@ -337,6 +394,272 @@ export function ManagerDashboard() {
             </div>
           ) : (
             <PricingPanel />
+          )}
+        </div>
+      )}
+
+      {/* ── CHANNELS TAB ──────────────────────────────────────────────── */}
+      {activeTab === "channels" && (
+        <div className="space-y-6">
+          {/* Header + window selector */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-serif font-bold text-xl text-text">Channel Performance</h2>
+              <p className="text-xs text-text-muted mt-1 uppercase tracking-widest">Revenue by booking source · commission-adjusted net yield</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {([7, 30, 60] as const).map(w => (
+                <button key={w}
+                  onClick={() => setChannelWindow(w)}
+                  className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border transition-colors ${channelWindow === w ? "bg-text text-surface border-text" : "bg-surface text-text-muted border-border hover:bg-surface-2"}`}
+                >
+                  {w}d
+                </button>
+              ))}
+              <button onClick={() => loadChannelData(channelWindow)} className="ml-2 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface hover:bg-surface-2 flex items-center gap-1.5 text-text-muted">
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
+            </div>
+          </div>
+
+          {channelLoading && (
+            <div className="py-20 text-center">
+              <div className="w-6 h-6 border-2 border-border border-t-accent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-xs text-text-muted uppercase tracking-widest">Loading channel data…</p>
+            </div>
+          )}
+
+          {!channelLoading && channelData && (
+            <>
+              {/* KPI summary row */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-surface border border-border p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Total Gross</div>
+                  <div className="text-2xl font-serif font-bold text-text">₹{channelData.total_gross_revenue.toLocaleString()}</div>
+                  <div className="text-[10px] text-text-muted mt-1">{channelData.total_room_nights} room nights</div>
+                </div>
+                <div className="bg-surface border border-occugreen/30 p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Net Revenue</div>
+                  <div className="text-2xl font-serif font-bold text-occugreen">₹{channelData.total_net_revenue.toLocaleString()}</div>
+                  <div className="text-[10px] text-text-muted mt-1">after commissions</div>
+                </div>
+                <div className="bg-occuorange/5 border border-occuorange/30 p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3 text-occuorange" />Commission Drain</div>
+                  <div className="text-2xl font-serif font-bold text-occuorange">₹{(channelData.total_gross_revenue - channelData.total_net_revenue).toLocaleString()}</div>
+                  <div className="text-[10px] text-text-muted mt-1">paid to channels</div>
+                </div>
+                <div className="bg-surface border border-border p-4">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Avg Rate</div>
+                  <div className="text-2xl font-serif font-bold text-text">
+                    ₹{channelData.total_room_nights > 0 ? Math.round(channelData.total_gross_revenue / channelData.total_room_nights).toLocaleString() : 0}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1">gross ADR</div>
+                </div>
+              </div>
+
+              {/* Channel breakdown table */}
+              <div className="bg-surface border border-border">
+                <div className="px-6 py-3 border-b border-border bg-surface-2/60 flex items-center gap-2">
+                  <BarChart2 className="w-3.5 h-3.5 text-accent" />
+                  <span className="text-xs font-bold uppercase tracking-widest text-text">Channel Breakdown</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50">
+                        <th className="px-6 py-3 text-left">Channel</th>
+                        <th className="px-4 py-3 text-right">Nights</th>
+                        <th className="px-4 py-3 text-right">Share</th>
+                        <th className="px-4 py-3 text-right">Gross ADR</th>
+                        <th className="px-4 py-3 text-right">Commission</th>
+                        <th className="px-4 py-3 text-right">Gross Revenue</th>
+                        <th className="px-4 py-3 text-right">Net Revenue</th>
+                        <th className="px-6 py-3 text-left">Net Bar</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {channelData.channels.map((ch: ChannelStat) => {
+                        const maxNet = Math.max(...channelData.channels.map(c => c.net_revenue));
+                        const barWidth = maxNet > 0 ? Math.round((ch.net_revenue / maxNet) * 100) : 0;
+                        const isOta = ch.channel === "OTA" || ch.channel === "GDS";
+                        const channelBadge = `text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border ${
+                          ch.channel === "OTA"    ? "bg-amber-50 text-amber-700 border-amber-200" :
+                          ch.channel === "GDS"    ? "bg-violet-50 text-violet-700 border-violet-200" :
+                          ch.channel === "DIRECT" ? "bg-teal-50 text-teal-700 border-teal-200" :
+                          ch.channel === "WALKIN" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                                    "bg-surface-2 text-text-muted border-border"
+                        }`;
+                        return (
+                          <>
+                            {/* Channel summary row */}
+                            <tr key={ch.channel} className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
+                              <td className="px-6 py-3">
+                                <span className={channelBadge}>{ch.channel}</span>
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{ch.room_nights}</td>
+                              <td className="px-4 py-3 text-right">
+                                <span className="text-xs font-bold text-text">{ch.share_pct}%</span>
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono text-xs text-text">₹{ch.avg_rate.toLocaleString()}</td>
+                              <td className="px-4 py-3 text-right">
+                                {ch.commission_pct > 0 ? (
+                                  <span className="text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-1.5 py-0.5">{ch.commission_pct}%</span>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-1.5 py-0.5">0%</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">₹{ch.gross_revenue.toLocaleString()}</td>
+                              <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">₹{ch.net_revenue.toLocaleString()}</td>
+                              <td className="px-6 py-3">
+                                <div className="w-32 bg-surface-2 border border-border/30 h-3 relative">
+                                  <div className={`h-full ${isOta ? "bg-occuorange/60" : "bg-occugreen/60"}`} style={{ width: `${barWidth}%` }} />
+                                </div>
+                              </td>
+                            </tr>
+                            {/* Partner sub-rows — shown for channels that have named partners */}
+                            {ch.partners.map((pt: PartnerStat) => (
+                              <tr key={`${ch.channel}-${pt.partner}`} className="border-b border-border/10 bg-surface-2/20">
+                                <td className="px-6 py-1.5 pl-10">
+                                  <span className="text-[10px] text-text-muted font-medium">↳ {pt.partner}</span>
+                                </td>
+                                <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">{pt.room_nights}</td>
+                                <td className="px-4 py-1.5 text-right text-[10px] text-text-muted">{pt.share_of_channel_pct}% of {ch.channel}</td>
+                                <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.avg_rate.toLocaleString()}</td>
+                                <td className="px-4 py-1.5" />
+                                <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.gross_revenue.toLocaleString()}</td>
+                                <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.net_revenue.toLocaleString()}</td>
+                                <td className="px-6 py-1.5" />
+                              </tr>
+                            ))}
+                          </>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* AI Allocation Recommendation */}
+              <div className="bg-accent/5 border border-accent/20 p-6">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-4 h-4 text-accent" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">Revenue Intelligence · Channel Optimisation</div>
+                    <p className="text-sm text-text leading-relaxed mb-4">{channelData.recommendation}</p>
+                    {/* Allocation advice */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
+                      {channelData.channels.slice(0, 3).map((ch: ChannelStat) => {
+                        const netPct = channelData.total_gross_revenue > 0
+                          ? Math.round((ch.net_revenue / channelData.total_gross_revenue) * 100) : 0;
+                        const advice = ch.commission_pct === 0
+                          ? "Maximise allocation — zero commission, full revenue retained"
+                          : ch.share_pct > 50
+                          ? "High dependency — reduce allocation, push direct equivalent"
+                          : ch.share_pct < 10
+                          ? "Low volume — consider increasing if direct inventory is full"
+                          : "Balanced — maintain current allocation";
+                        return (
+                          <div key={ch.channel} className="bg-surface border border-border p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-bold uppercase tracking-widest text-text">{ch.channel}</span>
+                              <span className="text-[10px] font-bold text-text-muted">{netPct}% of net</span>
+                            </div>
+                            <div className="text-[10px] text-text-muted leading-relaxed">{advice}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* ── Channel Allocation Commit Panel ──────────────────────── */}
+              <div className="border border-border bg-surface p-6">
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-8 h-8 bg-text/5 border border-border flex items-center justify-center shrink-0">
+                    <TrendingUp className="w-4 h-4 text-text" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-text">Commit Channel Allocation</div>
+                    <div className="text-[10px] text-text-muted mt-0.5">Pre-block inventory for a booking source based on AI recommendation</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Booking Source</label>
+                    <select
+                      value={allocSource}
+                      onChange={e => setAllocSource(e.target.value)}
+                      className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    >
+                      {ALLOC_SOURCES.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Category</label>
+                    <select
+                      value={allocCat}
+                      onChange={e => setAllocCat(e.target.value)}
+                      className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    >
+                      {ALLOC_CATS.map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Check-in</label>
+                    <input
+                      type="date" value={allocIn} min={todayStr}
+                      onChange={e => setAllocIn(e.target.value)}
+                      className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Check-out</label>
+                    <input
+                      type="date" value={allocOut} min={allocIn}
+                      onChange={e => setAllocOut(e.target.value)}
+                      className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Rooms</label>
+                    <input
+                      type="number" min={1} max={10} value={allocCount}
+                      onChange={e => setAllocCount(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={handleAllocate}
+                      disabled={allocLoading}
+                      className="w-full bg-text text-surface font-bold uppercase tracking-widest text-[10px] px-3 py-2 hover:opacity-90 active:scale-95 disabled:opacity-40 flex items-center justify-center gap-1.5 transition-all"
+                    >
+                      {allocLoading ? <><AlertTriangle className="w-3 h-3 animate-pulse" />Working…</> : <>Allocate</>}
+                    </button>
+                  </div>
+                </div>
+
+                {allocResult && (
+                  <div className="bg-occugreen/5 border border-occugreen/30 p-3 text-xs">
+                    <div className="font-bold text-occugreen uppercase tracking-widest text-[10px] mb-1">Allocation committed</div>
+                    <div className="text-text">{allocResult.message}</div>
+                    {allocResult.rooms.length > 0 && (
+                      <div className="text-text-muted mt-1">Rooms: {allocResult.rooms.join(", ")} · Booking IDs: {allocResult.booking_ids.join(", ")}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {!channelLoading && !channelData && (
+            <div className="py-20 text-center border border-border bg-surface">
+              <BarChart2 className="w-8 h-8 text-accent/30 mx-auto mb-4" />
+              <p className="text-sm text-text-muted">No channel data available for this period.</p>
+            </div>
           )}
         </div>
       )}
