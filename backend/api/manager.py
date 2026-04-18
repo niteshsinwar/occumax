@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.database import get_db
 from core.schemas.manager import OptimiseResult, CommitRequest, CommitResult, ChannelAllocateRequest, ChannelAllocateResult
+from core.schemas.analytics import ChannelRecommendResponse
 from controllers import manager as ctrl
 
 router = APIRouter(prefix="/manager", tags=["manager"])
@@ -40,3 +41,13 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession = Depe
     Creates placeholder SOFT-blocked bookings tagged with the correct channel attribution.
     """
     return await ctrl.channel_allocate(body, db)
+
+
+@router.get("/channel-recommend", response_model=ChannelRecommendResponse)
+async def channel_recommend(db: AsyncSession = Depends(get_db)):
+    """
+    Run the Gemini channel allocation AI agent.
+    Analyses 14-day occupancy gaps and historical partner performance to return
+    ranked recommendations for which OTA/GDS partners should receive inventory.
+    """
+    return await ctrl.get_channel_recommendations(db)

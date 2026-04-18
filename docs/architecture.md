@@ -79,7 +79,11 @@ Key endpoint groups:
 | `GET /analytics/occupancy-forecast` | Forecast data |
 | `GET /analytics/pace` | Booking pace analytics |
 | `POST /manager/optimise` | Run the yield optimization algorithm |
-| `POST /ai/chat` | AI assistant (Gemini-backed) |
+| `POST /manager/commit` | Apply a swap plan from /optimise to the DB |
+| `POST /manager/channel-allocate` | Pre-block inventory for a specific booking source / OTA partner |
+| `GET /manager/channel-recommend` | Run Gemini channel AI — returns ranked OTA/GDS allocation recommendations |
+| `GET /analytics/channel-performance` | Historical revenue breakdown by channel and partner (net of commission) |
+| `POST /ai/chat` | AI receptionist agent (Gemini-backed, direct/walk-in only) |
 
 ---
 
@@ -98,10 +102,22 @@ Key endpoint groups:
 
 ## AI Agents
 
-Two LangGraph agents backed by Google Gemini (`GEMINI_API_KEY` secret):
+Three LangGraph agents backed by Google Gemini 2.5 Flash (`GEMINI_API_KEY` secret):
 
-- `services/ai/receptionist_agent.py` — conversational booking placement
-- `services/ai/pricing_agent.py` — dynamic rate recommendations
+- `services/ai/receptionist_agent.py` — conversational booking placement (direct/walk-in only)
+- `services/ai/pricing_agent.py` — dynamic rate recommendations per category/date
+- `services/ai/channel_agent.py` — OTA/GDS channel allocation analysis; tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`
+
+All agents share the same pattern: LangGraph `StateGraph` with a tool node + Gemini 2.5 Flash with `bind_tools`. Each is invoked via a single async `run_*_agent()` entry point called from the controller layer.
+
+## Channel Attribution
+
+Every `Slot` row carries `channel` (enum: OTA/GDS/DIRECT/WALKIN) and `channel_partner` (nullable string: "MakeMyTrip", "Amadeus", etc.). Two booking routes exist:
+
+- **Direct/Walk-in**: set at receptionist desk, `channel_partner = NULL`
+- **Channel (OTA/GDS)**: set via Manager → Channels allocation, `channel_partner` = named partner
+
+The `channel_partner` column was added in migration `b227ced3351d`.
 
 ---
 

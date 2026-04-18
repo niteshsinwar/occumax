@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
 from core.schemas.manager import SwapStep, GapInfo, OptimiseResult, CommitRequest, CommitResult, ChannelAllocateRequest, ChannelAllocateResult
+from core.schemas.analytics import ChannelRecommendResponse, ChannelRecommendation
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
+from services.ai.channel_agent import run_channel_agent
 
 logger = logging.getLogger(__name__)
 
@@ -319,3 +321,57 @@ def _iter_nights(start: date, end: date):
     while cur < end:
         yield cur
         cur += timedelta(days=1)
+
+
+async def get_channel_recommendations(db: AsyncSession) -> ChannelRecommendResponse:
+    """
+    Build occupancy context snapshot and invoke the Gemini channel agent.
+    Returns AI-generated channel allocation recommendations.
+    """
+    today = date.today()
+    look_end = today + timedelta(days=14)
+
+    rows = (await db.execute(
+        select(Room.category, Slot.date, Slot.block_type)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= today,
+            Slot.date < look_end,
+        )
+        .order_by(Slot.date)
+    )).all()
+
+    # Build per-category daily occupancy summary
+    from collections import defaultdict
+    cat_date: dict[str, dict[str, dict]] = defaultdict(lambda: defaultdict(lambda: {"total": 0, "occupied": 0}))
+    for cat, d, block_type in rows:
+        ds = d.isoformat()
+        cat_date[cat.value][ds]["total"] += 1
+        if block_type != BlockType.EMPTY:
+            cat_date[cat.value][ds]["occupied"] += 1
+
+    lines = []
+    for cat, dates in sorted(cat_date.items()):
+        lines.append(f"\n{cat}:")
+        for ds in sorted(dates.keys()):
+            info = dates[ds]
+            occ_pct = round(info["occupied"] / info["total"] * 100) if info["total"] else 0
+            empty = info["total"] - info["occupied"]
+            dow = date.fromisoformat(ds).strftime("%a")
+            lines.append(f"  {ds} ({dow}): {occ_pct}% occ, {empty}/{info['total']} empty")
+
+    context_text = "\n".join(lines) if lines else "No inventory data available."
+
+    raw = await run_channel_agent(context_text, today, db)
+
+    recs = [
+        ChannelRecommendation(**r)
+        for r in raw.get("recommendations", [])
+    ]
+    return ChannelRecommendResponse(
+        as_of=today.isoformat(),
+        analysis_window_days=14,
+        recommendations=recs,
+        summary=raw.get("summary", ""),
+    )

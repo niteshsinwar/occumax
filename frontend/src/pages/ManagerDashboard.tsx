@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate } from "../api/client";
-import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult, ChannelPerformanceResponse, ChannelStat, PartnerStat } from "../types";
+import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate, getChannelRecommendations } from "../api/client";
+import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult, ChannelPerformanceResponse, ChannelStat, PartnerStat, ChannelRecommendResponse, ChannelRecommendation } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { useToast } from "../components/shared/Toast";
 import { PricingPanel } from "../components/PricingPanel";
@@ -106,6 +106,12 @@ export function ManagerDashboard() {
   const [allocLoading,  setAllocLoading]  = useState(false);
   const [allocResult,   setAllocResult]   = useState<{ message: string; rooms: string[]; booking_ids: string[] } | null>(null);
 
+  // AI channel recommendations
+  const [aiRecs,        setAiRecs]        = useState<ChannelRecommendResponse | null>(null);
+  const [aiRecsLoading, setAiRecsLoading] = useState(false);
+  const [committedRecs, setCommittedRecs] = useState<Set<number>>(new Set());
+  const [skippedRecs,   setSkippedRecs]   = useState<Set<number>>(new Set());
+
   const { show, Toasts } = useToast();
 
   // ── Data loading ────────────────────────────────────────────────────────
@@ -159,6 +165,39 @@ export function ManagerDashboard() {
   useEffect(() => {
     if (activeTab === "channels") loadChannelData(channelWindow);
   }, [activeTab, channelWindow, loadChannelData]);
+
+  const handleRunAiAnalysis = async () => {
+    setAiRecsLoading(true);
+    setAiRecs(null);
+    setCommittedRecs(new Set());
+    setSkippedRecs(new Set());
+    try {
+      const res = await getChannelRecommendations();
+      setAiRecs(res.data as ChannelRecommendResponse);
+    } catch {
+      show("AI channel analysis failed", "error");
+    } finally {
+      setAiRecsLoading(false);
+    }
+  };
+
+  const handleCommitRec = async (rec: ChannelRecommendation, idx: number) => {
+    try {
+      await channelAllocate({
+        booking_source: rec.booking_source,
+        category: rec.category,
+        check_in: rec.check_in,
+        check_out: rec.check_out,
+        room_count: rec.room_count,
+      });
+      setCommittedRecs(prev => new Set(prev).add(idx));
+      show(`Allocated ${rec.room_count} ${rec.category} room(s) to ${rec.booking_source}`, "success");
+      loadChannelData(channelWindow);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Allocation failed";
+      show(msg, "error");
+    }
+  };
 
   // ── Optimization trigger ────────────────────────────────────────────────
   // Backend runs HHI optimisation inline and returns OptimiseResult.
@@ -574,6 +613,110 @@ export function ManagerDashboard() {
                   </div>
                 </div>
               </div>
+              {/* ── AI Channel Recommendation Panel ──────────────────────── */}
+              <div className="border border-accent/20 bg-accent/5 p-6">
+                <div className="flex items-center justify-between mb-5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-4 h-4 text-accent" />
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-accent">Gemini AI · Channel Allocation</div>
+                      <div className="text-[10px] text-text-muted mt-0.5">Analyses 14-day gaps + partner history to recommend where to push inventory</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleRunAiAnalysis}
+                    disabled={aiRecsLoading}
+                    className="bg-accent text-white text-[10px] font-bold uppercase tracking-widest px-5 py-2.5 hover:brightness-110 active:scale-95 disabled:opacity-50 flex items-center gap-2 transition-all"
+                  >
+                    {aiRecsLoading
+                      ? <><div className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin" /> Analysing…</>
+                      : <><Sparkles className="w-3 h-3" /> Run AI Analysis</>}
+                  </button>
+                </div>
+
+                {aiRecsLoading && (
+                  <div className="py-10 text-center">
+                    <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-xs text-text-muted">Gemini is analysing your inventory gaps and channel history…</p>
+                  </div>
+                )}
+
+                {aiRecs && !aiRecsLoading && (
+                  <div className="space-y-3">
+                    {aiRecs.summary && (
+                      <div className="bg-surface border border-border p-4 text-sm text-text leading-relaxed">
+                        {aiRecs.summary}
+                      </div>
+                    )}
+                    {aiRecs.recommendations.length === 0 && (
+                      <div className="py-8 text-center text-xs text-text-muted">No recommendations — your channel mix looks healthy.</div>
+                    )}
+                    {aiRecs.recommendations.map((rec: ChannelRecommendation, idx: number) => {
+                      const isCommitted = committedRecs.has(idx);
+                      const isSkipped   = skippedRecs.has(idx);
+                      const confColor = rec.confidence === "HIGH" ? "text-occugreen border-occugreen/40 bg-occugreen/5"
+                        : rec.confidence === "MEDIUM" ? "text-occuorange border-occuorange/40 bg-occuorange/5"
+                        : "text-text-muted border-border bg-surface-2";
+                      const typeColor = rec.channel_type === "OTA" ? "bg-amber-50 text-amber-700 border-amber-200"
+                        : rec.channel_type === "GDS" ? "bg-violet-50 text-violet-700 border-violet-200"
+                        : "bg-teal-50 text-teal-700 border-teal-200";
+                      return (
+                        <div key={idx} className={`bg-surface border p-4 transition-all ${isCommitted ? "border-occugreen/40 opacity-70" : isSkipped ? "border-border opacity-40" : "border-border"}`}>
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-2">
+                                <span className="font-bold text-sm text-text">{rec.booking_source}</span>
+                                <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border ${typeColor}`}>{rec.channel_type}</span>
+                                <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border ${confColor}`}>{rec.confidence}</span>
+                                <span className="text-[10px] text-text-muted font-medium">{rec.category}</span>
+                                <span className="text-[10px] text-text-muted">{rec.check_in} → {rec.check_out}</span>
+                                <span className="text-[10px] text-text-muted">{rec.room_count} room{rec.room_count > 1 ? "s" : ""}</span>
+                              </div>
+                              <p className="text-xs text-text-muted leading-relaxed mb-3">{rec.reasoning}</p>
+                              <div className="flex items-center gap-4 text-[10px] font-mono">
+                                <span className="text-text-muted">Gross <span className="text-text font-bold">₹{rec.expected_gross.toLocaleString()}</span></span>
+                                {rec.commission_cost > 0 && <span className="text-occuorange">Commission −₹{rec.commission_cost.toLocaleString()}</span>}
+                                <span className="text-occugreen font-bold">Net ₹{rec.expected_net.toLocaleString()}</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col gap-2 shrink-0">
+                              {isCommitted ? (
+                                <span className="text-[10px] font-bold text-occugreen flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Committed</span>
+                              ) : isSkipped ? (
+                                <span className="text-[10px] font-bold text-text-muted flex items-center gap-1"><XCircle className="w-3 h-3" /> Skipped</span>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => handleCommitRec(rec, idx)}
+                                    className="bg-text text-surface text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 hover:opacity-90 active:scale-95 flex items-center gap-1 transition-all"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" /> Commit
+                                  </button>
+                                  <button
+                                    onClick={() => setSkippedRecs(prev => new Set(prev).add(idx))}
+                                    className="bg-surface border border-border text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 hover:bg-surface-2 active:scale-95 flex items-center gap-1 transition-all text-text-muted"
+                                  >
+                                    <XCircle className="w-3 h-3" /> Skip
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!aiRecs && !aiRecsLoading && (
+                  <div className="py-8 text-center text-xs text-text-muted border border-dashed border-accent/20">
+                    Press "Run AI Analysis" — Gemini will check your gaps and recommend channel allocations.
+                  </div>
+                )}
+              </div>
+
               {/* ── Channel Allocation Commit Panel ──────────────────────── */}
               <div className="border border-border bg-surface p-6">
                 <div className="flex items-center gap-3 mb-5">

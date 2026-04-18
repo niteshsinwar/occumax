@@ -249,6 +249,27 @@ export interface ChannelPerformanceResponse {
   recommendation: string;
 }
 
+export interface ChannelRecommendation {
+  booking_source: string;
+  channel_type: string;
+  category: string;
+  check_in: string;
+  check_out: string;
+  room_count: number;
+  expected_gross: number;
+  commission_cost: number;
+  expected_net: number;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  reasoning: string;
+}
+
+export interface ChannelRecommendResponse {
+  as_of: string;
+  analysis_window_days: number;
+  recommendations: ChannelRecommendation[];
+  summary: string;
+}
+
 export interface RevenueSummaryResponse {
   as_of: string;
   today_occupancy_pct: number;

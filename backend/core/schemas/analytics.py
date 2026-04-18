@@ -112,6 +112,27 @@ class ChannelPerformanceResponse(BaseModel):
     recommendation: str
 
 
+class ChannelRecommendation(BaseModel):
+    booking_source: str        # "MakeMyTrip" | "Direct" | etc.
+    channel_type: str          # OTA | GDS | DIRECT | WALKIN
+    category: str
+    check_in: str              # ISO date
+    check_out: str             # ISO date
+    room_count: int
+    expected_gross: float
+    commission_cost: float
+    expected_net: float
+    confidence: str            # HIGH | MEDIUM | LOW
+    reasoning: str             # human-readable explanation
+
+
+class ChannelRecommendResponse(BaseModel):
+    as_of: str
+    analysis_window_days: int
+    recommendations: list[ChannelRecommendation]
+    summary: str
+
+
 class LosBucket(BaseModel):
     nights: int
     count: int

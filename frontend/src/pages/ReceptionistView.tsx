@@ -7,18 +7,10 @@ import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCir
 
 const CATEGORIES: RoomCategory[] = ["STANDARD", "STUDIO", "DELUXE", "SUITE"];
 
-// Single "Booking Source" maps to channel + partner — two routes: channel or direct
+// Receptionist desk = direct routes only. OTA/GDS allocations happen in Manager → Channels.
 const BOOKING_SOURCES = [
-  { label: "Direct",       channel: "DIRECT", partner: null },
-  { label: "Walk-in",      channel: "WALKIN", partner: null },
-  { label: "MakeMyTrip",   channel: "OTA",    partner: "MakeMyTrip" },
-  { label: "Goibibo",      channel: "OTA",    partner: "Goibibo" },
-  { label: "Agoda",        channel: "OTA",    partner: "Agoda" },
-  { label: "Booking.com",  channel: "OTA",    partner: "Booking.com" },
-  { label: "Expedia",      channel: "OTA",    partner: "Expedia" },
-  { label: "Amadeus",      channel: "GDS",    partner: "Amadeus" },
-  { label: "Sabre",        channel: "GDS",    partner: "Sabre" },
-  { label: "Travelport",   channel: "GDS",    partner: "Travelport" },
+  { label: "Direct",   channel: "DIRECT", partner: null },
+  { label: "Walk-in",  channel: "WALKIN", partner: null },
 ];
 
 function resolveSource(label: string) {
@@ -400,7 +392,7 @@ export function ReceptionistView() {
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Booking Source</label>
             <select className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={bookingSource} onChange={e => setBookingSource(e.target.value)}>
-              {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}{s.channel === "OTA" ? " (OTA)" : s.channel === "GDS" ? " (GDS)" : ""}</option>)}
+              {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
             </select>
           </div>
         </div>

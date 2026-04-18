@@ -81,6 +81,9 @@ export const getRevenueSummary = (as_of?: string) =>
 export const getChannelPerformance = (params?: { as_of?: string; window_days?: number }) =>
   api.get("/analytics/channel-performance", params ? { params } : undefined);
 
+export const getChannelRecommendations = () =>
+  api.get("/manager/channel-recommend");
+
 // Admin
 export const adminListRooms     = () => api.get("/admin/rooms");
 export const adminAddRoom       = (body: { id: string; category: string; base_rate: number; floor_number: number }) =>
