@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, fireOptimise, commitPlan, api, getChannelPerformance, channelAllocate, getChannelRecommendations, getChannelPartners } from "../api/client";
+import { getHeatmap, fireOptimise, commitPlan, patchSlot, getChannelPerformance, channelAllocate, getChannelRecommendations, getChannelPartners } from "../api/client";
 import type { HeatmapResponse, HeatmapRow, GapInfo, SwapStep, OptimiseResult, ChannelPerformanceResponse, ChannelStat, PartnerStat, ChannelRecommendResponse, ChannelRecommendation } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { useToast } from "../components/shared/Toast";
@@ -274,7 +274,7 @@ export function ManagerDashboard() {
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
-      await api.patch(`/admin/slots/${slotModal.id}`, { block_type, reason: "Manual edit by manager" });
+      await patchSlot(slotModal.id, { block_type, reason: "Manual edit by manager" });
       setSlotModal(null);
       await loadHeatmap();
     } catch (e: any) {
@@ -429,28 +429,7 @@ export function ManagerDashboard() {
       {/* ── PRICING TAB ───────────────────────────────────────────────── */}
       {activeTab === "pricing" && (
         <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
-          {stage !== "applied" && stage !== "converged" ? (
-            /* ── LOCKED overlay ─────────────────────────────────────────── */
-            <div className="flex-1 flex flex-col items-center justify-center py-24 text-center px-6">
-              <div className="w-14 h-14 rounded-full border-2 border-border flex items-center justify-center mb-6">
-                <Lock className="w-6 h-6 text-text-muted" />
-              </div>
-              <h3 className="font-serif font-bold text-xl text-text mb-3">
-                Fix your gaps first for better pricing
-              </h3>
-              <p className="text-xs text-text-muted max-w-sm leading-relaxed mb-6">
-                Run the room optimisation scan first. Pricing recommendations are most accurate when your calendar is well-organised — it helps us understand your real demand pattern.
-              </p>
-              <button
-                className="text-xs uppercase tracking-widest font-bold border border-border px-6 py-3 hover:bg-surface-2 transition-colors text-text flex items-center gap-2"
-                onClick={() => setActiveTab("yield")}
-              >
-                <Zap className="w-3.5 h-3.5 text-accent" /> Go to Room Optimisation
-              </button>
-            </div>
-          ) : (
-            <PricingPanel />
-          )}
+          <PricingPanel />
         </div>
       )}
 

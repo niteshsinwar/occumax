@@ -18,7 +18,12 @@ from datetime import date, timedelta
 from typing import Optional
 
 TARGET = sys.argv[1] if len(sys.argv) > 1 else "dev"
-BASE = "http://localhost:8000/api" if TARGET == "local" else "https://161.118.164.30.nip.io/api"
+if TARGET == "local":
+    BASE = "http://localhost:8000/api"
+elif TARGET == "main":
+    BASE = "https://80.225.202.88.nip.io/api"
+else:
+    BASE = "https://161.118.164.30.nip.io/api"
 
 TODAY = date.today()
 

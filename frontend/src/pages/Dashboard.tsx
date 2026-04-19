@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, api, getRevenueSummary } from "../api/client";
+import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot, getRevenueSummary } from "../api/client";
 import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
 import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
@@ -161,10 +161,7 @@ export function Dashboard() {
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
-      await api.patch(`/admin/slots/${slotModal.id}`, {
-        block_type,
-        reason: "Manual edit from Bird's Eye View dashboard",
-      });
+      await patchSlot(slotModal.id, { block_type, reason: "Manual edit from Bird's Eye View dashboard" });
       setSlotModal(null);
       await loadHeatmap();
     } catch (e: unknown) {

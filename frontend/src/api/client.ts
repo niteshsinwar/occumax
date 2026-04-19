@@ -84,6 +84,10 @@ export const getChannelPerformance = (params?: { as_of?: string; window_days?: n
 export const getChannelRecommendations = () =>
   api.get("/manager/channel-recommend");
 
+// Slot patch (shared across Dashboard, Manager, Admin)
+export const patchSlot = (slot_id: string, body: { block_type: "EMPTY" | "HARD"; reason?: string }) =>
+  api.patch(`/admin/slots/${slot_id}`, body);
+
 // Admin
 export const adminListRooms     = () => api.get("/admin/rooms");
 export const adminAddRoom       = (body: { id: string; category: string; base_rate: number; floor_number: number }) =>

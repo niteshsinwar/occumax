@@ -114,10 +114,12 @@ export interface SplitStayResult {
 }
 
 export interface SplitStayConfirm {
-  guest_name:   string;
-  category:     RoomCategory;
-  discount_pct: number;
-  segments:     SplitSegment[];
+  guest_name:       string;
+  category:         RoomCategory;
+  discount_pct:     number;
+  segments:         SplitSegment[];
+  channel?:         string;
+  channel_partner?: string | null;
 }
 
 export interface GapInfo {

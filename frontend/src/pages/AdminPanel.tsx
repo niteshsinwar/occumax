@@ -3,7 +3,7 @@ import {
   adminListRooms, adminAddRoom, adminUpdateRoom, adminDeleteRoom,
   adminListCategories,
   adminSeedAnalyticsHistory,
-  getHeatmap, api,
+  getHeatmap, patchSlot,
 } from "../api/client";
 import { useToast } from "../components/shared/Toast";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
@@ -351,7 +351,7 @@ export function AdminPanel() {
                   const label = next === "HARD" ? "Hard block" : "Free up";
                   if (!confirm(`${label} Room ${cell.room} on ${cell.date}?`)) return;
                   try {
-                    await api.patch(`/admin/slots/${cell.id}`, { block_type: next, reason: "Admin manual edit" });
+                    await patchSlot(cell.id, { block_type: next, reason: "Admin manual edit" });
                     show(`Slot ${next === "HARD" ? "hard-blocked" : "freed"}`, "success");
                     load();
                   } catch (e: unknown) { show(getErrorDetail(e) || "Failed to update slot", "error"); }
