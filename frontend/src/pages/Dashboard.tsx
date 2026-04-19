@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot, getRevenueSummary } from "../api/client";
-import type { HeatmapResponse, HeatmapRow, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
+import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot } from "../api/client";
+import type { HeatmapResponse, HeatmapRow, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse } from "../types";
 import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
@@ -9,7 +9,7 @@ import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionIn
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
-import { Grid3x3, RefreshCw, Lock, Unlock, TrendingUp, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
+import { Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 /**
@@ -27,16 +27,100 @@ function uniqueCategoriesFromHeatmapRows(rows: HeatmapRow[]): RoomCategory[] {
   return ordered;
 }
 
+/** KPI numbers derived from the same heatmap slice as the grid (category + week span). */
+type BirdseyeDashboardKpis = {
+  tonightOccupancyPct: number;
+  tonightRoomsOccupied: number;
+  tonightTotalRooms: number;
+  tonightInView: boolean;
+  avgRateInView: number;
+  avgRateNightCount: number;
+  orphanNightsAtRisk: number;
+  orphanRevenueAtRisk: number;
+};
+
+/**
+ * Builds occupancy, ADR-style average rate, and orphan-gap counts for the Bird's Eye KPI strip.
+ * Orphans match analytics semantics: EMPTY with non-EMPTY on both sides within the same room row.
+ */
+function computeBirdseyeDashboardKpis(
+  dates: string[],
+  rows: HeatmapRow[],
+  spanDays: number,
+  todayStr: string,
+): BirdseyeDashboardKpis {
+  const span = Math.min(Math.max(0, spanDays), dates.length);
+  const totalRooms = rows.length;
+  const todayIdx = dates.indexOf(todayStr);
+  const tonightInView = todayIdx >= 0 && todayIdx < dates.length;
+
+  let tonightRoomsOccupied = 0;
+  if (tonightInView && totalRooms > 0) {
+    for (const r of rows) {
+      const c = r.cells[todayIdx];
+      if (c && c.block_type !== "EMPTY") tonightRoomsOccupied += 1;
+    }
+  }
+  const tonightOccupancyPct =
+    totalRooms > 0 && tonightInView ? (tonightRoomsOccupied / totalRooms) * 100 : 0;
+
+  let rateSum = 0;
+  let rateCount = 0;
+  for (const r of rows) {
+    for (let i = 0; i < span; i++) {
+      const c = r.cells[i];
+      if (c && c.block_type !== "EMPTY") {
+        rateSum += c.current_rate;
+        rateCount += 1;
+      }
+    }
+  }
+  const avgRateInView = rateCount > 0 ? rateSum / rateCount : 0;
+
+  let orphanNightsAtRisk = 0;
+  let orphanRevenueAtRisk = 0;
+  if (span >= 3) {
+    for (const r of rows) {
+      for (let i = 1; i < span - 1; i++) {
+        const c = r.cells[i];
+        if (!c || c.block_type !== "EMPTY") continue;
+        const before = r.cells[i - 1];
+        const after = r.cells[i + 1];
+        if (
+          before &&
+          before.block_type !== "EMPTY" &&
+          after &&
+          after.block_type !== "EMPTY"
+        ) {
+          orphanNightsAtRisk += 1;
+          orphanRevenueAtRisk += c.current_rate;
+        }
+      }
+    }
+  }
+
+  return {
+    tonightOccupancyPct,
+    tonightRoomsOccupied,
+    tonightTotalRooms: totalRooms,
+    tonightInView,
+    avgRateInView,
+    avgRateNightCount: rateCount,
+    orphanNightsAtRisk,
+    orphanRevenueAtRisk: Math.round(orphanRevenueAtRisk),
+  };
+}
+
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
  * Date span (defaults to three weeks) and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
  * Room types for filters are taken from the heatmap payload (active rooms / categories from the API), not a fixed list.
+ * KPI strip below the filters is computed from the same filtered rows and visible day span (not the global revenue-summary endpoint).
  */
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
-  const [revenue, setRevenue] = useState<RevenueSummaryResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
   const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
@@ -67,19 +151,9 @@ export function Dashboard() {
     setIsHeatmapLoading(false);
   }, [show]);
 
-  const loadRevenue = useCallback(async () => {
-    try {
-      const res = await getRevenueSummary();
-      setRevenue(res.data);
-    } catch {
-      setRevenue(null);
-    }
-  }, []);
-
   useEffect(() => {
     loadHeatmap();
-    loadRevenue();
-  }, [loadHeatmap, loadRevenue]);
+  }, [loadHeatmap]);
 
   const loadForecast = useCallback(async () => {
     if (!heatmap) return;
@@ -125,6 +199,12 @@ export function Dashboard() {
     if (!heatmap) return 0;
     return Math.min(weekSpan * 7, heatmap.dates.length);
   }, [heatmap, weekSpan]);
+
+  const todayStr = formatISO(new Date(), { representation: "date" });
+  const dashboardKpis = useMemo((): BirdseyeDashboardKpis | null => {
+    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
+    return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays, todayStr);
+  }, [heatmap, filteredRows, spanDays, todayStr]);
 
   const snapshot = useMemo(() => {
     if (!heatmap) return null;
@@ -327,50 +407,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Revenue KPI strip */}
-      {revenue && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <BedDouble className="w-3 h-3 text-accent" /> Tonight
-            </div>
-            <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              {revenue.today_occupancy_pct.toFixed(0)}<span className="text-sm font-normal text-text-muted">%</span>
-            </div>
-            <div className="text-[10px] text-text-muted">{revenue.today_rooms_occupied} of {revenue.today_total_rooms} rooms</div>
-          </div>
-          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <DollarSign className="w-3 h-3 text-accent" /> Avg rate today
-            </div>
-            <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              ₹{revenue.today_adr.toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted">per occupied room</div>
-          </div>
-          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <TrendingUp className="w-3 h-3 text-accent" /> Next 7 nights
-            </div>
-            <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              ₹{revenue.week_revenue_on_books.toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted">{revenue.week_occupancy_pct.toFixed(0)}% booked · {revenue.week_rooms_booked} nights</div>
-          </div>
-          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${revenue.orphan_nights_at_risk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <AlertTriangle className={`w-3 h-3 ${revenue.orphan_nights_at_risk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
-            </div>
-            <div className={`text-2xl font-bold font-serif tabular-nums ${revenue.orphan_nights_at_risk > 0 ? "text-occuorange" : "text-text"}`}>
-              {revenue.orphan_nights_at_risk}
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {revenue.orphan_nights_at_risk > 0 ? `₹${revenue.orphan_revenue_at_risk.toLocaleString()} at risk` : "No orphan gaps detected"}
-            </div>
-          </div>
-        </div>
-      )}
-
       {heatmap && (
         <BirdseyeFilters
           weekSpan={weekSpan}
@@ -379,6 +415,57 @@ export function Dashboard() {
           selectedCategories={selectedCategories}
           onToggleCategory={handleToggleCategory}
         />
+      )}
+
+      {dashboardKpis && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <BedDouble className="w-3 h-3 text-accent" /> Tonight
+            </div>
+            <div className="text-2xl font-bold font-serif text-text tabular-nums">
+              {dashboardKpis.tonightInView
+                ? (
+                  <>
+                    {dashboardKpis.tonightOccupancyPct.toFixed(0)}
+                    <span className="text-sm font-normal text-text-muted">%</span>
+                  </>
+                )
+                : "—"}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {dashboardKpis.tonightInView
+                ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms`
+                : "Today is not on the loaded calendar"}
+            </div>
+          </div>
+          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <DollarSign className="w-3 h-3 text-accent" /> Average rate
+            </div>
+            <div className="text-2xl font-bold font-serif text-text tabular-nums">
+              ₹{Math.round(dashboardKpis.avgRateInView).toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {dashboardKpis.avgRateNightCount > 0
+                ? `Mean nightly rate · ${dashboardKpis.avgRateNightCount} occupied night${dashboardKpis.avgRateNightCount === 1 ? "" : "s"} in range`
+                : "No occupied nights in selected range"}
+            </div>
+          </div>
+          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.orphanNightsAtRisk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
+            </div>
+            <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
+              {dashboardKpis.orphanNightsAtRisk}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {dashboardKpis.orphanNightsAtRisk > 0
+                ? `₹${dashboardKpis.orphanRevenueAtRisk.toLocaleString()} at risk`
+                : "No orphan gaps in selected range"}
+            </div>
+          </div>
+        </div>
       )}
 
       {heatmap && (forecast || isForecastLoading) && (
