@@ -9,30 +9,32 @@ const WEEK_OPTIONS: Array<{ weeks: BirdseyeWeekSpan; label: string }> = [
   { weeks: 3, label: "3 weeks" },
 ];
 
-const ROOM_OPTIONS: Array<{ category: RoomCategory; label: string }> = [
-  { category: "STANDARD", label: "Standard" },
-  { category: "DELUXE", label: "Deluxe" },
-  { category: "SUITE", label: "Suite" },
-];
+/** Human-readable label for a room category enum value. */
+function categoryLabel(category: RoomCategory): string {
+  return category.charAt(0) + category.slice(1).toLowerCase();
+}
 
 interface BirdseyeFiltersProps {
   /** Number of weeks shown (7 days per week, capped by data in parent). */
   weekSpan: BirdseyeWeekSpan;
   /** Updates the visible calendar span. */
   onWeekSpanChange: (weeks: BirdseyeWeekSpan) => void;
-  /** Room categories included in the matrix and side panel (subset of Standard / Deluxe / Suite). */
+  /** Room categories that exist on the loaded heatmap (from the API / database). */
+  availableCategories: RoomCategory[];
+  /** Room categories included in the matrix and side panel. */
   selectedCategories: RoomCategory[];
   /** Toggles a category on or off; parent should keep at least one selected. */
   onToggleCategory: (category: RoomCategory) => void;
 }
 
 /**
- * Filter controls for Bird's Eye View: calendar length (1–3 weeks) and room-type checkboxes.
- * Only used on the Dashboard page; does not fetch data.
+ * Filter controls for Bird's Eye View: calendar length (1–3 weeks) and room-type toggles.
+ * Only used on the Dashboard page; room types are supplied by the parent from heatmap data.
  */
 export function BirdseyeFilters({
   weekSpan,
   onWeekSpanChange,
+  availableCategories,
   selectedCategories,
   onToggleCategory,
 }: BirdseyeFiltersProps) {
@@ -67,26 +69,30 @@ export function BirdseyeFilters({
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide mb-2">Room type</div>
-          <div className="flex flex-wrap gap-2">
-            {ROOM_OPTIONS.map(({ category, label }) => {
-              const active = selectedSet.has(category);
-              return (
-                <button
-                  key={category}
-                  type="button"
-                  onClick={() => onToggleCategory(category)}
-                  className={
-                    "text-xs font-semibold uppercase tracking-wider px-4 py-2.5 rounded-sm border transition-all " +
-                    (active
-                      ? "bg-text text-surface border-text"
-                      : "bg-surface-2 text-text border-border hover:bg-border")
-                  }
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          {availableCategories.length === 0 ? (
+            <p className="text-xs text-text-muted">No active rooms returned for this property.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {availableCategories.map(category => {
+                const active = selectedSet.has(category);
+                return (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => onToggleCategory(category)}
+                    className={
+                      "text-xs font-semibold uppercase tracking-wider px-4 py-2.5 rounded-sm border transition-all " +
+                      (active
+                        ? "bg-text text-surface border-text"
+                        : "bg-surface-2 text-text border-border hover:bg-border")
+                    }
+                  >
+                    {categoryLabel(category)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
