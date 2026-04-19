@@ -9,6 +9,8 @@ class BookingRequestIn(BaseModel):
     check_in: date
     check_out: date
     guest_name: str = "Walk-in Guest"
+    channel: Optional[str] = "DIRECT"        # OTA | DIRECT | GDS | WALKIN
+    channel_partner: Optional[str] = None    # MakeMyTrip, Goibibo, Amadeus, etc.
 
 
 class ShuffleResult(BaseModel):
@@ -54,7 +56,9 @@ class SplitStayResult(BaseModel):
 
 class SplitStayConfirm(BaseModel):
     """Body sent to POST /receptionist/confirm-split."""
-    guest_name:    str
-    category:      RoomCategory
-    discount_pct:  float
-    segments:      list[SplitSegmentOut]
+    guest_name:      str
+    category:        RoomCategory
+    discount_pct:    float
+    segments:        list[SplitSegmentOut]
+    channel:         Optional[str] = "DIRECT"
+    channel_partner: Optional[str] = None

@@ -8,6 +8,7 @@ from services.database import get_db
 from core.schemas import RoomCreate, RoomUpdate
 from controllers.admin import SlotPatch, SeedAnalyticsHistoryRequest
 from controllers import admin as ctrl
+from core.channel_config import OTA_PARTNERS, GDS_PARTNERS, DIRECT_SOURCES
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -49,3 +50,16 @@ async def patch_slot(
 @router.post("/seed-analytics-history")
 async def seed_analytics_history(body: SeedAnalyticsHistoryRequest, db: AsyncSession = Depends(get_db)):
     return await ctrl.seed_analytics_history(db=db, body=body)
+
+
+@router.get("/channel-partners")
+async def list_channel_partners():
+    """
+    Return all supported booking channel partners with their commission rates.
+    Frontend uses this instead of hardcoding partner names.
+    """
+    return {
+        "ota": OTA_PARTNERS,
+        "gds": GDS_PARTNERS,
+        "direct": DIRECT_SOURCES,
+    }

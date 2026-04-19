@@ -1,8 +1,15 @@
 import { format, parseISO } from "date-fns";
 import type { HeatmapRow } from "../../types";
 
-interface CellClickInfo {
-  id: string; room: string; date: string; block: string;
+export interface CellClickInfo {
+  id: string;
+  room: string;
+  date: string;
+  block: string;
+  rate: number;
+  channel: string | null;
+  booking_id: string | null;
+  category: string;
 }
 
 interface HeatmapGridProps {
@@ -16,16 +23,21 @@ interface HeatmapGridProps {
   onCellClick?: (cell: CellClickInfo) => void;
 }
 
-// Three and only three block types.
-// Bright palette: easy to distinguish at a glance.
-//   EMPTY → light green  (available night — good signal)
-//   SOFT  → sky blue     (booked night — neutral)
-//   HARD  → warm stone   (blocked/maintenance — warning)
 const CELL_CLASSES: Record<string, string> = {
   EMPTY: "bg-emerald-200 text-emerald-900",
-  SOFT:  "bg-sky-400 text-white",
+  SOFT:  "bg-sky-400 text-white",       // direct guest booking
   HARD:  "bg-stone-400 text-white",
 };
+
+// Channel-allocated slots (OTA / GDS) get amber — distinguishable from direct bookings
+const CHANNEL_BOOKING_CHANNELS = new Set(["OTA", "GDS"]);
+
+function cellClass(blockType: string, channel?: string | null): string {
+  if (blockType === "SOFT" && channel && CHANNEL_BOOKING_CHANNELS.has(channel)) {
+    return "bg-amber-400 text-white";
+  }
+  return CELL_CLASSES[blockType] ?? "bg-surface-2 text-text";
+}
 
 const CATEGORIES = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"] as const;
 
@@ -87,13 +99,16 @@ export function HeatmapGrid({
               {row.cells
                 .filter(cell => !maxDays || visibleDateSet.has(String(cell.date)))
                 .map(cell => {
-                  const baseClass = CELL_CLASSES[cell.block_type] ?? "bg-surface-2 text-text";
+                  const baseClass = cellClass(cell.block_type, (cell as any).channel);
                   let finalClass =
                     `${cellSizeClass} shrink-0 rounded-[2px] flex items-center justify-center ` +
                     `overflow-hidden transition-colors mr-0.5 border border-black/10 ${baseClass}`;
                   if (onCellClick) finalClass += " cursor-pointer hover:shadow-md hover:brightness-105";
 
-                  const tooltip      = `${cell.room_id} | ${cell.date} | ${cell.block_type}`;
+                  const ch = (cell as any).channel as string | null | undefined;
+                  const tooltip = cell.block_type === "SOFT" && ch
+                    ? `${cell.room_id} · ${cell.date} · ${ch}`
+                    : `${cell.room_id} · ${cell.date} · ${cell.block_type}`;
                   const rawId        = cell.booking_id || "";
                   const shortId      = rawId.replace(/^BK[A-Z]*/, "") || rawId.slice(0, bookingChars);
                   const bookingLabel = cell.block_type === "SOFT" && rawId
@@ -106,10 +121,14 @@ export function HeatmapGrid({
                       title={tooltip}
                       onClick={() =>
                         onCellClick?.({
-                          id:    cell.slot_id,
-                          room:  cell.room_id,
-                          date:  String(cell.date),
-                          block: cell.block_type,
+                          id:         cell.slot_id,
+                          room:       cell.room_id,
+                          date:       String(cell.date),
+                          block:      cell.block_type,
+                          rate:       cell.current_rate,
+                          channel:    (cell as any).channel ?? null,
+                          booking_id: cell.booking_id,
+                          category:   cell.category,
                         })
                       }
                       className={finalClass}
@@ -135,14 +154,12 @@ export function HeatmapGrid({
       {!hideLegend && (
         <div className="flex flex-wrap gap-4 mt-6 px-2 py-2 border-t border-border">
           {[
-            { cls: CELL_CLASSES.EMPTY, label: "Available" },
-            { cls: CELL_CLASSES.SOFT,  label: "Booked"    },
-            { cls: CELL_CLASSES.HARD,  label: "Blocked"   },
+            { cls: CELL_CLASSES.EMPTY, label: "Available"        },
+            { cls: CELL_CLASSES.SOFT,  label: "Guest booking"    },
+            { cls: "bg-amber-400 text-white", label: "Channel booking" },
+            { cls: CELL_CLASSES.HARD,  label: "Blocked"          },
           ].map(({ cls, label }) => (
-            <div
-              key={label}
-              className="flex items-center gap-1.5 text-[9px] font-bold text-text-muted uppercase tracking-widest"
-            >
+            <div key={label} className="flex items-center gap-1.5 text-[9px] font-bold text-text-muted uppercase tracking-widest">
               <div className={`w-3 h-3 rounded-[2px] shadow-sm ${cls}`} />
               {label}
             </div>

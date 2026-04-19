@@ -88,6 +88,7 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
                 category=room.category,
                 current_rate=slot.current_rate if slot else room.base_rate,
                 booking_id=slot.booking_id if slot else None,
+                channel=slot.channel if slot else None,
             ))
         rows.append(HeatmapRow(
             room_id=room.id,

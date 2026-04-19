@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, api } from "../api/client";
-import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse } from "../types";
-import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
+import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot, getRevenueSummary } from "../api/client";
+import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
+import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
@@ -9,7 +9,7 @@ import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionIn
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
-import { Grid3x3, RefreshCw, Lock, Unlock } from "lucide-react";
+import { Grid3x3, RefreshCw, Lock, Unlock, TrendingUp, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
@@ -22,6 +22,7 @@ const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUIT
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
+  const [revenue, setRevenue] = useState<RevenueSummaryResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
   const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
@@ -29,7 +30,7 @@ export function Dashboard() {
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
-  const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
+  const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async () => {
@@ -45,9 +46,19 @@ export function Dashboard() {
     setIsHeatmapLoading(false);
   }, [show]);
 
+  const loadRevenue = useCallback(async () => {
+    try {
+      const res = await getRevenueSummary();
+      setRevenue(res.data);
+    } catch {
+      setRevenue(null);
+    }
+  }, []);
+
   useEffect(() => {
     loadHeatmap();
-  }, [loadHeatmap]);
+    loadRevenue();
+  }, [loadHeatmap, loadRevenue]);
 
   const loadForecast = useCallback(async () => {
     if (!heatmap) return;
@@ -150,10 +161,7 @@ export function Dashboard() {
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
-      await api.patch(`/admin/slots/${slotModal.id}`, {
-        block_type,
-        reason: "Manual edit from Bird's Eye View dashboard",
-      });
+      await patchSlot(slotModal.id, { block_type, reason: "Manual edit from Bird's Eye View dashboard" });
       setSlotModal(null);
       await loadHeatmap();
     } catch (e: unknown) {
@@ -167,65 +175,95 @@ export function Dashboard() {
       <Toasts />
 
       {slotModal && (
-        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]">
-          <div className="bg-surface border border-border shadow-2xl p-6 w-full max-w-sm">
-            <h2 className="font-serif font-bold text-xl text-text mb-2">Configure Slot</h2>
-            <div className="text-sm text-text-muted mb-6 flex items-center gap-2">
-              Room {slotModal.room} · {slotModal.date}
-              <span
-                className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 border ${
-                  slotModal.block === "EMPTY"
-                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                    : slotModal.block === "SOFT"
-                      ? "bg-sky-100 text-sky-800 border-sky-300"
-                      : "bg-stone-100 text-stone-700 border-stone-300"
-                }`}
-              >
-                {slotModal.block}
+        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]" onClick={() => setSlotModal(null)}>
+          <div className="bg-surface border border-border shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+              <div>
+                <h2 className="font-serif font-bold text-lg text-text">Room {slotModal.room}</h2>
+                <p className="text-[10px] text-text-muted uppercase tracking-widest mt-0.5">{slotModal.category} · {slotModal.date}</p>
+              </div>
+              <span className={`text-[10px] uppercase tracking-wider font-bold px-2.5 py-1 border ${
+                slotModal.block === "EMPTY" ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                : slotModal.block === "SOFT" ? "bg-sky-100 text-sky-800 border-sky-300"
+                : "bg-stone-100 text-stone-700 border-stone-300"
+              }`}>
+                {slotModal.block === "EMPTY" ? "Available" : slotModal.block === "SOFT" ? "Booked" : "Blocked"}
               </span>
             </div>
-            {slotModal.block === "SOFT" ? (
-              <div className="bg-occuorange/10 border border-occuorange/20 text-occuorange text-xs font-semibold p-3 mb-6">
-                Active guest reservation. Cannot override manually.
+
+            {/* Slot details */}
+            <div className="px-6 py-4 space-y-2.5 border-b border-border">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-muted font-medium">Night rate</span>
+                <span className="font-mono font-bold text-text">₹{slotModal.rate.toLocaleString()}</span>
               </div>
-            ) : (
-              <div className="flex gap-2 mb-6">
-                {slotModal.block !== "EMPTY" && (
-                  <button
-                    type="button"
-                    className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("EMPTY")}
-                  >
-                    <Unlock className="w-3.5 h-3.5" /> Free
-                  </button>
-                )}
-                {slotModal.block !== "HARD" && (
-                  <button
-                    type="button"
-                    className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("HARD")}
-                  >
-                    <Lock className="w-3.5 h-3.5" /> Block
-                  </button>
-                )}
+              {slotModal.block === "SOFT" && slotModal.channel && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text-muted font-medium">Booked via</span>
+                  <span className={`font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 border ${
+                    slotModal.channel === "OTA"    ? "bg-amber-50 text-amber-700 border-amber-200" :
+                    slotModal.channel === "DIRECT" ? "bg-teal-50 text-teal-700 border-teal-200" :
+                    slotModal.channel === "GDS"    ? "bg-violet-50 text-violet-700 border-violet-200" :
+                    slotModal.channel === "WALKIN" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                                    "bg-surface-2 text-text-muted border-border"
+                  }`}>{slotModal.channel}</span>
+                </div>
+              )}
+              {slotModal.block === "SOFT" && slotModal.booking_id && (
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-text-muted font-medium">Booking ID</span>
+                  <span className="font-mono font-bold text-text bg-surface-2 border border-border px-2 py-0.5">{slotModal.booking_id}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-text-muted font-medium">Slot ID</span>
+                <span className="font-mono text-text-muted text-[10px]">{slotModal.id}</span>
               </div>
-            )}
-            <button
-              type="button"
-              className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
-              onClick={() => setSlotModal(null)}
-            >
-              Dismiss
-            </button>
+            </div>
+
+            {/* Actions */}
+            <div className="px-6 py-4 space-y-2">
+              {slotModal.block === "SOFT" ? (
+                <p className="text-xs text-occuorange font-semibold bg-occuorange/8 border border-occuorange/20 px-3 py-2.5">
+                  Active booking — cannot override manually. Cancel via Front Desk.
+                </p>
+              ) : (
+                <div className="flex gap-2">
+                  {slotModal.block !== "EMPTY" && (
+                    <button type="button"
+                      className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                      onClick={() => handleSlotPatch("EMPTY")}
+                    >
+                      <Unlock className="w-3.5 h-3.5" /> Mark Available
+                    </button>
+                  )}
+                  {slotModal.block !== "HARD" && (
+                    <button type="button"
+                      className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
+                      onClick={() => handleSlotPatch("HARD")}
+                    >
+                      <Lock className="w-3.5 h-3.5" /> Block
+                    </button>
+                  )}
+                </div>
+              )}
+              <button type="button"
+                className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
+                onClick={() => setSlotModal(null)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6 border-b border-border/50 pb-6">
         <div>
-          <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Bird's Eye View</h1>
+          <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Occupancy Overview</h1>
           <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
-            Occupancy matrix and k-night bookable windows by length and room type
+            Your rooms, bookings, and availability at a glance
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 shrink-0">
@@ -242,7 +280,7 @@ export function Dashboard() {
             onClick={() => runOptimisePreview()}
             disabled={!heatmap || isOptimiseLoading}
           >
-            {isOptimiseLoading ? "Running…" : "Run optimisation preview"}
+            {isOptimiseLoading ? "Scanning…" : "Find empty gaps"}
           </button>
           {swapPlan && (
             <button
@@ -255,6 +293,50 @@ export function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Revenue KPI strip */}
+      {revenue && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <BedDouble className="w-3 h-3 text-accent" /> Tonight
+            </div>
+            <div className="text-2xl font-bold font-serif text-text tabular-nums">
+              {revenue.today_occupancy_pct.toFixed(0)}<span className="text-sm font-normal text-text-muted">%</span>
+            </div>
+            <div className="text-[10px] text-text-muted">{revenue.today_rooms_occupied} of {revenue.today_total_rooms} rooms</div>
+          </div>
+          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <DollarSign className="w-3 h-3 text-accent" /> Avg rate today
+            </div>
+            <div className="text-2xl font-bold font-serif text-text tabular-nums">
+              ₹{revenue.today_adr.toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted">per occupied room</div>
+          </div>
+          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <TrendingUp className="w-3 h-3 text-accent" /> Next 7 nights
+            </div>
+            <div className="text-2xl font-bold font-serif text-text tabular-nums">
+              ₹{revenue.week_revenue_on_books.toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted">{revenue.week_occupancy_pct.toFixed(0)}% booked · {revenue.week_rooms_booked} nights</div>
+          </div>
+          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${revenue.orphan_nights_at_risk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <AlertTriangle className={`w-3 h-3 ${revenue.orphan_nights_at_risk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
+            </div>
+            <div className={`text-2xl font-bold font-serif tabular-nums ${revenue.orphan_nights_at_risk > 0 ? "text-occuorange" : "text-text"}`}>
+              {revenue.orphan_nights_at_risk}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {revenue.orphan_nights_at_risk > 0 ? `₹${revenue.orphan_revenue_at_risk.toLocaleString()} at risk` : "No orphan gaps detected"}
+            </div>
+          </div>
+        </div>
+      )}
 
       {heatmap && (
         <BirdseyeFilters
@@ -276,11 +358,11 @@ export function Dashboard() {
             <div className="bg-surface border border-border shadow-subtle">
               <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
                 <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
+                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">Occupancy forecast</h3>
                   <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
                 </div>
                 <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                  Generating predictions from past pickup trends…
+                  Analysing past booking patterns to predict upcoming occupancy…
                 </p>
               </div>
               <div className="p-3">
@@ -325,9 +407,9 @@ export function Dashboard() {
           <Grid3x3 className="w-8 h-8 text-accent/50 mx-auto mb-4" />
           {isHeatmapLoading ? (
             <>
-              <h2 className="text-xl font-serif font-bold text-text mb-2">Fetching calendar data</h2>
+              <h2 className="text-xl font-serif font-bold text-text mb-2">Loading your bookings...</h2>
               <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-                Loading rooms and slots, then generating insights…
+                Fetching your room calendar and generating insights…
               </p>
               <div className="max-w-sm mx-auto">
                 <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
@@ -335,9 +417,9 @@ export function Dashboard() {
             </>
           ) : (
             <>
-              <h2 className="text-xl font-serif font-bold text-text mb-2">No calendar data</h2>
+              <h2 className="text-xl font-serif font-bold text-text mb-2">Couldn't load your rooms</h2>
               <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-                {heatmapLoadError ?? "The occupancy matrix could not be loaded. Check the API connection, then try again."}
+                {heatmapLoadError ?? "Something went wrong loading your booking calendar. Please try again."}
               </p>
               <button
                 type="button"

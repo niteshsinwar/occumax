@@ -23,8 +23,12 @@ from core.schemas.analytics import (
     PaceResponse,
     PaceSeries,
     PacePoint,
+    RevenueSummaryResponse,
     EventInsightsResponse,
     LosBucket,
+    ChannelStat,
+    PartnerStat,
+    ChannelPerformanceResponse,
 )
 from services.analytics.forecasting import build_expected_occupancy
 
@@ -530,3 +534,256 @@ async def get_event_insights(
         arrival_weekday_histogram=arrival_hist,
     )
 
+
+async def get_revenue_summary(
+    db: AsyncSession,
+    as_of: date,
+) -> RevenueSummaryResponse:
+    """
+    Hotel-wide revenue snapshot computed entirely from existing slot + booking tables.
+    No schema changes required.
+    """
+    week_end = as_of + timedelta(days=7)
+    month_start = as_of.replace(day=1)
+
+    # ── Total active rooms ────────────────────────────────────────────────────
+    total_rooms_row = (await db.execute(
+        select(func.count(Room.id)).where(Room.is_active == True)
+    )).scalar_one()
+    total_rooms = int(total_rooms_row or 0)
+
+    if total_rooms == 0:
+        return RevenueSummaryResponse(
+            as_of=as_of,
+            today_occupancy_pct=0, today_adr=0,
+            today_rooms_occupied=0, today_total_rooms=0,
+            week_occupancy_pct=0, week_revenue_on_books=0,
+            week_rooms_booked=0, week_total_room_nights=total_rooms * 7,
+            orphan_nights_at_risk=0, orphan_revenue_at_risk=0,
+            mtd_revenue=0, mtd_days=(as_of - month_start).days + 1,
+        )
+
+    # ── Today: occupancy + ADR ────────────────────────────────────────────────
+    today_slots = (await db.execute(
+        select(Slot.current_rate, Slot.block_type)
+        .join(Room, Room.id == Slot.room_id)
+        .where(Room.is_active == True, Slot.date == as_of)
+    )).all()
+
+    today_occupied = [r for r in today_slots if r.block_type != BlockType.EMPTY]
+    today_rooms_occupied = len(today_occupied)
+    today_adr = float(mean([r.current_rate for r in today_occupied])) if today_occupied else 0.0
+    today_occupancy_pct = (today_rooms_occupied / total_rooms) * 100.0
+
+    # ── This week: revenue on-books + occupancy ───────────────────────────────
+    week_slots = (await db.execute(
+        select(Slot.current_rate, Slot.block_type, Slot.date)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= as_of,
+            Slot.date < week_end,
+        )
+    )).all()
+
+    week_booked = [r for r in week_slots if r.block_type != BlockType.EMPTY]
+    week_rooms_booked = len(week_booked)
+    week_revenue_on_books = float(sum(r.current_rate for r in week_booked))
+    week_total_room_nights = total_rooms * 7
+    week_occupancy_pct = (week_rooms_booked / max(1, week_total_room_nights)) * 100.0
+
+    # ── MTD revenue (booked slots this calendar month up to today) ────────────
+    mtd_slots = (await db.execute(
+        select(func.sum(Slot.current_rate))
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= month_start,
+            Slot.date <= as_of,
+            Slot.block_type != BlockType.EMPTY,
+        )
+    )).scalar_one()
+    mtd_revenue = float(mtd_slots or 0.0)
+    mtd_days = (as_of - month_start).days + 1
+
+    # ── Orphan nights at risk (next 20 days) ─────────────────────────────────
+    # An orphan is an EMPTY slot bounded by non-EMPTY on both sides in the same room.
+    scan_end = as_of + timedelta(days=20)
+    scan_slots = (await db.execute(
+        select(Slot.room_id, Slot.date, Slot.block_type, Slot.current_rate)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.date >= as_of,
+            Slot.date < scan_end,
+        )
+        .order_by(Slot.room_id, Slot.date)
+    )).all()
+
+    # Group by room
+    by_room: dict[str, list[tuple]] = defaultdict(list)
+    for row in scan_slots:
+        by_room[row.room_id].append(row)
+
+    orphan_nights = 0
+    orphan_rev = 0.0
+    for room_id, rows in by_room.items():
+        for i, row in enumerate(rows):
+            if row.block_type != BlockType.EMPTY:
+                continue
+            before = rows[i - 1].block_type if i > 0 else None
+            after = rows[i + 1].block_type if i < len(rows) - 1 else None
+            if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
+                orphan_nights += 1
+                orphan_rev += float(row.current_rate)
+
+    return RevenueSummaryResponse(
+        as_of=as_of,
+        today_occupancy_pct=round(today_occupancy_pct, 1),
+        today_adr=round(today_adr, 0),
+        today_rooms_occupied=today_rooms_occupied,
+        today_total_rooms=total_rooms,
+        week_occupancy_pct=round(week_occupancy_pct, 1),
+        week_revenue_on_books=round(week_revenue_on_books, 0),
+        week_rooms_booked=week_rooms_booked,
+        week_total_room_nights=week_total_room_nights,
+        orphan_nights_at_risk=orphan_nights,
+        orphan_revenue_at_risk=round(orphan_rev, 0),
+        mtd_revenue=round(mtd_revenue, 0),
+        mtd_days=mtd_days,
+    )
+
+
+# OTA commission rates by channel (industry standard for India)
+_COMMISSION: dict[str, float] = {
+    "OTA":    0.18,  # MakeMyTrip/Goibibo avg 18%
+    "GDS":    0.10,  # GDS global distribution avg 10%
+    "DIRECT": 0.00,  # Direct booking — zero commission
+    "WALKIN": 0.00,  # Walk-in — zero commission
+    "CLOSED": 0.00,
+}
+
+
+async def get_channel_performance(
+    db: AsyncSession,
+    as_of: date,
+    window_days: int = 30,
+) -> ChannelPerformanceResponse:
+    """
+    Channel revenue breakdown for the past `window_days` days.
+    Computes gross revenue, commission-adjusted net revenue, and ADR per channel.
+    """
+    window_start = as_of - timedelta(days=window_days)
+
+    # Occupied slots with channel + partner info in the window
+    rows = (await db.execute(
+        select(Slot.channel, Slot.channel_partner, Slot.current_rate)
+        .join(Room, Room.id == Slot.room_id)
+        .where(
+            Room.is_active == True,
+            Slot.block_type != BlockType.EMPTY,
+            Slot.date >= window_start,
+            Slot.date <= as_of,
+        )
+    )).all()
+
+    # Aggregate by (channel, partner)
+    channel_nights: dict[str, int] = {}
+    channel_gross: dict[str, float] = {}
+    partner_nights: dict[str, dict[str, int]] = {}    # {channel: {partner: nights}}
+    partner_gross: dict[str, dict[str, float]] = {}   # {channel: {partner: gross}}
+
+    for row in rows:
+        ch = row.channel.value if row.channel and hasattr(row.channel, "value") else "DIRECT"
+        pt = row.channel_partner or ("Direct" if ch == "DIRECT" else ("Walk-in" if ch == "WALKIN" else ch))
+        channel_nights[ch] = channel_nights.get(ch, 0) + 1
+        channel_gross[ch] = channel_gross.get(ch, 0.0) + float(row.current_rate)
+        _pn = partner_nights.setdefault(ch, {})
+        _pn[pt] = _pn.get(pt, 0) + 1
+        _pg = partner_gross.setdefault(ch, {})
+        _pg[pt] = _pg.get(pt, 0.0) + float(row.current_rate)
+
+    total_nights = sum(channel_nights.values())
+
+    stats: list[ChannelStat] = []
+    total_gross = 0.0
+    total_net = 0.0
+
+    for ch in sorted(channel_nights.keys()):
+        nights = channel_nights[ch]
+        gross = channel_gross[ch]
+        comm_pct = _COMMISSION.get(ch, 0.0)
+        net = gross * (1 - comm_pct)
+        avg_rate = round(gross / nights, 0) if nights else 0.0
+        share = round((nights / max(1, total_nights)) * 100, 1)
+
+        # Build per-partner breakdown
+        ch_partners: list[PartnerStat] = []
+        for pt, pt_nights in sorted(partner_nights.get(ch, {}).items(), key=lambda x: -x[1]):
+            pt_gross = partner_gross[ch].get(pt, 0.0)
+            pt_net = pt_gross * (1 - comm_pct)
+            ch_partners.append(PartnerStat(
+                partner=pt,
+                room_nights=pt_nights,
+                gross_revenue=round(pt_gross, 0),
+                net_revenue=round(pt_net, 0),
+                avg_rate=round(pt_gross / pt_nights, 0) if pt_nights else 0.0,
+                share_of_channel_pct=round((pt_nights / nights) * 100, 1),
+            ))
+
+        stats.append(ChannelStat(
+            channel=ch,
+            room_nights=nights,
+            gross_revenue=round(gross, 0),
+            commission_pct=round(comm_pct * 100, 0),
+            net_revenue=round(net, 0),
+            avg_rate=avg_rate,
+            share_pct=share,
+            partners=ch_partners,
+        ))
+        total_gross += gross
+        total_net += net
+
+    # Sort by room nights descending
+    stats.sort(key=lambda s: s.room_nights, reverse=True)
+
+    # Generate a recommendation
+    ota_share = next((s.share_pct for s in stats if s.channel == "OTA"), 0.0)
+    direct_share = next((s.share_pct for s in stats if s.channel == "DIRECT"), 0.0)
+    ota_stat = next((s for s in stats if s.channel == "OTA"), None)
+    commission_leak = round(total_gross - total_net, 0)
+
+    if ota_share > 60:
+        recommendation = (
+            f"OTA dependency is high at {ota_share}% of bookings. "
+            f"₹{int(commission_leak):,} lost to commissions this period. "
+            "Offer a 5% direct booking discount to shift guests off OTA — net revenue improves immediately."
+        )
+    elif direct_share > 50:
+        recommendation = (
+            f"Strong direct booking mix at {direct_share}%. "
+            f"Net revenue is ₹{int(total_net):,} vs gross ₹{int(total_gross):,} — minimal commission drain. "
+            "Keep incentivising direct with loyalty perks or early-bird rates."
+        )
+    elif ota_stat and ota_stat.avg_rate < (total_gross / max(1, total_nights)) * 0.95:
+        recommendation = (
+            "OTA bookings are arriving at a lower ADR than other channels. "
+            "Review rate parity — OTAs may be discounting without your approval. "
+            "Check rate caps in your OTA extranet."
+        )
+    else:
+        recommendation = (
+            f"Channel mix is balanced. Commission cost is ₹{int(commission_leak):,} this period. "
+            "Focus on pushing direct for high-value room categories (Deluxe/Suite) to maximise net yield."
+        )
+
+    return ChannelPerformanceResponse(
+        as_of=as_of,
+        window_start=window_start,
+        window_end=as_of,
+        channels=stats,
+        total_gross_revenue=round(total_gross, 0),
+        total_net_revenue=round(total_net, 0),
+        total_room_nights=total_nights,
+        recommendation=recommendation,
+    )

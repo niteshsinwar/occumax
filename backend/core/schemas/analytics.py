@@ -61,6 +61,78 @@ class PaceResponse(BaseModel):
     series: list[PaceSeries]
 
 
+class RevenueSummaryResponse(BaseModel):
+    as_of: date
+    # Today
+    today_occupancy_pct: float
+    today_adr: float
+    today_rooms_occupied: int
+    today_total_rooms: int
+    # This week (next 7 nights)
+    week_occupancy_pct: float
+    week_revenue_on_books: float
+    week_rooms_booked: int
+    week_total_room_nights: int
+    # Gap risk
+    orphan_nights_at_risk: int
+    orphan_revenue_at_risk: float
+    # MTD
+    mtd_revenue: float
+    mtd_days: int
+
+
+class PartnerStat(BaseModel):
+    partner: str
+    room_nights: int
+    gross_revenue: float
+    net_revenue: float
+    avg_rate: float
+    share_of_channel_pct: float
+
+
+class ChannelStat(BaseModel):
+    channel: str
+    room_nights: int
+    gross_revenue: float
+    commission_pct: float
+    net_revenue: float
+    avg_rate: float
+    share_pct: float  # % of total occupied room nights
+    partners: list[PartnerStat] = []
+
+
+class ChannelPerformanceResponse(BaseModel):
+    as_of: date
+    window_start: date
+    window_end: date
+    channels: list[ChannelStat]
+    total_gross_revenue: float
+    total_net_revenue: float
+    total_room_nights: int
+    recommendation: str
+
+
+class ChannelRecommendation(BaseModel):
+    booking_source: str        # "MakeMyTrip" | "Direct" | etc.
+    channel_type: str          # OTA | GDS | DIRECT | WALKIN
+    category: str
+    check_in: str              # ISO date
+    check_out: str             # ISO date
+    room_count: int
+    expected_gross: float
+    commission_cost: float
+    expected_net: float
+    confidence: str            # HIGH | MEDIUM | LOW
+    reasoning: str             # human-readable explanation
+
+
+class ChannelRecommendResponse(BaseModel):
+    as_of: str
+    analysis_window_days: int
+    recommendations: list[ChannelRecommendation]
+    summary: str
+
+
 class LosBucket(BaseModel):
     nights: int
     count: int

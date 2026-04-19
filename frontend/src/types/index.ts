@@ -2,6 +2,8 @@ export type BlockType = "HARD" | "SOFT" | "EMPTY";
 export type RoomCategory = "DELUXE" | "SUITE" | "STUDIO" | "STANDARD" | "PREMIUM" | "ECONOMY";
 
 
+export type Channel = "OTA" | "DIRECT" | "GDS" | "WALKIN" | "CLOSED";
+
 export interface HeatmapCell {
   slot_id: string;
   room_id: string;
@@ -10,6 +12,7 @@ export interface HeatmapCell {
   category: RoomCategory;
   current_rate: number;
   booking_id: string | null;
+  channel: Channel | null;
 }
 
 export interface HeatmapRow {
@@ -111,10 +114,12 @@ export interface SplitStayResult {
 }
 
 export interface SplitStayConfirm {
-  guest_name:   string;
-  category:     RoomCategory;
-  discount_pct: number;
-  segments:     SplitSegment[];
+  guest_name:       string;
+  category:         RoomCategory;
+  discount_pct:     number;
+  segments:         SplitSegment[];
+  channel?:         string;
+  channel_partner?: string | null;
 }
 
 export interface GapInfo {
@@ -213,5 +218,73 @@ export interface PaceSeries {
 export interface PaceResponse {
   as_of: string;
   series: PaceSeries[];
+}
+
+export interface PartnerStat {
+  partner: string;
+  room_nights: number;
+  gross_revenue: number;
+  net_revenue: number;
+  avg_rate: number;
+  share_of_channel_pct: number;
+}
+
+export interface ChannelStat {
+  channel: string;
+  room_nights: number;
+  gross_revenue: number;
+  commission_pct: number;
+  net_revenue: number;
+  avg_rate: number;
+  share_pct: number;
+  partners: PartnerStat[];
+}
+
+export interface ChannelPerformanceResponse {
+  as_of: string;
+  window_start: string;
+  window_end: string;
+  channels: ChannelStat[];
+  total_gross_revenue: number;
+  total_net_revenue: number;
+  total_room_nights: number;
+  recommendation: string;
+}
+
+export interface ChannelRecommendation {
+  booking_source: string;
+  channel_type: string;
+  category: string;
+  check_in: string;
+  check_out: string;
+  room_count: number;
+  expected_gross: number;
+  commission_cost: number;
+  expected_net: number;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  reasoning: string;
+}
+
+export interface ChannelRecommendResponse {
+  as_of: string;
+  analysis_window_days: number;
+  recommendations: ChannelRecommendation[];
+  summary: string;
+}
+
+export interface RevenueSummaryResponse {
+  as_of: string;
+  today_occupancy_pct: number;
+  today_adr: number;
+  today_rooms_occupied: number;
+  today_total_rooms: number;
+  week_occupancy_pct: number;
+  week_revenue_on_books: number;
+  week_rooms_booked: number;
+  week_total_room_nights: number;
+  orphan_nights_at_risk: number;
+  orphan_revenue_at_risk: number;
+  mtd_revenue: number;
+  mtd_days: number;
 }
 

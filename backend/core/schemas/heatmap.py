@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 from pydantic import BaseModel
-from core.models.enums import BlockType, RoomCategory
+from core.models.enums import BlockType, Channel, RoomCategory
 
 
 class HeatmapCell(BaseModel):
@@ -13,6 +13,7 @@ class HeatmapCell(BaseModel):
     category: RoomCategory
     current_rate: float
     booking_id: Optional[str] = None
+    channel: Optional[Channel] = None
 
 
 class HeatmapRow(BaseModel):

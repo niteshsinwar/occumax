@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { analysePricing, commitPricing } from "../api/client";
 import type { PricingRecommendation, PricingAnalyseResponse } from "../types";
 import { useToast } from "./shared/Toast";
@@ -6,6 +6,16 @@ import {
   TrendingUp, TrendingDown, DollarSign, Sparkles,
   CheckCircle2, XCircle, Edit2, Loader2,
 } from "lucide-react";
+
+const ANALYSIS_STEPS = [
+  "Reviewing booking pace for the next 30 days...",
+  "Checking pickup trends vs. last year...",
+  "Scanning for local events and seasonal demand...",
+  "Analysing competitor rate patterns...",
+  "Evaluating orphan gaps and fill-rate pressure...",
+  "Calculating optimal rate adjustments...",
+  "Finalising recommendations...",
+];
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -39,11 +49,33 @@ function groupByCategory(recs: PricingRecommendation[]) {
 
 export function PricingPanel() {
   const [result,     setResult]     = useState<PricingAnalyseResponse | null>(null);
-  const [rows,       setRows]       = useState<RowState[]>([]);
+  const [rows,       setRows]       = useState<Record<string, RowState>>({});
   const [analysing,  setAnalysing]  = useState(false);
   const [committing, setCommitting] = useState(false);
   const [committed,  setCommitted]  = useState<{ updated: number; skipped: number } | null>(null);
+  const [stepIdx,    setStepIdx]    = useState(0);
+  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
+  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { show, Toasts } = useToast();
+
+  useEffect(() => {
+    if (analysing) {
+      setStepIdx(0);
+      setCompletedSteps([]);
+      let current = 0;
+      stepTimerRef.current = setInterval(() => {
+        setCompletedSteps(prev => [...prev, current]);
+        current += 1;
+        setStepIdx(current);
+        if (current >= ANALYSIS_STEPS.length - 1) {
+          clearInterval(stepTimerRef.current!);
+        }
+      }, 600);
+    } else {
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
+    }
+    return () => { if (stepTimerRef.current) clearInterval(stepTimerRef.current); };
+  }, [analysing]);
 
   const runAnalysis = async () => {
     setAnalysing(true);
@@ -53,10 +85,12 @@ export function PricingPanel() {
       const res  = await analysePricing();
       const data = res.data as PricingAnalyseResponse;
       setResult(data);
-      setRows(data.recommendations.map(r => ({
-        decision: null,
-        overrideValue: String(r.suggested_rate),
-      })));
+      setRows(Object.fromEntries(
+        data.recommendations.map(r => [
+          `${r.category}-${r.date}`,
+          { decision: null, overrideValue: String(r.suggested_rate) },
+        ])
+      ));
     } catch {
       show("Pricing analysis failed", "error");
     } finally {
@@ -64,23 +98,23 @@ export function PricingPanel() {
     }
   };
 
-  const setDecision = (i: number, d: Decision) =>
-    setRows(prev => prev.map((r, idx) => idx === i ? { ...r, decision: d } : r));
+  const setDecision = (key: string, d: Decision) =>
+    setRows(prev => ({ ...prev, [key]: { ...prev[key], decision: d } }));
 
-  const setOverride = (i: number, val: string) =>
-    setRows(prev => prev.map((r, idx) =>
-      idx === i ? { ...r, overrideValue: val, decision: "override" } : r
-    ));
+  const setOverride = (key: string, val: string) =>
+    setRows(prev => ({ ...prev, [key]: { ...prev[key], overrideValue: val, decision: "override" } }));
 
   const acceptAll = () =>
-    setRows(prev => prev.map(r => r.decision === "rejected" ? r : { ...r, decision: "accepted" }));
+    setRows(prev => Object.fromEntries(
+      Object.entries(prev).map(([k, r]) => [k, r.decision === "rejected" ? r : { ...r, decision: "accepted" }])
+    ));
 
   const handleCommit = async () => {
     if (!result) return;
     const items: { category: string; date: string; new_rate: number }[] = [];
-    result.recommendations.forEach((rec, i) => {
-      const row = rows[i];
-      if (row.decision === "rejected" || row.decision === null) return;
+    result.recommendations.forEach(rec => {
+      const row = rows[`${rec.category}-${rec.date}`];
+      if (!row || row.decision === "rejected" || row.decision === null) return;
       const rate = row.decision === "override"
         ? Math.round(parseFloat(row.overrideValue) / 100) * 100
         : rec.suggested_rate;
@@ -100,21 +134,24 @@ export function PricingPanel() {
     }
   };
 
-  const accepted = rows.filter(r => r.decision === "accepted" || r.decision === "override").length;
-  const rejected = rows.filter(r => r.decision === "rejected").length;
-  const pending  = rows.filter(r => r.decision === null).length;
+  const accepted = Object.values(rows).filter(r => r.decision === "accepted" || r.decision === "override").length;
+  const rejected = Object.values(rows).filter(r => r.decision === "rejected").length;
+  const pending  = Object.values(rows).filter(r => r.decision === null).length;
 
   const grouped = result ? groupByCategory(result.recommendations) : [];
 
-  // Build a flat index to look up rowState by rec index
-  const flatIndex = (catIdx: number, rowIdx: number) => {
-    if (!result) return 0;
-    let offset = 0;
-    for (let c = 0; c < catIdx; c++) {
-      offset += grouped[c][1].length;
-    }
-    return offset + rowIdx;
-  };
+  // Demand signals derived from recommendations
+  const signals = result ? (() => {
+    const recs = result.recommendations;
+    const highDemand  = recs.filter(r => r.occupancy_pct > 80);
+    const lowDemand   = recs.filter(r => r.occupancy_pct < 30);
+    const increasing  = recs.filter(r => r.change_pct > 0);
+    const decreasing  = recs.filter(r => r.change_pct < 0);
+    const highCats    = [...new Set(highDemand.map(r => r.category))];
+    const lowCats     = [...new Set(lowDemand.map(r => r.category))];
+    return { highDemand, lowDemand, increasing, decreasing, highCats, lowCats };
+  })() : null;
+
 
   return (
     <div className="h-full flex flex-col">
@@ -182,14 +219,46 @@ export function PricingPanel() {
         </div>
       )}
 
-      {/* ── loading ────────────────────────────────────────────────────── */}
+      {/* ── loading: step-by-step analysis sequence ─────────────────── */}
       {analysing && (
-        <div className="flex-1 flex flex-col items-center justify-center py-24 text-center">
-          <div className="w-10 h-10 border-2 border-border border-t-accent rounded-full animate-spin mb-6" />
-          <h3 className="font-serif font-bold text-lg text-text">Analysing Demand Signals</h3>
-          <p className="text-xs text-text-muted mt-2 max-w-xs leading-relaxed">
-            Gemini is evaluating occupancy, pickup pace, and lead time across all categories…
-          </p>
+        <div className="flex-1 flex flex-col items-center justify-center py-16 px-8">
+          <div className="w-full max-w-sm">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-8 h-8 border-2 border-border border-t-accent rounded-full animate-spin shrink-0" />
+              <div>
+                <div className="text-sm font-bold text-text font-serif">AI Pricing Analysis</div>
+                <div className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Powered by Gemini</div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {ANALYSIS_STEPS.map((step, i) => {
+                const done    = completedSteps.includes(i);
+                const active  = i === stepIdx;
+                const hidden  = i > stepIdx;
+                return (
+                  <div
+                    key={step}
+                    className={`flex items-center gap-3 transition-all duration-500 ${hidden ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+                  >
+                    <div className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center border transition-all duration-300 ${
+                      done   ? "bg-occugreen border-occugreen"  :
+                      active ? "border-accent bg-accent/10 animate-pulse" :
+                               "border-border bg-surface-2"
+                    }`}>
+                      {done && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                    </div>
+                    <span className={`text-xs transition-colors duration-300 ${
+                      done   ? "text-text-muted line-through decoration-text-muted/40" :
+                      active ? "text-text font-medium"  :
+                               "text-text-muted/40"
+                    }`}>
+                      {step}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -222,6 +291,28 @@ export function PricingPanel() {
       {result && !committed && (
         <div className="flex-1 overflow-y-auto">
 
+          {/* Demand signals strip */}
+          {signals && (signals.highDemand.length > 0 || signals.lowDemand.length > 0) && (
+            <div className="px-6 py-3 border-b border-border bg-surface-2/40 flex flex-wrap gap-3 items-center">
+              <span className="text-[9px] font-bold uppercase tracking-widest text-text-muted shrink-0">Demand Signals</span>
+              {signals.highCats.length > 0 && (
+                <span className="flex items-center gap-1.5 text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-2.5 py-1">
+                  <TrendingUp className="w-3 h-3" />
+                  {signals.highCats.join(", ")} — high demand · {signals.increasing.length} date{signals.increasing.length !== 1 ? "s" : ""} to increase
+                </span>
+              )}
+              {signals.lowCats.length > 0 && (
+                <span className="flex items-center gap-1.5 text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-2.5 py-1">
+                  <TrendingDown className="w-3 h-3" />
+                  {signals.lowCats.join(", ")} — low fill · {signals.decreasing.length} date{signals.decreasing.length !== 1 ? "s" : ""} need discounting
+                </span>
+              )}
+              <span className="ml-auto text-[9px] text-text-muted font-medium shrink-0">
+                Pune market · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+              </span>
+            </div>
+          )}
+
           {/* AI summary banner */}
           <div className="px-6 py-4 bg-accent/5 border-b border-accent/20 text-sm text-text leading-relaxed">
             <span className="text-[10px] font-bold uppercase tracking-widest text-accent mr-2">AI Summary</span>
@@ -234,7 +325,7 @@ export function PricingPanel() {
             </div>
           )}
 
-          {grouped.map(([category, recs], catIdx) => (
+          {grouped.map(([category, recs]) => (
             <div key={category} className="border-b border-border last:border-0">
               {/* Category header */}
               <div className="px-6 py-3 bg-surface-2/60 border-b border-border/50 flex items-center gap-3 sticky top-0 z-10">
@@ -260,9 +351,9 @@ export function PricingPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recs.map((rec, rowIdx) => {
-                    const i   = flatIndex(catIdx, rowIdx);
-                    const row = rows[i];
+                  {recs.map((rec) => {
+                    const key = `${rec.category}-${rec.date}`;
+                    const row = rows[key];
                     if (!row) return null;
                     const isAccepted = row.decision === "accepted";
                     const isRejected = row.decision === "rejected";
@@ -315,7 +406,7 @@ export function PricingPanel() {
                                 type="number"
                                 step="100"
                                 value={row.overrideValue}
-                                onChange={e => setOverride(i, e.target.value)}
+                                onChange={e => setOverride(key, e.target.value)}
                                 className="w-20 bg-surface border border-accent text-text text-xs font-mono text-right px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
                               />
                             </div>
@@ -356,7 +447,7 @@ export function PricingPanel() {
                               <button
                                 title="Accept suggested rate"
                                 className="p-1.5 hover:bg-occugreen/10 text-occugreen/50 hover:text-occugreen transition-colors rounded-sm"
-                                onClick={() => setDecision(i, "accepted")}
+                                onClick={() => setDecision(key, "accepted")}
                               >
                                 <CheckCircle2 className="w-4 h-4" />
                               </button>
@@ -371,7 +462,7 @@ export function PricingPanel() {
                               className={`p-1.5 rounded-sm transition-colors ${
                                 isOverride ? "text-accent bg-accent/10" : "text-text-muted hover:text-accent hover:bg-accent/10"
                               }`}
-                              onClick={() => setDecision(i, isOverride ? null : "override")}
+                              onClick={() => setDecision(key, isOverride ? null : "override")}
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
@@ -380,7 +471,7 @@ export function PricingPanel() {
                               className={`p-1.5 rounded-sm transition-colors ${
                                 isRejected ? "text-occured bg-occured/10" : "text-text-muted hover:text-occured hover:bg-occured/10"
                               }`}
-                              onClick={() => setDecision(i, isRejected ? null : "rejected")}
+                              onClick={() => setDecision(key, isRejected ? null : "rejected")}
                             >
                               <XCircle className="w-4 h-4" />
                             </button>

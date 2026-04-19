@@ -1,11 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { format, addDays } from "date-fns";
-import { checkAvailability, confirmBooking, confirmSplitStay, findSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
+import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
 import type { ShuffleResult, RoomCategory, ComparisonTable, Alternative, SplitSegment } from "../types";
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User } from "lucide-react";
 
 const CATEGORIES: RoomCategory[] = ["STANDARD", "STUDIO", "DELUXE", "SUITE"];
+
+// Receptionist desk = direct routes only. OTA/GDS allocations happen in Manager → Channels.
+const BOOKING_SOURCES = [
+  { label: "Direct",   channel: "DIRECT", partner: null },
+  { label: "Walk-in",  channel: "WALKIN", partner: null },
+];
+
+function resolveSource(label: string) {
+  return BOOKING_SOURCES.find(s => s.label === label) ?? BOOKING_SOURCES[0];
+}
 
 // ── AI chat types ─────────────────────────────────────────────────────────────
 interface ChatMsg {
@@ -37,6 +47,7 @@ export function ReceptionistView() {
   const [checkIn,        setCheckIn]        = useState(today);
   const [checkOut,       setCheckOut]       = useState(defaultOut);
   const [guestName,      setGuestName]      = useState("");
+  const [bookingSource,  setBookingSource]  = useState("Direct");
   const [checking,       setChecking]       = useState(false);
   const [confirming,     setConfirming]     = useState(false);
   const [result,         setResult]         = useState<ShuffleResult | null>(null);
@@ -55,8 +66,7 @@ export function ReceptionistView() {
   const { show, Toasts } = useToast();
   const timers    = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // ── AI chat state — activates automatically on NOT_POSSIBLE ────────────────
-  const [aiActive,     setAiActive]    = useState(false);
+  // ── AI chat state — always-on parallel assistant ─────────────────────────
   const [aiGuided,     setAiGuided]    = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const [chatInput,    setChatInput]   = useState("");
@@ -89,7 +99,6 @@ export function ReceptionistView() {
     setChecking(true);
     setResult(null);
     setLastConfirmed(null);
-    setAiActive(false);
     setAiGuided(false);
     setChatMessages([]);
     setShowFallback(false);
@@ -127,9 +136,10 @@ export function ReceptionistView() {
   const handleConfirm = async () => {
     if (!result?.room_id) return;
     setConfirming(true);
+    const src = resolveSource(bookingSource);
     try {
       const res = await confirmBooking({
-        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest" },
+        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest", channel: src.channel, channel_partner: src.partner },
         room_id: result.room_id, swap_plan: result.swap_plan ?? undefined,
       });
       setLastConfirmed(res.data.booking_id);
@@ -172,109 +182,6 @@ export function ReceptionistView() {
       };
       setChatMessages(prev => [...prev, aMsg]);
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-
-      // ── Post-process: if AI returned no actionable card, run deterministic
-      // fallback pipeline silently and append a card to the chat.
-      // Covers: AI mentions alternative verbally without calling the tool,
-      // or AI's tool chain ends on NOT_POSSIBLE without trying shifted dates.
-      const ad = res.data.action_data;
-      const isActionable = ad?.type === "availability_result" && (ad.data as Record<string,unknown>)?.state !== "NOT_POSSIBLE";
-      const isSplitCard  = ad?.type === "split_stay_result";
-
-      // Deduplication: build a fingerprint of every card already shown in chat
-      // so we never inject the exact same room+dates twice in the same session.
-      const shownCards = new Set(
-        chatMessages
-          .filter(m => m.action_data?.type === "availability_result")
-          .map(m => {
-            const d = m.action_data!.data as Record<string, unknown>;
-            const req = d.request as Record<string, unknown> | undefined;
-            return `${d.room_id}|${req?.check_in}|${req?.check_out}`;
-          })
-      );
-
-      if (!aiGuided && !isActionable && !isSplitCard && checkIn && checkOut && category) {
-        const name    = guestName.trim() || "Walk-in Guest";
-        const nights  = Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000);
-        // +1 day shift — same duration, one day later
-        const shiftedIn  = new Date(checkIn);
-        shiftedIn.setDate(shiftedIn.getDate() + 1);
-        const shiftedOut = new Date(shiftedIn);
-        shiftedOut.setDate(shiftedOut.getDate() + nights);
-        const shiftedCheckIn  = shiftedIn.toISOString().slice(0, 10);
-        const shiftedCheckOut = shiftedOut.toISOString().slice(0, 10);
-
-        const LADDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"] as const;
-        const idx    = LADDER.indexOf(category as typeof LADDER[number]);
-        const upCat  = idx < LADDER.length - 1 ? LADDER[idx + 1] : null;
-        const dnCat  = idx > 0 ? LADDER[idx - 1] : null;
-
-        // Ordered fallback attempts
-        const attempts: Array<{ label: string; fn: () => Promise<unknown> }> = [
-          // split stay (exact dates)
-          { label: "split", fn: async () => {
-            const r = await findSplitStay({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state === "SPLIT_POSSIBLE") return { type: "split", data: r.data };
-            return null;
-          }},
-          // same category, same dates
-          { label: `${category} exact`, fn: async () => {
-            const r = await checkAvailability({ category, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: category, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }},
-          // same category, +1 day shift
-          { label: `${category} +1d`, fn: async () => {
-            const r = await checkAvailability({ category, check_in: shiftedCheckIn, check_out: shiftedCheckOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: category, ci: shiftedCheckIn, co: shiftedCheckOut, data: r.data };
-            return null;
-          }},
-          // one category up, exact dates
-          ...(upCat ? [{ label: upCat, fn: async () => {
-            const r = await checkAvailability({ category: upCat, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: upCat, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }}] : []),
-          // one category down, exact dates
-          ...(dnCat ? [{ label: dnCat, fn: async () => {
-            const r = await checkAvailability({ category: dnCat, check_in: checkIn, check_out: checkOut, guest_name: name });
-            if (r.data.state !== "NOT_POSSIBLE") return { type: "avail", cat: dnCat, ci: checkIn, co: checkOut, data: r.data };
-            return null;
-          }}] : []),
-        ];
-
-        for (const attempt of attempts) {
-          try {
-            const result = await attempt.fn() as { type: string; data: Record<string, unknown>; cat?: string; ci?: string; co?: string } | null;
-            if (!result) continue;
-
-            let card: ChatMsg;
-            if (result.type === "split") {
-              const sd = result.data as { segments?: unknown[]; discount_pct?: number };
-              card = {
-                role: "assistant",
-                content: `${category} split stay available across ${sd.segments?.length} rooms with ${sd.discount_pct}% discount.`,
-                action_data: { type: "split_stay_result", data: { ...result.data, category } as Record<string, unknown> },
-              };
-            } else {
-              const avail = result.data as unknown as ShuffleResult;
-              const fingerprint = `${avail.room_id}|${result.ci}|${result.co}`;
-              if (shownCards.has(fingerprint)) continue; // already shown this exact card
-              card = {
-                role: "assistant",
-                content: `Room ${avail.room_id} (${result.cat}) is available ${result.ci} → ${result.co}.`,
-                action_data: {
-                  type: "availability_result",
-                  data: { ...avail, request: { category: result.cat, check_in: result.ci, check_out: result.co } } as Record<string, unknown>,
-                },
-              };
-            }
-            setChatMessages(prev => [...prev, card]);
-            setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
-            break; // first success wins
-          } catch { /* continue to next attempt */ }
-        }
-      }
     } catch {
       show("AI agent error — please try again", "error");
     } finally {
@@ -297,7 +204,6 @@ export function ReceptionistView() {
     const splitState = "NOT_CHECKED";
 
     setChatMessages([]);
-    setAiActive(true);
     setAiGuided(true);
     setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
 
@@ -332,18 +238,16 @@ export function ReceptionistView() {
       {/* Header */}
       <div className="border-b border-border/50 pb-4 flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-serif font-bold text-text">Front Desk Registry</h1>
+          <h1 className="text-3xl font-serif font-bold text-text">Front Desk</h1>
           <p className="text-xs text-text-muted mt-1 uppercase tracking-widest font-medium">
-            {aiActive
-              ? <span className="flex items-center gap-1.5 text-accent"><Sparkles className="w-3 h-3" /> AI Agent Engaged — Exploring Alternatives</span>
-              : "Deterministic Availability Scanning & Reservation Assembly"}
+            <span className="flex items-center gap-1.5">
+              Room Availability &amp; Reservations
+            </span>
           </p>
         </div>
-        {aiActive && (
-          <span className="text-[9px] font-bold bg-accent/10 text-accent border border-accent/20 px-3 py-1.5 uppercase tracking-widest flex items-center gap-1.5 shrink-0">
-            <Sparkles className="w-2.5 h-2.5" /> AI POWERED
-          </span>
-        )}
+        <span className="text-[9px] font-bold bg-accent/10 text-accent border border-accent/20 px-3 py-1.5 uppercase tracking-widest flex items-center gap-1.5 shrink-0">
+          <Sparkles className="w-2.5 h-2.5" /> AI Ready
+        </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-6 items-start">
@@ -356,11 +260,11 @@ export function ReceptionistView() {
         <div className="absolute top-0 left-0 w-1 h-full bg-accent/30" />
         <div className="flex items-center justify-between mb-6 pb-6 border-b border-border/50">
           <div className="flex items-center gap-4 text-xs font-bold uppercase tracking-wider">
-            <StepPill label="1. Direct check" state={steps.direct} />
+            <StepPill label="1. Checking rooms" state={steps.direct} />
             <ArrowRight className="w-4 h-4 text-border" />
-            <StepPill label="2. Deep analysis" state={steps.shuffle} />
+            <StepPill label="2. Looking deeper" state={steps.shuffle} />
           </div>
-          <span className="text-[9px] font-bold tracking-[0.1em] bg-surface-2 text-text px-3 py-1 border border-border">HHI FRAGMENT SCAN</span>
+          <span className="text-[9px] font-bold tracking-[0.1em] bg-surface-2 text-text-muted px-3 py-1 border border-border/50">{steps.direct === "idle" && steps.shuffle === "idle" ? "Ready" : steps.direct === "running" || steps.shuffle === "running" ? "Searching..." : "Done"}</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -379,17 +283,23 @@ export function ReceptionistView() {
             <input type="date" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={checkOut} min={checkIn} max={maxDate} onChange={(e) => setCheckOut(e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Ledger</label>
+            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Name</label>
             <input type="text" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none font-serif" placeholder="Walk-in Guest" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Booking Source</label>
+            <select className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={bookingSource} onChange={e => setBookingSource(e.target.value)}>
+              {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
+            </select>
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-4">
           <div className="text-xs font-bold uppercase tracking-widest text-text-muted">
-            {nights > 0 ? <span className="flex items-center gap-2"><Calendar className="w-4 h-4"/> {nights} nights <span className="mx-1 text-border">•</span> {category}</span> : "Configure parameter array"}
+            {nights > 0 ? <span className="flex items-center gap-2"><Calendar className="w-4 h-4"/> {nights} nights <span className="mx-1 text-border">•</span> {category}</span> : "Select dates to continue"}
           </div>
           <button className="bg-text text-surface font-semibold hover:opacity-90 active:scale-95 disabled:opacity-40 shadow-sm flex items-center justify-center gap-2 px-8 py-3.5 rounded-sm transition-all uppercase tracking-widest text-xs" onClick={handleCheck} disabled={checking || nights < 1}>
-            {checking ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Scanning</> : "Execute Availability Search"}
+            {checking ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching...</> : "Check Availability"}
           </button>
         </div>
       </div>
@@ -404,9 +314,9 @@ export function ReceptionistView() {
             </div>
             <div>
               <h3 className={`text-xl font-serif font-bold ${isAvailable ? 'text-text' : 'text-occured'}`}>
-                {result.state === "DIRECT_AVAILABLE" && "Direct Block Available"}
-                {result.state === "SHUFFLE_POSSIBLE" && "Availability Extracted via Restructure"}
-                {result.state === "NOT_POSSIBLE" && "Absolute Capacity Reached"}
+                {result.state === "DIRECT_AVAILABLE" && "Room Available"}
+                {result.state === "SHUFFLE_POSSIBLE" && "Room Available via Swap"}
+                {result.state === "NOT_POSSIBLE" && "No Rooms Available"}
               </h3>
               <p className="text-xs tracking-wide uppercase font-bold text-text-muted mt-2">{result.message}</p>
             </div>
@@ -416,8 +326,8 @@ export function ReceptionistView() {
 
           {result.state === "NOT_POSSIBLE" && result.infeasible_dates && (
             <div className="bg-surface-2 border border-occured/30 p-5 mt-6">
-              <h4 className="text-xs font-bold text-occured flex items-center gap-2 mb-2 uppercase tracking-widest"><Info className="w-4 h-4"/> Block Conflict Detected</h4>
-              <p className="text-sm text-text-muted">Total capacity for {category} is entirely consumed on: <span className="font-bold text-text">{result.infeasible_dates.join(", ")}</span>.</p>
+              <h4 className="text-xs font-bold text-occured flex items-center gap-2 mb-2 uppercase tracking-widest"><Info className="w-4 h-4"/> Fully Booked On These Dates</h4>
+              <p className="text-sm text-text-muted">All {category} rooms are occupied on: <span className="font-bold text-text">{result.infeasible_dates.join(", ")}</span>.</p>
             </div>
           )}
 
@@ -449,7 +359,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.nearbyDatesPm1}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, nearbyDatesPm1: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, nearbyDatesPm1: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${e.target.checked}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Nearby dates</div>
@@ -462,7 +376,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.differentCategory}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, differentCategory: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, differentCategory: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${e.target.checked}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Different category</div>
@@ -475,7 +393,11 @@ export function ReceptionistView() {
                           type="checkbox"
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.splitStay}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, splitStay: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, splitStay: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${e.target.checked}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Split stay</div>
@@ -489,7 +411,11 @@ export function ReceptionistView() {
                           className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
                           checked={fallbackPrefs.allowMixedCategorySplit}
                           disabled={!fallbackPrefs.splitStay}
-                          onChange={(e) => setFallbackPrefs(p => ({ ...p, allowMixedCategorySplit: e.target.checked }))}
+                          onChange={(e) => {
+                            const next = { ...fallbackPrefs, allowMixedCategorySplit: e.target.checked };
+                            setFallbackPrefs(next);
+                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${e.target.checked}`, chatMessages);
+                          }}
                         />
                         <div className="leading-5">
                           <div className="font-bold uppercase tracking-widest text-[10px] text-text">Mixed-category split</div>
@@ -516,7 +442,7 @@ export function ReceptionistView() {
                       )}
                     <button
                       className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
-                      onClick={() => { setChatMessages([]); setAiActive(false); setAiGuided(false); }}
+                      onClick={() => { setChatMessages([]); setAiGuided(false); }}
                     >
                       Close AI panel
                     </button>
@@ -539,9 +465,9 @@ export function ReceptionistView() {
           {isAvailable && result.room_id && (
             <div className="flex flex-wrap gap-4 mt-8 pt-6 border-t border-border/50">
               <button className="flex-1 bg-occugreen text-white font-bold hover:brightness-110 active:scale-95 disabled:opacity-40 shadow-sm flex items-center justify-center gap-2 px-6 py-4 transition-all uppercase tracking-widest text-[11px]" onClick={handleConfirm} disabled={confirming}>
-                {confirming ? <><Loader2 className="w-4 h-4 animate-spin" /> Committing Transaction</> : <span>Authorize Booking &rarr; Room {result.room_id}</span>}
+                {confirming ? <><Loader2 className="w-4 h-4 animate-spin" /> Confirming...</> : <span>Confirm Booking — Room {result.room_id}</span>}
               </button>
-              <button className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-8 py-4 transition-colors" onClick={() => { setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}>Abort</button>
+              <button className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-8 py-4 transition-colors" onClick={() => { setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}>Cancel</button>
             </div>
           )}
         </div>
@@ -551,46 +477,40 @@ export function ReceptionistView() {
       {lastConfirmed && (
         <div className="bg-surface border border-occugreen/30 p-10 text-center shadow-subtle flex flex-col items-center">
           <CheckCircle2 className="w-12 h-12 text-occugreen mb-4" />
-          <h2 className="text-3xl font-serif font-bold text-text mb-2">Reservation Finalized</h2>
-          <p className="text-text-muted tracking-wide text-sm font-medium mb-8">System Ledger ID: <span className="text-text font-mono font-bold bg-surface-2 border border-border px-3 py-1">{lastConfirmed}</span></p>
-          <button className="bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-xs hover:bg-border active:scale-95 px-8 py-3 shadow-sm transition-all" onClick={() => { setLastConfirmed(null); setGuestName(""); }}>Initialize Next Request</button>
+          <h2 className="text-3xl font-serif font-bold text-text mb-2">Booking Confirmed</h2>
+          <p className="text-text-muted tracking-wide text-sm font-medium mb-8">Booking ID: <span className="text-text font-mono font-bold bg-surface-2 border border-border px-3 py-1">{lastConfirmed}</span></p>
+          <button className="bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-xs hover:bg-border active:scale-95 px-8 py-3 shadow-sm transition-all" onClick={() => { setLastConfirmed(null); setGuestName(""); }}>New Booking</button>
         </div>
       )}
 
           </>
 
-      {/* ── AI PANEL — auto-activates on NOT_POSSIBLE ─────────────────── */}
-      {aiActive && (
-        <div ref={aiPanelRef} className="bg-surface border border-accent/30 shadow-subtle">
-          {/* Handoff banner */}
-          <div className="bg-accent/5 border-b border-accent/20 px-6 py-3 flex items-center gap-3">
-            <Sparkles className="w-3.5 h-3.5 text-accent shrink-0" />
-            <p className="text-xs text-accent font-medium">
-              Deterministic scan exhausted for <span className="font-bold">{category}</span> &nbsp;
-              {checkIn} → {checkOut} &nbsp;·&nbsp; AI agent is finding alternatives
+      {/* ── AI PANEL — always-on parallel revenue assistant ──────────────── */}
+      <div ref={aiPanelRef} className="bg-surface border border-accent/30 shadow-subtle">
+          {/* Handoff banner — only shown on NOT_POSSIBLE */}
+          {aiGuided && result?.state === "NOT_POSSIBLE" && (
+          <div className="bg-occuorange/5 border-b border-occuorange/20 px-6 py-3 flex items-center gap-3">
+            <Sparkles className="w-3.5 h-3.5 text-occuorange shrink-0" />
+            <p className="text-xs text-occuorange font-medium">
+              No {category} rooms for <span className="font-bold">{checkIn} → {checkOut}</span> — AI is searching for the best alternative
             </p>
-            <button
-              onClick={() => { setAiActive(false); setChatMessages([]); }}
-              className="ml-auto text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-2 py-1 bg-surface hover:bg-surface-2 shrink-0"
-            >
-              Dismiss
-            </button>
           </div>
+          )}
 
           {/* Panel header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-2/60">
             <div>
               <div className="flex items-center gap-2">
                 <Bot className="w-4 h-4 text-accent" />
-                <h3 className="font-serif font-bold text-lg text-text">AI Front Desk Agent</h3>
+                <h3 className="font-serif font-bold text-lg text-text">AI Revenue Assistant</h3>
               </div>
               <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest">
-                Gemini 2.5 · LangGraph · session history — lost on refresh by design
+                Gemini 2.5 · Live hotel intelligence
               </p>
             </div>
             {chatMessages.length > 0 && (
               <button
-                onClick={() => { setChatMessages([]); }}
+                onClick={() => { setChatMessages([]); setAiGuided(false); }}
                 className="text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-2 py-1 bg-surface hover:bg-surface-2"
               >
                 Clear chat
@@ -603,9 +523,21 @@ export function ReceptionistView() {
             {chatMessages.length === 0 && !chatLoading && (
               <div className="flex-1 flex flex-col items-center justify-center text-center">
                 <Bot className="w-10 h-10 text-accent/25 mb-4" />
-                <p className="text-sm font-serif text-text-muted max-w-xs leading-relaxed">
-                  Consulting AI for alternatives…
+                <p className="text-sm font-serif font-bold text-text mb-1">Always on. Ask anything.</p>
+                <p className="text-xs text-text-muted max-w-xs leading-relaxed">
+                  Ask about room availability, tonight's occupancy, which category to push, upgrade opportunities, or anything about today's bookings.
                 </p>
+                <div className="mt-4 grid grid-cols-1 gap-2 w-full max-w-xs">
+                  {["What's looking good to sell today?", "Any upgrades available tonight?", "How's our occupancy this week?"].map(q => (
+                    <button
+                      key={q}
+                      onClick={() => { setChatInput(q); }}
+                      className="text-left text-[10px] text-accent border border-accent/20 bg-accent/5 px-3 py-2 hover:bg-accent/10 transition-colors font-medium"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
             {chatMessages.map((msg, i) => <ChatBubble key={i} msg={msg} />)}
@@ -642,48 +574,37 @@ export function ReceptionistView() {
             </button>
           </div>
         </div>
-      )}
         </div>
 
-      {/* Recent Bookings Table */}
+      {/* Recent Bookings Sidebar */}
         <aside className="min-w-0">
-          <div className="bg-surface border border-border shadow-subtle p-6 lg:sticky lg:top-6">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="font-serif font-bold text-xl text-text">Recent Ledger Activity</h3>
-              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-4 py-2 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
-                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Synchronize"}
+          <div className="bg-surface border border-border shadow-subtle p-5 lg:sticky lg:top-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-serif font-bold text-lg text-text">Recent Bookings</h3>
+              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-3 py-1.5 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
+                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Refresh"}
               </button>
             </div>
             {recentBookings.length === 0 ? (
-              <div className="py-12 text-center text-text-muted font-medium text-sm border-t border-border/50">No ledger activity found.</div>
+              <div className="py-10 text-center text-text-muted font-medium text-sm border-t border-border/50">No recent bookings.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-[10px] text-text-muted uppercase tracking-[0.15em] bg-surface-2 border-y border-border">
-                    <tr>
-                      <th className="px-5 py-4 font-bold">Ledger ID</th>
-                      <th className="px-5 py-4 font-bold">Client Identity</th>
-                      <th className="px-5 py-4 font-bold">Parameters</th>
-                      <th className="px-5 py-4 font-bold text-center">System State</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {recentBookings.map((b) => (
-                      <tr key={b.id} className="hover:bg-surface-2/30 transition-colors">
-                        <td className="px-5 py-4 font-mono font-bold tracking-tighter text-text">{b.id}</td>
-                        <td className="px-5 py-4 font-serif font-medium text-text">{b.guest_name}</td>
-                        <td className="px-5 py-4 text-xs font-mono text-text-muted">
-                          {b.room_id} <span className="mx-2 text-border">•</span> {b.check_in}
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={`inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text border-border'}`}>
-                            {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-2">
+                {recentBookings.map((b) => (
+                  <div key={b.id} className="border border-border bg-surface-2/40 px-4 py-3 hover:bg-surface-2/70 transition-colors">
+                    <div className="flex items-start justify-between gap-2 mb-1">
+                      <span className="font-serif font-medium text-sm text-text truncate">{b.guest_name}</span>
+                      <span className={`shrink-0 inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text-muted border-border'}`}>
+                        {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono">
+                      <span className="font-bold text-text">Room {b.room_id}</span>
+                      <span className="text-border">·</span>
+                      <span>{b.check_in}</span>
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5 font-mono">{b.id}</div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -697,8 +618,8 @@ function ComparisonSection({ comparison }: { comparison: ComparisonTable }) {
   const { dates, rows, summary } = comparison;
   return (
     <div className="bg-surface-2 border border-border p-5 mt-8">
-      <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-1">Rearrangement Blueprint</h4>
-      <p className="text-[10px] text-text-muted mb-4">Each room shows its current state (BEFORE) and what it will look like after this booking is confirmed (AFTER).</p>
+      <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-1">Room Swap Plan</h4>
+      <p className="text-[10px] text-text-muted mb-4">Shows current state (BEFORE) and what changes after this booking is confirmed (AFTER).</p>
 
       {/* Plain-English move summary */}
       {summary && summary.length > 0 && (
@@ -838,10 +759,11 @@ function StepPill({ label, state }: { label: string; state: StepState }) {
 
 function ActionCard({ data }: { data: { type: string; data: Record<string, unknown> } }) {
   // Confirm-from-chat state — agent only recommends; receptionist must click to commit
-  const [guestName,   setGuestName]   = useState("");
-  const [confirming,  setConfirming]  = useState(false);
-  const [confirmed,   setConfirmed]   = useState<{ booking_id: string; room_id: string } | null>(null);
-  const [confirmErr,  setConfirmErr]  = useState<string | null>(null);
+  const [guestName,      setGuestName]      = useState("");
+  const [bookingSource,  setBookingSource]  = useState("Direct");
+  const [confirming,     setConfirming]     = useState(false);
+  const [confirmed,      setConfirmed]      = useState<{ booking_id: string; room_id: string } | null>(null);
+  const [confirmErr,     setConfirmErr]     = useState<string | null>(null);
   const { show } = useToast();
 
   if (data.type === "booking_confirmed") {
@@ -886,13 +808,15 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!d.segments?.length) return;
       setConfirmErr(null);
       setConfirming(true);
+      const splitSrc = resolveSource(bookingSource);
       try {
-        // Derive category from first segment's room_id prefix — or ask; for now use the form's active category
         const r = await confirmSplitStay({
-          guest_name:   guestName.trim(),
-          category:     d.category,
-          discount_pct: d.discount_pct,
-          segments:     d.segments,
+          guest_name:      guestName.trim(),
+          category:        d.category,
+          discount_pct:    d.discount_pct,
+          segments:        d.segments,
+          channel:         splitSrc.channel,
+          channel_partner: splitSrc.partner,
         });
         setConfirmed({ booking_id: r.data.stay_group_id, room_id: `${d.segments.length} rooms` });
         show(`Split stay confirmed — Group ${r.data.stay_group_id}`, "success");
@@ -952,7 +876,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
         ) : (
           <div className="border-t border-border bg-surface-2 p-3 text-xs space-y-2">
             <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
-              Receptionist action — confirm to write all segments to database
+              Enter guest name and confirm to book all segments
             </div>
             <div className="flex gap-2 items-center">
               <input
@@ -996,13 +920,16 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!guestName.trim()) { setConfirmErr("Enter guest name to confirm."); return; }
       setConfirmErr(null);
       setConfirming(true);
+      const src = resolveSource(bookingSource);
       try {
         const r = await confirmBooking({
           request: {
-            category:   d.request.category,
-            check_in:   d.request.check_in,
-            check_out:  d.request.check_out,
-            guest_name: guestName.trim(),
+            category:        d.request.category,
+            check_in:        d.request.check_in,
+            check_out:       d.request.check_out,
+            guest_name:      guestName.trim(),
+            channel:         src.channel,
+            channel_partner: src.partner,
           },
           room_id:   d.room_id,
           swap_plan: (d.swap_plan ?? []) as unknown[],
@@ -1060,17 +987,24 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
           ) : (
             <div className="border border-border bg-surface-2 p-3 mt-2 text-xs space-y-2">
               <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
-                Receptionist action — confirm to write to database
+                Enter guest name and confirm to book
               </div>
-              <div className="flex gap-2 items-center">
+              <div className="flex gap-2 items-center flex-wrap">
                 <input
                   type="text"
                   placeholder="Guest name"
                   value={guestName}
                   onChange={e => setGuestName(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleConfirm()}
-                  className="flex-1 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+                  className="flex-1 min-w-32 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
                 />
+                <select
+                  value={bookingSource}
+                  onChange={e => setBookingSource(e.target.value)}
+                  className="bg-surface border border-border px-2 py-1.5 text-xs text-text focus:outline-none focus:border-accent"
+                >
+                  {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
+                </select>
                 <button
                   onClick={handleConfirm}
                   disabled={confirming}
@@ -1096,6 +1030,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
 
 function ChatBubble({ msg }: { msg: ChatMsg }) {
   const isUser = msg.role === "user";
+  if (isUser && (msg.content.startsWith("[HANDOFF]") || msg.content.startsWith("[PREFS]"))) return null;
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className={`w-7 h-7 flex items-center justify-center shrink-0 mt-0.5 border ${

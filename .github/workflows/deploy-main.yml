@@ -7,124 +7,13 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build frontend
-        working-directory: frontend
-        env:
-          VITE_API_URL: https://${{ secrets.MAIN_HOST }}.nip.io/api
-        run: |
-          npm ci
-          npm run build
-
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.MAIN_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Prepare server directories
-        run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.MAIN_HOST }} \
-            "sudo mkdir -p /opt/occumax/frontend/dist && sudo chown -R ubuntu:ubuntu /opt/occumax"
-
-      - name: Copy frontend build to server
-        run: |
-          rsync -az --delete \
-            -e "ssh -i ~/.ssh/deploy_key" \
-            frontend/dist/ \
-            ubuntu@${{ secrets.MAIN_HOST }}:/opt/occumax/frontend/dist/
-
-      - name: Deploy backend & restart
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          MAIN_DATABASE_URL: ${{ secrets.MAIN_DATABASE_URL }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MAIN_HOST: ${{ secrets.MAIN_HOST }}
-        run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.MAIN_HOST }} \
-            GH_TOKEN="$GH_TOKEN" \
-            MAIN_DATABASE_URL="$MAIN_DATABASE_URL" \
-            GEMINI_API_KEY="$GEMINI_API_KEY" \
-            MAIN_HOST="$MAIN_HOST" \
-            bash << 'ENDSSH'
-            set -e
-
-            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git"
-
-            # Ensure /opt/occumax exists and is owned by ubuntu
-            sudo mkdir -p /opt/occumax
-            sudo chown ubuntu:ubuntu /opt/occumax
-
-            # If dir exists but is not a git repo, init git inside it
-            if [ ! -d "/opt/occumax/.git" ]; then
-              git -C /opt/occumax init
-              git -C /opt/occumax remote add origin "$REPO_URL"
-            fi
-
-            cd /opt/occumax
-            git remote set-url origin "$REPO_URL"
-            git fetch origin
-            git checkout main
-            git reset --hard origin/main
-
-            # Build .env from repo config + injected secrets
-            cat /opt/occumax/backend/.env.server > /opt/occumax/.env
-            echo "DATABASE_URL=${MAIN_DATABASE_URL}" >> /opt/occumax/.env
-            echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
-            echo "CORS_ORIGINS=https://${MAIN_HOST}.nip.io" >> /opt/occumax/.env
-
-            # Recreate venv if missing
-            if [ ! -f "/opt/occumax/venv/bin/pip" ]; then
-              python3 -m venv /opt/occumax/venv
-            fi
-
-            # Install Python dependencies
-            /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
-
-            # Run schema migrations (handles additive AND destructive changes)
-            cd /opt/occumax/backend
-            ROOMS_EXIST=$(DATABASE_URL="${MAIN_DATABASE_URL}" /opt/occumax/venv/bin/python3 -c "import os,psycopg2; url=os.environ['DATABASE_URL'].replace('postgresql+asyncpg://','postgresql://').replace('asyncpg://','postgresql://'); conn=psycopg2.connect(url); cur=conn.cursor(); cur.execute(\"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='rooms' AND table_schema='public')\"); print('yes' if cur.fetchone()[0] else 'no'); conn.close()" 2>/dev/null || echo "no")
-            if [ "$ROOMS_EXIST" = "no" ]; then
-              echo "Fresh or broken DB — clearing any stale alembic stamp and running all migrations"
-              DATABASE_URL="${MAIN_DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp base 2>/dev/null || true
-            fi
-            DATABASE_URL="${MAIN_DATABASE_URL}" /opt/occumax/venv/bin/alembic upgrade head
-
-            # Restart backend
-            sudo systemctl restart occumax-backend
-
-            # Wait up to 30s for backend to be ready
-            for i in $(seq 1 10); do
-              sleep 3
-              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-                echo "Backend OK"
-                break
-              fi
-              echo "Waiting for backend... attempt $i"
-            done
-            curl -sf http://localhost:8000/health || (echo "Backend failed to start" && sudo journalctl -u occumax-backend -n 20 --no-pager && exit 1)
-          ENDSSH
-
-      - name: Reload Nginx
-        run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@${{ secrets.MAIN_HOST }} \
-            "sudo systemctl reload nginx"
-
-      - name: Health check
-        run: |
-          sleep 3
-          curl -f https://${{ secrets.MAIN_HOST }}.nip.io/ || exit 1
-          echo "Production deployment successful — https://${{ secrets.MAIN_HOST }}.nip.io"
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      branch: main
+      env_prefix: Production
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      HOST: ${{ secrets.MAIN_HOST }}
+      DATABASE_URL: ${{ secrets.MAIN_DATABASE_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
