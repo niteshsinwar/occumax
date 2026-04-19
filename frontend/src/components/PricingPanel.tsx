@@ -49,7 +49,7 @@ function groupByCategory(recs: PricingRecommendation[]) {
 
 export function PricingPanel() {
   const [result,     setResult]     = useState<PricingAnalyseResponse | null>(null);
-  const [rows,       setRows]       = useState<RowState[]>([]);
+  const [rows,       setRows]       = useState<Record<string, RowState>>({});
   const [analysing,  setAnalysing]  = useState(false);
   const [committing, setCommitting] = useState(false);
   const [committed,  setCommitted]  = useState<{ updated: number; skipped: number } | null>(null);
@@ -85,10 +85,12 @@ export function PricingPanel() {
       const res  = await analysePricing();
       const data = res.data as PricingAnalyseResponse;
       setResult(data);
-      setRows(data.recommendations.map(r => ({
-        decision: null,
-        overrideValue: String(r.suggested_rate),
-      })));
+      setRows(Object.fromEntries(
+        data.recommendations.map(r => [
+          `${r.category}-${r.date}`,
+          { decision: null, overrideValue: String(r.suggested_rate) },
+        ])
+      ));
     } catch {
       show("Pricing analysis failed", "error");
     } finally {
@@ -96,23 +98,23 @@ export function PricingPanel() {
     }
   };
 
-  const setDecision = (i: number, d: Decision) =>
-    setRows(prev => prev.map((r, idx) => idx === i ? { ...r, decision: d } : r));
+  const setDecision = (key: string, d: Decision) =>
+    setRows(prev => ({ ...prev, [key]: { ...prev[key], decision: d } }));
 
-  const setOverride = (i: number, val: string) =>
-    setRows(prev => prev.map((r, idx) =>
-      idx === i ? { ...r, overrideValue: val, decision: "override" } : r
-    ));
+  const setOverride = (key: string, val: string) =>
+    setRows(prev => ({ ...prev, [key]: { ...prev[key], overrideValue: val, decision: "override" } }));
 
   const acceptAll = () =>
-    setRows(prev => prev.map(r => r.decision === "rejected" ? r : { ...r, decision: "accepted" }));
+    setRows(prev => Object.fromEntries(
+      Object.entries(prev).map(([k, r]) => [k, r.decision === "rejected" ? r : { ...r, decision: "accepted" }])
+    ));
 
   const handleCommit = async () => {
     if (!result) return;
     const items: { category: string; date: string; new_rate: number }[] = [];
-    result.recommendations.forEach((rec, i) => {
-      const row = rows[i];
-      if (row.decision === "rejected" || row.decision === null) return;
+    result.recommendations.forEach(rec => {
+      const row = rows[`${rec.category}-${rec.date}`];
+      if (!row || row.decision === "rejected" || row.decision === null) return;
       const rate = row.decision === "override"
         ? Math.round(parseFloat(row.overrideValue) / 100) * 100
         : rec.suggested_rate;
@@ -132,9 +134,9 @@ export function PricingPanel() {
     }
   };
 
-  const accepted = rows.filter(r => r.decision === "accepted" || r.decision === "override").length;
-  const rejected = rows.filter(r => r.decision === "rejected").length;
-  const pending  = rows.filter(r => r.decision === null).length;
+  const accepted = Object.values(rows).filter(r => r.decision === "accepted" || r.decision === "override").length;
+  const rejected = Object.values(rows).filter(r => r.decision === "rejected").length;
+  const pending  = Object.values(rows).filter(r => r.decision === null).length;
 
   const grouped = result ? groupByCategory(result.recommendations) : [];
 
@@ -150,15 +152,6 @@ export function PricingPanel() {
     return { highDemand, lowDemand, increasing, decreasing, highCats, lowCats };
   })() : null;
 
-  // Build a flat index to look up rowState by rec index
-  const flatIndex = (catIdx: number, rowIdx: number) => {
-    if (!result) return 0;
-    let offset = 0;
-    for (let c = 0; c < catIdx; c++) {
-      offset += grouped[c][1].length;
-    }
-    return offset + rowIdx;
-  };
 
   return (
     <div className="h-full flex flex-col">
@@ -332,7 +325,7 @@ export function PricingPanel() {
             </div>
           )}
 
-          {grouped.map(([category, recs], catIdx) => (
+          {grouped.map(([category, recs]) => (
             <div key={category} className="border-b border-border last:border-0">
               {/* Category header */}
               <div className="px-6 py-3 bg-surface-2/60 border-b border-border/50 flex items-center gap-3 sticky top-0 z-10">
@@ -358,9 +351,9 @@ export function PricingPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {recs.map((rec, rowIdx) => {
-                    const i   = flatIndex(catIdx, rowIdx);
-                    const row = rows[i];
+                  {recs.map((rec) => {
+                    const key = `${rec.category}-${rec.date}`;
+                    const row = rows[key];
                     if (!row) return null;
                     const isAccepted = row.decision === "accepted";
                     const isRejected = row.decision === "rejected";
@@ -413,7 +406,7 @@ export function PricingPanel() {
                                 type="number"
                                 step="100"
                                 value={row.overrideValue}
-                                onChange={e => setOverride(i, e.target.value)}
+                                onChange={e => setOverride(key, e.target.value)}
                                 className="w-20 bg-surface border border-accent text-text text-xs font-mono text-right px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
                               />
                             </div>
@@ -454,7 +447,7 @@ export function PricingPanel() {
                               <button
                                 title="Accept suggested rate"
                                 className="p-1.5 hover:bg-occugreen/10 text-occugreen/50 hover:text-occugreen transition-colors rounded-sm"
-                                onClick={() => setDecision(i, "accepted")}
+                                onClick={() => setDecision(key, "accepted")}
                               >
                                 <CheckCircle2 className="w-4 h-4" />
                               </button>
@@ -469,7 +462,7 @@ export function PricingPanel() {
                               className={`p-1.5 rounded-sm transition-colors ${
                                 isOverride ? "text-accent bg-accent/10" : "text-text-muted hover:text-accent hover:bg-accent/10"
                               }`}
-                              onClick={() => setDecision(i, isOverride ? null : "override")}
+                              onClick={() => setDecision(key, isOverride ? null : "override")}
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
@@ -478,7 +471,7 @@ export function PricingPanel() {
                               className={`p-1.5 rounded-sm transition-colors ${
                                 isRejected ? "text-occured bg-occured/10" : "text-text-muted hover:text-occured hover:bg-occured/10"
                               }`}
-                              onClick={() => setDecision(i, isRejected ? null : "rejected")}
+                              onClick={() => setDecision(key, isRejected ? null : "rejected")}
                             >
                               <XCircle className="w-4 h-4" />
                             </button>
