@@ -116,20 +116,21 @@ jobs:
 
             /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
 
-            # Run schema migrations — detects fresh DB and stamps base first
+            # Three-state DB detection before running migrations:
+            #   tracked    - alembic_version row present  -> upgrade head (normal path)
+            #   has_tables - DB has objects, no tracking  -> stamp head then upgrade head
+            #   empty_db   - completely empty DB          -> stamp base then upgrade head
+            # The old two-state check (stamp base when rooms missing) was wrong for
+            # has_tables: stamp base + upgrade head crashes on already-existing enums.
             cd /opt/occumax/backend
-            ROOMS_EXIST=$(DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/python3 -c "
-            import os, psycopg2
-            url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://','postgresql://').replace('asyncpg://','postgresql://')
-            conn = psycopg2.connect(url)
-            cur = conn.cursor()
-            cur.execute(\"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='rooms' AND table_schema='public')\")
-            print('yes' if cur.fetchone()[0] else 'no')
-            conn.close()
-            " 2>/dev/null || echo "no")
-            if [ "$ROOMS_EXIST" = "no" ]; then
-              echo "Fresh or broken DB — clearing any stale alembic stamp and running all migrations"
+            DB_STATE=$(DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/python3 -c "import os,psycopg2;url=os.environ['DATABASE_URL'].replace('postgresql+asyncpg://','postgresql://').replace('asyncpg://','postgresql://');conn=psycopg2.connect(url);cur=conn.cursor();cur.execute('SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name=%s AND table_schema=%s)',('alembic_version','public'));has_alembic=cur.fetchone()[0];cur.execute('SELECT version_num FROM alembic_version LIMIT 1') if has_alembic else cur.execute('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=%s AND table_type=%s',('public','BASE TABLE'));row=cur.fetchone();print('tracked' if (has_alembic and row) else ('empty_tracking' if has_alembic else ('has_tables' if row[0]>0 else 'empty_db')));conn.close()" 2>/dev/null || echo "empty_db")
+            echo "DB state: ${DB_STATE}"
+            if [ "$DB_STATE" = "empty_db" ]; then
+              echo "Empty DB - stamping base and running all migrations from scratch"
               DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp base 2>/dev/null || true
+            elif [ "$DB_STATE" = "has_tables" ] || [ "$DB_STATE" = "empty_tracking" ]; then
+              echo "DB has objects but no alembic tracking - stamping head to align"
+              DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp head 2>/dev/null || true
             fi
             DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/alembic upgrade head
 
