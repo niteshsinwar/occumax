@@ -264,14 +264,14 @@ def seed_bookings():
 def seed_analytics():
     print("── 3. Analytics history ──────────────────────────────────────────")
 
-    # Year 1 — 18 months back to 1 month back (strong history for AI/pace/forecast)
+    # 25 months back to 1 month back — covers Y-2 dates (April 2024) for forecast pickup ratio
     r1 = post("/admin/seed-analytics-history", {
-        "start": (TODAY - timedelta(days=540)).isoformat(),
+        "start": (TODAY - timedelta(days=760)).isoformat(),
         "end":   (TODAY - timedelta(days=31)).isoformat(),
         "fill_pct": 71,
     })
     if r1:
-        print(f"  Y-1 window: {json.dumps(r1)[:120]}")
+        print(f"  Y-2→Y-1 window: {json.dumps(r1)[:120]}")
 
     # Recent 30 days — slightly lower fill (shoulder season signal)
     r2 = post("/admin/seed-analytics-history", {
