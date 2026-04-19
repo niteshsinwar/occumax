@@ -10,8 +10,8 @@ const BUCKET_LABELS: Record<AvailabilityBucket, string> = {
   "1": "1 night",
   "2": "2 nights",
   "3": "3 nights",
-  "4": "4 nights",
-  "4+": "4+ nights",
+  "4": "4",
+  "4+": "4+ night",
 };
 
 /** Fill colors for donut segments (theme-aligned; matches prior bar emphasis). */
@@ -143,7 +143,7 @@ interface BirdseyeInventoryHighlightsProps {
 
 /**
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
- * Each bucket shows a donut chart of the category mix plus a legend with counts (1–4 nights; 4+ is omitted from this panel).
+ * Each bucket shows category mix plus counts for lengths 1–3 nights, exactly 4 nights, and 4+ night stays.
  */
 export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
   const base = snapshot;
