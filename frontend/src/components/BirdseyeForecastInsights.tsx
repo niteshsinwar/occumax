@@ -1,6 +1,7 @@
 import type { OccupancyForecastResponse, RoomCategory } from "../types";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { useMemo, useRef, useState } from "react";
+import { calendarDayKey } from "../utils/calendarDayKey";
 
 function int(n: number) {
   return Math.round(n).toString();
@@ -87,16 +88,24 @@ function buildDailySeriesFromSelectedSeries(series: OccupancyForecastResponse["s
 
   return [...byDate.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, row]) => {
-      return {
-        date,
-        totalRooms: row.totalRooms,
-        onBooksRooms: row.onBooksRooms,
-        predictedRooms: row.hasPred ? row.predictedRooms : null,
-        predictedLowRooms: row.hasBand ? row.lowRooms : null,
-        predictedHighRooms: row.hasBand ? row.highRooms : null,
-      };
-    });
+    .map(([date, row]) => ({
+      date,
+      totalRooms: row.totalRooms,
+      onBooksRooms: row.onBooksRooms,
+      predictedRooms: row.hasPred ? row.predictedRooms : null,
+      predictedLowRooms: row.hasBand ? row.lowRooms : null,
+      predictedHighRooms: row.hasBand ? row.highRooms : null,
+    }));
+}
+
+/**
+ * Restricts forecast daily points to the same calendar nights as the visible heatmap columns.
+ */
+function filterDailyToVisibleKeys(daily: DailyDatum[], visibleKeys: string[]): DailyDatum[] {
+  if (!visibleKeys.length) return daily;
+  const allowed = new Set(visibleKeys);
+  const next = daily.filter(d => allowed.has(calendarDayKey(d.date)));
+  return next.length ? next : daily;
 }
 
 /**
@@ -307,13 +316,18 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
 export function BirdseyeForecastInsights(props: {
   forecast: OccupancyForecastResponse;
   selectedCategories: RoomCategory[];
+  /** YYYY-MM-DD keys for heatmap columns in view (week span); chart and summary follow this window. */
+  visibleForecastDateKeys: string[];
 }) {
-  const { forecast, selectedCategories } = props;
+  const { forecast, selectedCategories, visibleForecastDateKeys } = props;
 
   const selectedDaily = useMemo(() => buildDailySeriesFromSelectedSeries(forecast.series, selectedCategories), [forecast.series, selectedCategories]);
   const fallbackDaily = useMemo(() => buildDailySeriesFromPoints(forecast.series.find(s => s.category === null)?.points ?? []), [forecast.series]);
 
-  const daily = selectedDaily.length ? selectedDaily : fallbackDaily;
+  const daily = useMemo(() => {
+    const merged = selectedDaily.length ? selectedDaily : fallbackDaily;
+    return filterDailyToVisibleKeys(merged, visibleForecastDateKeys);
+  }, [selectedDaily, fallbackDaily, visibleForecastDateKeys]);
 
   return (
     <div className="bg-surface border border-border shadow-subtle">
@@ -333,8 +347,12 @@ export function BirdseyeForecastInsights(props: {
         <div className="border border-border/70 rounded-sm overflow-hidden bg-surface">
           <div className="flex items-center justify-between px-3 py-2 bg-surface-2/50 border-b border-border/50 gap-2">
             <span className="text-[10px] font-bold text-text uppercase tracking-widest">Selected types</span>
-            <span className="text-[10px] font-black tabular-nums text-text text-right shrink-0" title="Total selected room types.">
+            <span
+              className="text-[10px] font-black tabular-nums text-text text-right shrink-0"
+              title="Room categories in the filter and number of nights in the selected week span."
+            >
               {selectedCategories.length} type{selectedCategories.length === 1 ? "" : "s"}
+              {visibleForecastDateKeys.length > 0 ? ` · ${visibleForecastDateKeys.length} night${visibleForecastDateKeys.length === 1 ? "" : "s"}` : ""}
             </span>
           </div>
 

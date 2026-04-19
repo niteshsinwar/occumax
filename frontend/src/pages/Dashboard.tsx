@@ -9,6 +9,7 @@ import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionIn
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
+import { calendarDayKey } from "../utils/calendarDayKey";
 import { Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
@@ -33,6 +34,8 @@ type BirdseyeDashboardKpis = {
   tonightRoomsOccupied: number;
   tonightTotalRooms: number;
   tonightInView: boolean;
+  /** First column date on the heatmap (property "tonight" for this board). */
+  firstNightLabel: string;
   avgRateInView: number;
   avgRateNightCount: number;
   orphanNightsAtRisk: number;
@@ -41,23 +44,26 @@ type BirdseyeDashboardKpis = {
 
 /**
  * Builds occupancy, ADR-style average rate, and orphan-gap counts for the Bird's Eye KPI strip.
+ * "Tonight" uses heatmap column 0 (same anchor as the API `date.today()` window), avoiding
+ * client/server timezone mismatches from comparing browser `formatISO` to payload dates.
  * Orphans match analytics semantics: EMPTY with non-EMPTY on both sides within the same room row.
  */
 function computeBirdseyeDashboardKpis(
   dates: string[],
   rows: HeatmapRow[],
   spanDays: number,
-  todayStr: string,
 ): BirdseyeDashboardKpis {
   const span = Math.min(Math.max(0, spanDays), dates.length);
   const totalRooms = rows.length;
-  const todayIdx = dates.indexOf(todayStr);
-  const tonightInView = todayIdx >= 0 && todayIdx < dates.length;
+  /** First night on the board — always aligned with the leftmost heatmap column. */
+  const tonightIdx = 0;
+  const tonightInView = span > 0 && dates.length > 0;
+  const firstNightLabel = dates.length > 0 ? calendarDayKey(String(dates[0])) : "";
 
   let tonightRoomsOccupied = 0;
   if (tonightInView && totalRooms > 0) {
     for (const r of rows) {
-      const c = r.cells[todayIdx];
+      const c = r.cells[tonightIdx];
       if (c && c.block_type !== "EMPTY") tonightRoomsOccupied += 1;
     }
   }
@@ -104,6 +110,7 @@ function computeBirdseyeDashboardKpis(
     tonightRoomsOccupied,
     tonightTotalRooms: totalRooms,
     tonightInView,
+    firstNightLabel,
     avgRateInView,
     avgRateNightCount: rateCount,
     orphanNightsAtRisk,
@@ -200,11 +207,16 @@ export function Dashboard() {
     return Math.min(weekSpan * 7, heatmap.dates.length);
   }, [heatmap, weekSpan]);
 
-  const todayStr = formatISO(new Date(), { representation: "date" });
   const dashboardKpis = useMemo((): BirdseyeDashboardKpis | null => {
     if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
-    return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays, todayStr);
-  }, [heatmap, filteredRows, spanDays, todayStr]);
+    return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays);
+  }, [heatmap, filteredRows, spanDays]);
+
+  /** Calendar keys for heatmap columns in view; keeps forecast chart aligned with the grid span. */
+  const visibleForecastDateKeys = useMemo(
+    () => (heatmap ? heatmap.dates.slice(0, spanDays).map(d => calendarDayKey(String(d))) : []),
+    [heatmap, spanDays],
+  );
 
   const snapshot = useMemo(() => {
     if (!heatmap) return null;
@@ -435,8 +447,8 @@ export function Dashboard() {
             </div>
             <div className="text-[10px] text-text-muted">
               {dashboardKpis.tonightInView
-                ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms`
-                : "Today is not on the loaded calendar"}
+                ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}`
+                : "No calendar loaded"}
             </div>
           </div>
           <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
@@ -472,7 +484,11 @@ export function Dashboard() {
         <div className="mt-6">
           {forecast ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-              <BirdseyeForecastInsights forecast={forecast} selectedCategories={selectedCategories} />
+              <BirdseyeForecastInsights
+                forecast={forecast}
+                selectedCategories={selectedCategories}
+                visibleForecastDateKeys={visibleForecastDateKeys}
+              />
               <BirdseyeCompressionInsights dates={heatmap.dates} rows={filteredRows} maxDays={spanDays} />
             </div>
           ) : (
