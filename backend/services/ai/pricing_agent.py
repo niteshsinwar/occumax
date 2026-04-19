@@ -19,6 +19,7 @@ Output format (from AI final message):
 # NOTE: intentionally no `from __future__ import annotations` — LangGraph
 # resolves TypedDict annotations at runtime and needs them in global scope.
 
+import asyncio
 import json
 import logging
 import operator
@@ -347,7 +348,14 @@ async def run_pricing_agent(
         HumanMessage(content=prompt),
     ]
 
-    result = await graph.ainvoke({"messages": initial_messages})
+    try:
+        result = await asyncio.wait_for(
+            graph.ainvoke({"messages": initial_messages}),
+            timeout=290,  # 10s under Nginx's 300s proxy_read_timeout
+        )
+    except asyncio.TimeoutError:
+        logger.error("Pricing agent timed out after 290s")
+        return {"recommendations": [], "summary": "Analysis timed out — try again or reduce the booking window."}
     messages = result["messages"]
 
     # Last AIMessage without tool_calls = final answer

@@ -148,6 +148,19 @@ jobs:
             curl -sf http://localhost:8000/health || (echo "Backend failed to start" && sudo journalctl -u occumax-backend -n 20 --no-pager && exit 1)
           ENDSSH
 
+      - name: Configure Nginx timeouts
+        run: |
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
+            "sudo tee /etc/nginx/conf.d/occumax-timeouts.conf > /dev/null << 'EOF'
+          # AI endpoints (pricing/analyse, channel-recommend, ai/chat) can take
+          # 60-120s for multi-turn Gemini agent loops. Raise timeouts to 300s so
+          # Nginx does not kill the connection mid-run with a 504.
+          proxy_read_timeout    300s;
+          proxy_connect_timeout  15s;
+          proxy_send_timeout     30s;
+          EOF
+          sudo nginx -t"
+
       - name: Reload Nginx
         run: |
           ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
