@@ -260,13 +260,14 @@ def _build_graph(tools: list):
         model="gemini-2.5-flash",
         google_api_key=settings.GEMINI_API_KEY,
         temperature=0.2,
+        convert_system_message_to_human=True,  # Gemini doesn't natively support system role
     )
     llm_with_tools = llm.bind_tools(tools)
 
     tool_node = ToolNode(tools)
 
-    def agent_node(state: _AgentState):
-        response = llm_with_tools.invoke(state["messages"])
+    async def agent_node(state: _AgentState):
+        response = await llm_with_tools.ainvoke(state["messages"])
         return {"messages": [response]}
 
     def should_continue(state: _AgentState):

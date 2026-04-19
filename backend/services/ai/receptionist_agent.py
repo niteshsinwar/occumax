@@ -28,7 +28,6 @@ from langchain_core.messages import (
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -798,7 +797,27 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         action_data = _extract_action_data(state["messages"]) or state.get("action_data")
         return {"messages": [response], "action_data": action_data}
 
-    tool_node = ToolNode(tools)
+    # Sequential tool executor — all tools share one AsyncSession; ToolNode's
+    # default asyncio.gather would cause SQLAlchemy "concurrent operations" errors.
+    tool_map = {t.name: t for t in tools}
+
+    async def tool_node(state: AgentState) -> dict:
+        last = state["messages"][-1]
+        tool_messages: list[BaseMessage] = []
+        for tc in last.tool_calls:
+            fn = tool_map.get(tc["name"])
+            if fn is None:
+                tool_messages.append(ToolMessage(
+                    content=json.dumps({"error": f"Unknown tool: {tc['name']}"}),
+                    tool_call_id=tc["id"],
+                ))
+                continue
+            try:
+                result = await fn.ainvoke(tc["args"])
+            except Exception as exc:
+                result = json.dumps({"error": str(exc)})
+            tool_messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+        return {"messages": tool_messages, "action_data": state.get("action_data")}
 
     def should_continue(state: AgentState) -> str:
         last = state["messages"][-1]
