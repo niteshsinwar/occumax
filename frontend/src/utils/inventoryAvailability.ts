@@ -5,7 +5,7 @@ export type AvailabilityBucket = "1" | "2" | "3" | "4" | "4+";
 
 const BUCKET_ORDER: AvailabilityBucket[] = ["1", "2", "3", "4", "4+"];
 
-/** Buckets shown in Bird's Eye "Availability at a glance" (1–4 nights exact windows; 4+ aggregates runs of ≥5). */
+/** Underlying bucket order for totals; Bird's Eye UI merges `"4"` and `"4+"` into one chart. */
 export const BIRDSEYE_DISPLAY_BUCKET_ORDER: AvailabilityBucket[] = ["1", "2", "3", "4", "4+"];
 
 export interface EmptyRunInventorySnapshot {

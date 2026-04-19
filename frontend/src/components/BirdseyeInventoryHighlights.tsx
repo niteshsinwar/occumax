@@ -6,13 +6,38 @@ import {
   type EmptyRunInventorySnapshot,
 } from "../utils/inventoryAvailability";
 
-const BUCKET_LABELS: Record<AvailabilityBucket, string> = {
-  "1": "1 night",
-  "2": "2 nights",
-  "3": "3 nights",
-  "4": "4",
-  "4+": "4+ night",
-};
+/** One chart per entry; the last row merges exact 4-night windows with the 4+ bucket (runs ≥5 nights). */
+const GLANCE_SECTIONS: readonly { id: string; label: string; buckets: readonly AvailabilityBucket[] }[] = [
+  { id: "1", label: "1 night", buckets: ["1"] },
+  { id: "2", label: "2 nights", buckets: ["2"] },
+  { id: "3", label: "3 nights", buckets: ["3"] },
+  { id: "4-4plus", label: "4 & 4+ night", buckets: ["4", "4+"] },
+];
+
+/**
+ * Sums category counts across one or more availability buckets (e.g. 4 + 4+ merged for display).
+ */
+function mergeBreakdown(
+  snap: EmptyRunInventorySnapshot,
+  buckets: readonly AvailabilityBucket[],
+): Partial<Record<RoomCategory, number>> {
+  const out: Partial<Record<RoomCategory, number>> = {};
+  for (const b of buckets) {
+    for (const [cat, n] of Object.entries(snap.byBucket[b])) {
+      if (!n) continue;
+      const c = cat as RoomCategory;
+      out[c] = (out[c] ?? 0) + n;
+    }
+  }
+  return out;
+}
+
+/**
+ * Sums total bookable-window counts across the given buckets.
+ */
+function mergeTotal(snap: EmptyRunInventorySnapshot, buckets: readonly AvailabilityBucket[]): number {
+  return buckets.reduce((sum, b) => sum + snap.totalsByBucket[b], 0);
+}
 
 /** Fill colors for donut segments (theme-aligned; matches prior bar emphasis). */
 const CATEGORY_DONUT_FILL: Partial<Record<RoomCategory, string>> = {
@@ -143,7 +168,7 @@ interface BirdseyeInventoryHighlightsProps {
 
 /**
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
- * Each bucket shows category mix plus counts for lengths 1–3 nights, exactly 4 nights, and 4+ night stays.
+ * Four panels: 1–3 nights each on their own, then one combined panel for 4-night and 4+ buckets.
  */
 export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
   const base = snapshot;
@@ -172,18 +197,20 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
       </div>
 
       <div className="p-3 space-y-4 overflow-y-auto flex-1 max-h-[calc(100vh-220px)] lg:max-h-none">
-        {BIRDSEYE_DISPLAY_BUCKET_ORDER.map(bucket => {
-          const baseTotal = base.totalsByBucket[bucket];
-          const total = after ? after.totalsByBucket[bucket] : baseTotal;
-          const breakdown = after ? after.byBucket[bucket] : base.byBucket[bucket];
+        {GLANCE_SECTIONS.map(section => {
+          const baseBreakdown = mergeBreakdown(base, section.buckets);
+          const afterBreakdown = after ? mergeBreakdown(after, section.buckets) : baseBreakdown;
+          const baseTotal = mergeTotal(base, section.buckets);
+          const total = after ? mergeTotal(after, section.buckets) : baseTotal;
+          const breakdown = after ? afterBreakdown : baseBreakdown;
           const categoriesPresent = CATEGORY_ORDER.filter(c => (breakdown[c] ?? 0) > 0);
-          const delta = after ? (after.totalsByBucket[bucket] - baseTotal) : null;
+          const delta = after ? (total - baseTotal) : null;
 
           return (
-            <section key={bucket} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
+            <section key={section.id} className="border border-border/70 rounded-sm overflow-hidden bg-surface">
               <div className="flex items-center justify-between px-2.5 py-2 bg-surface-2/50 border-b border-border/50">
                 <span className="text-[10px] font-bold text-text uppercase tracking-widest">
-                  {BUCKET_LABELS[bucket]}
+                  {section.label}
                 </span>
                 {after ? (
                   <span className="text-[10px] font-black tabular-nums flex items-baseline gap-2">
@@ -203,16 +230,18 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
                   {after ? (
                     <div className="w-full">
                       <ButterflyChart
-                        bucketLabel={BUCKET_LABELS[bucket]}
-                        categories={CATEGORY_ORDER.filter(c => ((base.byBucket[bucket][c] ?? 0) > 0) || ((after.byBucket[bucket][c] ?? 0) > 0))}
-                        beforeBreakdown={base.byBucket[bucket]}
-                        afterBreakdown={after.byBucket[bucket]}
+                        bucketLabel={section.label}
+                        categories={CATEGORY_ORDER.filter(
+                          c => (baseBreakdown[c] ?? 0) > 0 || (afterBreakdown[c] ?? 0) > 0,
+                        )}
+                        beforeBreakdown={baseBreakdown}
+                        afterBreakdown={afterBreakdown}
                       />
                     </div>
                   ) : (
                     <div className="w-full">
                       <SimpleCategoryBars
-                        bucketLabel={BUCKET_LABELS[bucket]}
+                        bucketLabel={section.label}
                         categories={categoriesPresent}
                         breakdown={breakdown}
                       />
@@ -221,7 +250,7 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
                   <ul className="flex-1 min-w-0 space-y-2">
                     {categoriesPresent.map(cat => {
                       const n = breakdown[cat] ?? 0;
-                      const baseN = base.byBucket[bucket][cat] ?? 0;
+                      const baseN = section.buckets.reduce((acc, b) => acc + (base.byBucket[b][cat] ?? 0), 0);
                       const deltaN = after ? (n - baseN) : null;
                       const fill = CATEGORY_DONUT_FILL[cat] ?? "rgba(44, 27, 24, 0.3)";
                       return (
