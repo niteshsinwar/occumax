@@ -695,11 +695,13 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
                         orphan_nights += 1
 
-            # Recent pickup (last 7 days) — by category only (Booking has no channel column)
+            # Recent pickup (last 7 days) — by category only (Booking has no channel column).
+            # is_live is not filtered here: confirmed bookings have is_live=False by design,
+            # so filtering by it would permanently zero out the pickup counter.
             cutoff = today - timedelta(days=7)
             recent_bookings = (await db.execute(
                 select(Booking.room_category)
-                .where(Booking.created_at >= cutoff, Booking.is_live == True)
+                .where(Booking.created_at >= cutoff)
             )).all()
             recent_by_cat: dict[str, int] = {}
             for b in recent_bookings:

@@ -474,7 +474,10 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
     db.add(booking)
     await db.flush()
 
-    # PASS 1: VACATE all source segments in the shuffle plan
+    # PASS 1: VACATE all source segments in the shuffle plan.
+    # Cache each moved booking's channel/partner BEFORE nulling the slots — PASS 2
+    # re-queries by booking_id and would find nothing after the slots are cleared.
+    booking_channel_cache: dict[str, tuple] = {}
     if body.swap_plan:
         for swap in body.swap_plan:
             from_room = swap.get("from_room")
@@ -486,6 +489,8 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
                 select(Slot).where(Slot.room_id == from_room, Slot.booking_id == bid)
             )
             for slot in slots_result.scalars().all():
+                if bid not in booking_channel_cache:
+                    booking_channel_cache[bid] = (slot.channel, slot.channel_partner)
                 slot.block_type = BlockType.EMPTY
                 slot.booking_id = None
 
@@ -504,17 +509,13 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
             if not (to_room and bid):
                 continue
 
-            # We need to know the dates to fill.
-            # The swap_plan dict has 'dates'.
             dates = swap.get("dates", [])
 
-            # Fetch the moved booking's original channel so we preserve it
-            src_res = await db.execute(
-                select(Slot).where(Slot.booking_id == bid).limit(1)
-            )
-            src_slot = src_res.scalar_one_or_none()
-            moved_channel = src_slot.channel if src_slot else Channel.DIRECT
-            moved_partner = src_slot.channel_partner if src_slot else None
+            # Use the channel cached in PASS 1 — slots are already vacated so a
+            # DB query would return nothing.
+            cached = booking_channel_cache.get(bid, (None, None))
+            moved_channel = cached[0] if cached[0] else Channel.DIRECT
+            moved_partner = cached[1]
 
             for d_str in dates:
                 d = date.fromisoformat(d_str)
