@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot, getRevenueSummary } from "../api/client";
-import type { HeatmapResponse, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
+import type { HeatmapResponse, HeatmapRow, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse, RevenueSummaryResponse } from "../types";
 import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
@@ -12,12 +12,26 @@ import { simulateRows } from "../utils/simulateRows";
 import { Grid3x3, RefreshCw, Lock, Unlock, TrendingUp, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
-const DEFAULT_BIRDSEYE_CATEGORIES: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
+/**
+ * Distinct room categories in heatmap row order (SQL `ORDER BY category, id`), for filters aligned with inventory in the database.
+ */
+function uniqueCategoriesFromHeatmapRows(rows: HeatmapRow[]): RoomCategory[] {
+  const seen = new Set<RoomCategory>();
+  const ordered: RoomCategory[] = [];
+  for (const row of rows) {
+    if (!seen.has(row.category)) {
+      seen.add(row.category);
+      ordered.push(row.category);
+    }
+  }
+  return ordered;
+}
 
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
  * Date span (defaults to three weeks) and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
+ * Room types for filters are taken from the heatmap payload (active rooms / categories from the API), not a fixed list.
  */
 export function Dashboard() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
@@ -29,7 +43,7 @@ export function Dashboard() {
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
-  const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([...DEFAULT_BIRDSEYE_CATEGORIES]);
+  const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
   const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
   const { show, Toasts } = useToast();
 
@@ -38,9 +52,16 @@ export function Dashboard() {
     setHeatmapLoadError(null);
     try {
       const h = await getHeatmap();
+      const fromDb = uniqueCategoriesFromHeatmapRows(h.data.rows);
       setHeatmap(h.data);
+      setSelectedCategories(prev => {
+        const allowed = new Set(fromDb);
+        const next = prev.filter(c => allowed.has(c));
+        return next.length > 0 ? next : [...fromDb];
+      });
     } catch {
       setHeatmap(null);
+      setSelectedCategories([]);
       setHeatmapLoadError("The occupancy matrix could not be loaded. Check the API connection, then try again.");
     }
     setIsHeatmapLoading(false);
@@ -86,7 +107,13 @@ export function Dashboard() {
     loadForecast();
   }, [loadForecast]);
 
-  /** Rows limited to categories selected in the filter bar (Standard / Deluxe / Suite). */
+  /** Categories present on the loaded heatmap (one row per active room from the API). */
+  const heatmapCategories = useMemo(
+    () => (heatmap ? uniqueCategoriesFromHeatmapRows(heatmap.rows) : []),
+    [heatmap],
+  );
+
+  /** Rows limited to categories selected in the filter bar. */
   const filteredRows = useMemo(() => {
     if (!heatmap) return [];
     const set = new Set(selectedCategories);
@@ -122,10 +149,16 @@ export function Dashboard() {
       const on = prev.includes(category);
       if (on && prev.length === 1) return prev;
       if (on) return prev.filter(c => c !== category);
-      const order: RoomCategory[] = ["STANDARD", "DELUXE", "SUITE"];
-      return [...prev, category].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      const order = heatmapCategories;
+      return [...prev, category].sort((a, b) => {
+        const ia = order.indexOf(a);
+        const ib = order.indexOf(b);
+        const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
+        const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
+        return sa - sb;
+      });
     });
-  }, []);
+  }, [heatmapCategories]);
 
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
@@ -342,6 +375,7 @@ export function Dashboard() {
         <BirdseyeFilters
           weekSpan={weekSpan}
           onWeekSpanChange={setWeekSpan}
+          availableCategories={heatmapCategories}
           selectedCategories={selectedCategories}
           onToggleCategory={handleToggleCategory}
         />
