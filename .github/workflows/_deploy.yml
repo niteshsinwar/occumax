@@ -1,0 +1,162 @@
+name: Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+      env_prefix:
+        required: true
+        type: string       # "Dev" or "Production" — used only for job summary label
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      HOST:
+        required: true     # Server IP — used for SSH and to build VITE_API_URL
+      DATABASE_URL:
+        required: true
+      GEMINI_API_KEY:
+        required: true
+      GH_TOKEN:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Cancel any in-progress deploy for the same branch so two pushes in quick
+    # succession never race against the same server or run migrations concurrently.
+    concurrency:
+      group: deploy-${{ inputs.branch }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_URL: https://${{ secrets.HOST }}.nip.io/api
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
+
+      - name: Prepare server directories
+        run: |
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
+            "sudo mkdir -p /opt/occumax/frontend/dist && sudo chown -R ubuntu:ubuntu /opt/occumax"
+
+      - name: Copy frontend build to server
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15" \
+            frontend/dist/ \
+            ubuntu@${{ secrets.HOST }}:/opt/occumax/frontend/dist/
+
+      - name: Deploy backend & restart
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEPLOY_HOST: ${{ secrets.HOST }}
+          DEPLOY_BRANCH: ${{ inputs.branch }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
+            GH_TOKEN="$GH_TOKEN" \
+            DATABASE_URL="$DATABASE_URL" \
+            GEMINI_API_KEY="$GEMINI_API_KEY" \
+            DEPLOY_HOST="$DEPLOY_HOST" \
+            DEPLOY_BRANCH="$DEPLOY_BRANCH" \
+            bash << 'ENDSSH'
+            set -e
+
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/niteshsinwar/occumax.git"
+
+            sudo mkdir -p /opt/occumax
+            sudo chown ubuntu:ubuntu /opt/occumax
+
+            if [ ! -d "/opt/occumax/.git" ]; then
+              git -C /opt/occumax init
+              git -C /opt/occumax remote add origin "$REPO_URL"
+            fi
+
+            cd /opt/occumax
+            git remote set-url origin "$REPO_URL"
+            git fetch origin
+            git checkout "$DEPLOY_BRANCH"
+            git reset --hard "origin/${DEPLOY_BRANCH}"
+
+            # Build .env from repo config + injected secrets
+            cat /opt/occumax/backend/.env.server > /opt/occumax/.env
+            echo "DATABASE_URL=${DATABASE_URL}" >> /opt/occumax/.env
+            echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
+            echo "CORS_ORIGINS=https://${DEPLOY_HOST}.nip.io" >> /opt/occumax/.env
+
+            # Recreate venv if missing (can happen after server resets)
+            if [ ! -f "/opt/occumax/venv/bin/pip" ]; then
+              python3 -m venv /opt/occumax/venv
+            fi
+
+            /opt/occumax/venv/bin/pip install -r /opt/occumax/backend/requirements.txt -q
+
+            # Run schema migrations — detects fresh DB and stamps base first
+            cd /opt/occumax/backend
+            ROOMS_EXIST=$(DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/python3 -c "
+            import os, psycopg2
+            url = os.environ['DATABASE_URL'].replace('postgresql+asyncpg://','postgresql://').replace('asyncpg://','postgresql://')
+            conn = psycopg2.connect(url)
+            cur = conn.cursor()
+            cur.execute(\"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name='rooms' AND table_schema='public')\")
+            print('yes' if cur.fetchone()[0] else 'no')
+            conn.close()
+            " 2>/dev/null || echo "no")
+            if [ "$ROOMS_EXIST" = "no" ]; then
+              echo "Fresh or broken DB — clearing any stale alembic stamp and running all migrations"
+              DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/alembic stamp base 2>/dev/null || true
+            fi
+            DATABASE_URL="${DATABASE_URL}" /opt/occumax/venv/bin/alembic upgrade head
+
+            sudo systemctl restart occumax-backend
+
+            # Wait up to 30s for backend to be ready
+            for i in $(seq 1 10); do
+              sleep 3
+              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+                echo "Backend OK"
+                break
+              fi
+              echo "Waiting for backend... attempt $i"
+            done
+            curl -sf http://localhost:8000/health || (echo "Backend failed to start" && sudo journalctl -u occumax-backend -n 20 --no-pager && exit 1)
+          ENDSSH
+
+      - name: Reload Nginx
+        run: |
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
+            "sudo systemctl reload nginx"
+
+      - name: Health check — backend API
+        run: |
+          sleep 3
+          # Hit /api/health, not / — Nginx serves the React SPA for /, which
+          # passes even when the backend is down. /api/health proves the backend
+          # is up and proxying correctly through Nginx.
+          curl -f https://${{ secrets.HOST }}.nip.io/api/health || exit 1
+          echo "${{ inputs.env_prefix }} deployment successful — https://${{ secrets.HOST }}.nip.io"
