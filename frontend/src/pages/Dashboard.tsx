@@ -10,7 +10,10 @@ import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
-import { Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, DollarSign } from "lucide-react";
+import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
+import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
+import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 /**
@@ -126,6 +129,10 @@ function computeBirdseyeDashboardKpis(
  * KPI strip below the filters is computed from the same filtered rows and visible day span (not the global revenue-summary endpoint).
  */
 export function Dashboard() {
+  type OverviewTab = "dashboard" | "occupancy" | "pricing" | "channels";
+
+  const [activeTab, setActiveTab] = useState<OverviewTab>("dashboard");
+
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
@@ -299,6 +306,34 @@ export function Dashboard() {
     <div>
       <Toasts />
 
+      {/* ── OVERVIEW SUBTAB BAR ─────────────────────────────────────── */}
+      <div className="flex items-end justify-between mb-8 border-b border-border/50">
+        <div className="flex gap-0">
+          {(["dashboard", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-6 py-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors flex items-center gap-2 ${
+                activeTab === tab
+                  ? "border-accent text-text"
+                  : "border-transparent text-text-muted hover:text-text hover:border-border"
+              }`}
+            >
+              {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5" /> Dashboard</>}
+              {tab === "occupancy" && <><Zap className="w-3.5 h-3.5" /> Occupancy</>}
+              {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
+              {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5" /> Channels</>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {activeTab === "occupancy" && <OccupancyOptimizationTab />}
+      {activeTab === "pricing" && <PricingOptimizationTab />}
+      {activeTab === "channels" && <ChannelOptimizationTab />}
+
+      {activeTab === "dashboard" && (
+        <>
       {slotModal && (
         <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]" onClick={() => setSlotModal(null)}>
           <div className="bg-surface border border-border shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
@@ -568,6 +603,8 @@ export function Dashboard() {
             </>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   );
