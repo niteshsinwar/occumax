@@ -4,15 +4,16 @@ import {
   adminListCategories,
   adminSeedAnalyticsHistory,
   getHeatmap, patchSlot,
+  adminListBookings, adminUpdateBooking, adminDeleteBooking,
 } from "../api/client";
 import { useToast } from "../components/shared/Toast";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
-import type { HeatmapResponse } from "../types";
-import { Building2, Calendar as CalendarIcon, RefreshCw, Plus, Trash2, Edit2, Check, X, Sparkles } from "lucide-react";
+import type { HeatmapResponse, AdminBookingRow } from "../types";
+import { Building2, Calendar as CalendarIcon, RefreshCw, Plus, Trash2, Edit2, Check, X, Sparkles, Settings } from "lucide-react";
 
 const KNOWN_CATEGORIES = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"];
 
-type Tab = "rooms" | "calendar";
+type Tab = "rooms" | "calendar" | "bookings";
 
 interface RoomRow {
   id: string; category: string; base_rate: number; floor_number: number; is_active: boolean;
@@ -32,6 +33,22 @@ export function AdminPanel() {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
+  const [bookingsLoading, setBookingsLoading] = useState(false);
+  const [bookings, setBookings] = useState<AdminBookingRow[]>([]);
+  const [bookingStart, setBookingStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [bookingEnd, setBookingEnd] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 21);
+    return d.toISOString().slice(0, 10);
+  });
+  const [editingBookingId, setEditingBookingId] = useState<string | null>(null);
+  const [editBooking, setEditBooking] = useState<{ guestName: string; roomId: string; checkIn: string; checkOut: string; category: string }>({
+    guestName: "",
+    roomId: "",
+    checkIn: "",
+    checkOut: "",
+    category: "STANDARD",
+  });
   const { show, Toasts } = useToast();
 
   const [newRoom, setNewRoom] = useState({ id: "", category: "STANDARD", base_rate: 3000, floor_number: 1 });
@@ -59,6 +76,20 @@ export function AdminPanel() {
   }, [show]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadBookings = useCallback(async () => {
+    if (!bookingStart || !bookingEnd) { show("Select a start and end date", "error"); return; }
+    if (bookingEnd <= bookingStart) { show("End date must be after start date", "error"); return; }
+    setBookingsLoading(true);
+    try {
+      const res = await adminListBookings({ start: bookingStart, end: bookingEnd });
+      setBookings(res.data ?? []);
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to load bookings", "error");
+    } finally {
+      setBookingsLoading(false);
+    }
+  }, [bookingStart, bookingEnd, show]);
 
   const handleAddRoom = async () => {
     if (!newRoom.id.trim()) { show("Room ID is required", "error"); return; }
@@ -109,6 +140,56 @@ export function AdminPanel() {
       show(getErrorDetail(e) || "Failed to seed analytics history", "error");
     } finally {
       setSeedLoading(false);
+    }
+  };
+
+  const startEditBooking = (b: AdminBookingRow) => {
+    setEditingBookingId(b.id);
+    setEditBooking({
+      guestName: b.guest_name ?? "",
+      roomId: b.room_id ?? "",
+      checkIn: b.check_in ?? "",
+      checkOut: b.check_out ?? "",
+      category: String(b.category ?? "STANDARD"),
+    });
+  };
+
+  const cancelEditBooking = () => {
+    setEditingBookingId(null);
+  };
+
+  const saveBooking = async (bookingId: string) => {
+    if (!editBooking.checkIn || !editBooking.checkOut) { show("Check-in/out is required", "error"); return; }
+    if (editBooking.checkOut <= editBooking.checkIn) { show("Check-out must be after check-in", "error"); return; }
+    if (!editBooking.roomId.trim()) { show("Room ID is required", "error"); return; }
+
+    try {
+      await adminUpdateBooking(bookingId, {
+        guest_name: editBooking.guestName,
+        room_id: editBooking.roomId.trim(),
+        check_in: editBooking.checkIn,
+        check_out: editBooking.checkOut,
+        category: editBooking.category,
+      });
+      show(`Booking ${bookingId} updated`, "success");
+      setEditingBookingId(null);
+      loadBookings();
+      load();
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to update booking", "error");
+    }
+  };
+
+  const deleteBooking = async (bookingId: string) => {
+    if (!confirm(`Delete booking ${bookingId}? This will free its slots.`)) return;
+    try {
+      await adminDeleteBooking(bookingId);
+      show(`Booking ${bookingId} deleted`, "info");
+      setEditingBookingId(null);
+      loadBookings();
+      load();
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to delete booking", "error");
     }
   };
 
@@ -200,14 +281,14 @@ export function AdminPanel() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-border pb-px">
-        {(["rooms", "calendar"] as Tab[]).map((t) => (
+        {(["rooms", "calendar", "bookings"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`flex items-center gap-2 px-6 py-3 font-semibold text-xs tracking-widest uppercase transition-colors border-b-[3px] ${tab === t ? 'border-accent text-text' : 'border-transparent text-text-muted hover:text-text hover:bg-surface-2/50'}`}
           >
-            {t === "rooms" ? <Building2 className="w-4 h-4" /> : <CalendarIcon className="w-4 h-4" />}
-            {t === "rooms" ? "Room Inventory" : "System Calendar"}
+            {t === "rooms" ? <Building2 className="w-4 h-4" /> : t === "calendar" ? <CalendarIcon className="w-4 h-4" /> : <Settings className="w-4 h-4" />}
+            {t === "rooms" ? "Room Inventory" : t === "calendar" ? "System Calendar" : "View Booking Data"}
           </button>
         ))}
       </div>
@@ -363,6 +444,185 @@ export function AdminPanel() {
                  Loading calendar layout...
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── BOOKINGS TAB ── */}
+      {tab === "bookings" && (
+        <div className="space-y-6">
+          <div className="bg-surface border border-border rounded-sm p-6 shadow-subtle">
+            <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-text">View Booking Data</h3>
+                <p className="text-xs text-text-muted mt-1 tracking-wide">Filter by stay date range. Edit or delete bookings (slots will be re-synced).</p>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div className="space-y-1">
+                  <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Start</div>
+                  <input
+                    type="date"
+                    className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
+                    value={bookingStart}
+                    onChange={(e) => setBookingStart(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">End</div>
+                  <input
+                    type="date"
+                    className="bg-surface-2 border border-border text-[11px] px-2 py-1.5 font-semibold text-text"
+                    value={bookingEnd}
+                    onChange={(e) => setBookingEnd(e.target.value)}
+                  />
+                </div>
+                <button
+                  className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2"
+                  onClick={loadBookings}
+                  disabled={bookingsLoading}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${bookingsLoading ? "animate-spin text-accent" : "text-accent"}`} />
+                  Load
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border rounded-sm shadow-subtle overflow-hidden">
+            <div className="px-6 py-4 border-b border-border flex justify-between items-center bg-surface-2/30">
+              <h3 className="font-serif font-bold text-lg text-text">Bookings</h3>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted bg-surface-2 px-3 py-1 border border-border">
+                {bookings.length} rows
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="text-[10px] font-bold text-text-muted uppercase tracking-[0.1em] bg-surface-2/50 border-b border-border">
+                  <tr>
+                    <th className="px-6 py-4">Booking</th>
+                    <th className="px-6 py-4">Guest</th>
+                    <th className="px-6 py-4">Category</th>
+                    <th className="px-6 py-4">Room</th>
+                    <th className="px-6 py-4">Check-in</th>
+                    <th className="px-6 py-4">Check-out</th>
+                    <th className="px-6 py-4">Group</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {bookings.map((b) => {
+                    const isEditing = editingBookingId === b.id;
+                    return (
+                      <tr key={b.id} className="hover:bg-surface-2/30 transition-colors">
+                        <td className="px-6 py-4 font-mono font-bold text-text">{b.id}</td>
+                        <td className="px-6 py-4">
+                          {isEditing ? (
+                            <input
+                              className="w-56 bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-medium outline-none focus:ring-1 focus:ring-accent"
+                              value={editBooking.guestName}
+                              onChange={(e) => setEditBooking({ ...editBooking, guestName: e.target.value })}
+                            />
+                          ) : (
+                            <span className="font-medium text-text">{b.guest_name}</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {isEditing ? (
+                            <select
+                              className="bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-semibold outline-none focus:ring-1 focus:ring-accent"
+                              value={editBooking.category}
+                              onChange={(e) => setEditBooking({ ...editBooking, category: e.target.value })}
+                            >
+                              {KNOWN_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.5 border border-border text-[9px] font-bold uppercase tracking-[0.1em] bg-surface-2 text-text-muted">
+                              {String(b.category)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {isEditing ? (
+                            <input
+                              className="w-24 bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-mono font-medium outline-none focus:ring-1 focus:ring-accent"
+                              value={editBooking.roomId}
+                              onChange={(e) => setEditBooking({ ...editBooking, roomId: e.target.value })}
+                            />
+                          ) : (
+                            <span className="font-mono font-medium text-text-muted">{b.room_id ?? "-"}</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {isEditing ? (
+                            <input
+                              type="date"
+                              className="bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-semibold outline-none focus:ring-1 focus:ring-accent"
+                              value={editBooking.checkIn}
+                              onChange={(e) => setEditBooking({ ...editBooking, checkIn: e.target.value })}
+                            />
+                          ) : (
+                            <span className="font-mono text-text-muted">{b.check_in}</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {isEditing ? (
+                            <input
+                              type="date"
+                              className="bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-semibold outline-none focus:ring-1 focus:ring-accent"
+                              value={editBooking.checkOut}
+                              onChange={(e) => setEditBooking({ ...editBooking, checkOut: e.target.value })}
+                            />
+                          ) : (
+                            <span className="font-mono text-text-muted">{b.check_out}</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-[10px] font-mono text-text-muted">
+                            {b.stay_group_id ? `${b.stay_group_id}${b.segment_index != null ? ` · seg ${b.segment_index}` : ""}` : "-"}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          {isEditing ? (
+                            <div className="inline-flex items-center gap-2">
+                              <button className="p-1.5 bg-occugreen/10 text-occugreen border border-occugreen/30 hover:bg-occugreen/20 transition-colors" onClick={() => saveBooking(b.id)} title="Save">
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button className="p-1.5 bg-occured/10 text-occured border border-occured/30 hover:bg-occured/20 transition-colors" onClick={cancelEditBooking} title="Cancel">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                className="p-1.5 text-text-muted hover:text-accent hover:bg-accent/10 transition-all border border-transparent hover:border-accent/30"
+                                title="Edit booking"
+                                onClick={() => startEditBooking(b)}
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                className="p-1.5 text-text-muted hover:text-occured hover:bg-occured/10 transition-all border border-transparent hover:border-occured/30"
+                                title="Delete booking"
+                                onClick={() => deleteBooking(b.id)}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!bookingsLoading && bookings.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="px-6 py-10 text-center text-sm text-text-muted font-medium">
+                        No bookings found for the selected date range.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, BlockType
+from core.models import Room, Slot, BlockType, Booking, Channel
 from core.schemas import RoomCreate, RoomUpdate
 from services.analytics.seed_history import seed_analytics_history as seedAnalyticsHistory
 
@@ -198,3 +198,194 @@ async def seed_analytics_history(db: AsyncSession, body: SeedAnalyticsHistoryReq
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class AdminBookingUpdate(BaseModel):
+    guest_name: Optional[str] = None
+    room_id: Optional[str] = None
+    check_in: Optional[date] = None
+    check_out: Optional[date] = None
+    category: Optional[str] = None
+
+
+def _parse_iso_date(value: str | None, name: str) -> Optional[date]:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{name} must be an ISO date (YYYY-MM-DD)")
+
+
+async def admin_list_bookings(db: AsyncSession, start: str | None, end: str | None) -> list[dict]:
+    """
+    Admin list bookings with an optional stay-date overlap filter.
+
+    Filter semantics:
+    - If both start/end provided: booking overlaps [start, end)
+      (check_in < end) AND (check_out > start)
+    - If only start: booking.check_out > start
+    - If only end: booking.check_in < end
+    """
+    start_d = _parse_iso_date(start, "start")
+    end_d = _parse_iso_date(end, "end")
+    if start_d and end_d and end_d <= start_d:
+        raise HTTPException(status_code=400, detail="end must be after start")
+
+    stmt = select(Booking).order_by(Booking.created_at.desc())
+    if start_d and end_d:
+        stmt = stmt.where(Booking.check_in < end_d, Booking.check_out > start_d)
+    elif start_d:
+        stmt = stmt.where(Booking.check_out > start_d)
+    elif end_d:
+        stmt = stmt.where(Booking.check_in < end_d)
+
+    result = await db.execute(stmt.limit(500))
+    bookings = result.scalars().all()
+
+    return [
+        {
+            "id": b.id,
+            "guest_name": b.guest_name,
+            "category": b.room_category,
+            "room_id": b.assigned_room_id,
+            "check_in": str(b.check_in),
+            "check_out": str(b.check_out),
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+            "stay_group_id": b.stay_group_id,
+            "segment_index": b.segment_index,
+            "discount_pct": b.discount_pct,
+        }
+        for b in bookings
+    ]
+
+
+async def admin_delete_booking(booking_id: str, db: AsyncSession) -> dict:
+    """
+    Delete a booking row and free any slots referencing it.
+    """
+    bk_res = await db.execute(select(Booking).where(Booking.id == booking_id))
+    booking = bk_res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id))
+    slots = slots_res.scalars().all()
+    for s in slots:
+        s.block_type = BlockType.EMPTY
+        s.booking_id = None
+
+    await db.delete(booking)
+    await db.commit()
+    return {"status": "deleted", "booking_id": booking_id, "slots_freed": len(slots)}
+
+
+async def admin_update_booking(booking_id: str, body: AdminBookingUpdate, db: AsyncSession) -> dict:
+    """
+    Update a booking. If dates or room change, slots are re-synced for this booking_id.
+
+    Constraints:
+    - New stay window must have check_out > check_in.
+    - Target slots in [check_in, check_out) must not be HARD or booked by a different booking.
+    """
+    bk_res = await db.execute(select(Booking).where(Booking.id == booking_id))
+    booking = bk_res.scalar_one_or_none()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    prev_room_id = booking.assigned_room_id
+    prev_ci = booking.check_in
+    prev_co = booking.check_out
+
+    next_room_id = body.room_id if body.room_id is not None else booking.assigned_room_id
+    next_ci = body.check_in if body.check_in is not None else booking.check_in
+    next_co = body.check_out if body.check_out is not None else booking.check_out
+
+    if next_ci and next_co and next_co <= next_ci:
+        raise HTTPException(status_code=400, detail="check_out must be after check_in")
+
+    if body.guest_name is not None:
+        booking.guest_name = body.guest_name
+    if body.category is not None:
+        booking.room_category = body.category
+
+    must_resync = (next_room_id != prev_room_id) or (next_ci != prev_ci) or (next_co != prev_co)
+
+    if not must_resync:
+        await db.commit()
+        return {"status": "updated", "booking_id": booking_id}
+
+    if not next_room_id:
+        raise HTTPException(status_code=400, detail="room_id is required for re-sync")
+
+    room_res = await db.execute(select(Room).where(Room.id == next_room_id))
+    room = room_res.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=404, detail="Target room not found")
+
+    # Preserve channel attribution from any existing slot on this booking (best effort).
+    prev_slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id))
+    prev_slots = prev_slots_res.scalars().all()
+    ch = prev_slots[0].channel if prev_slots else Channel.DIRECT
+    partner = prev_slots[0].channel_partner if prev_slots else None
+
+    # Validate target window availability.
+    cur = next_ci
+    while cur < next_co:
+        target_slot_id = f"{next_room_id}_{cur}"
+        tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
+        slot = tr.scalar_one_or_none()
+        if slot:
+            if slot.block_type == BlockType.HARD:
+                raise HTTPException(status_code=409, detail=f"Target slot {target_slot_id} is HARD blocked")
+            if slot.booking_id and slot.booking_id != booking_id:
+                raise HTTPException(status_code=409, detail=f"Target slot {target_slot_id} is booked by another booking")
+        cur += timedelta(days=1)
+
+    # Clear previous slots for this booking.
+    for s in prev_slots:
+        s.block_type = BlockType.EMPTY
+        s.booking_id = None
+
+    # Apply new slot blocks.
+    cur = next_ci
+    updated = 0
+    created = 0
+    while cur < next_co:
+        target_slot_id = f"{next_room_id}_{cur}"
+        tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
+        slot = tr.scalar_one_or_none()
+        if slot:
+            slot.block_type = BlockType.SOFT
+            slot.booking_id = booking_id
+            slot.channel = ch
+            slot.channel_partner = partner
+            if not slot.current_rate:
+                slot.current_rate = room.base_rate
+            updated += 1
+        else:
+            db.add(Slot(
+                id=target_slot_id,
+                room_id=next_room_id,
+                date=cur,
+                block_type=BlockType.SOFT,
+                booking_id=booking_id,
+                current_rate=room.base_rate,
+                channel=ch,
+                channel_partner=partner,
+            ))
+            created += 1
+        cur += timedelta(days=1)
+
+    booking.assigned_room_id = next_room_id
+    booking.check_in = next_ci
+    booking.check_out = next_co
+
+    await db.commit()
+    return {
+        "status": "updated",
+        "booking_id": booking_id,
+        "slots_cleared": len(prev_slots),
+        "slots_updated": updated,
+        "slots_created": created,
+    }

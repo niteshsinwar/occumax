@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.database import get_db
 from core.schemas import RoomCreate, RoomUpdate
-from controllers.admin import SlotPatch, SeedAnalyticsHistoryRequest
+from controllers.admin import SlotPatch, SeedAnalyticsHistoryRequest, AdminBookingUpdate
 from controllers import admin as ctrl
 from core.channel_config import OTA_PARTNERS, GDS_PARTNERS, DIRECT_SOURCES
 
@@ -45,6 +45,32 @@ async def patch_slot(
     slot_id: str, body: SlotPatch, db: AsyncSession = Depends(get_db)
 ):
     return await ctrl.patch_slot(slot_id, body, db)
+
+
+@router.get("/bookings")
+async def list_bookings(
+    start: str | None = None,
+    end: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    return await ctrl.admin_list_bookings(db=db, start=start, end=end)
+
+
+@router.patch("/bookings/{booking_id}")
+async def update_booking(
+    booking_id: str,
+    body: AdminBookingUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    return await ctrl.admin_update_booking(booking_id=booking_id, body=body, db=db)
+
+
+@router.delete("/bookings/{booking_id}")
+async def delete_booking(
+    booking_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    return await ctrl.admin_delete_booking(booking_id=booking_id, db=db)
 
 
 @router.post("/seed-analytics-history")
