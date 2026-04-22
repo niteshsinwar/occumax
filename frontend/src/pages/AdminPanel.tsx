@@ -127,7 +127,7 @@ export function AdminPanel() {
   const handleSeedAnalytics = async () => {
     if (!seedStart || !seedEnd) { show("Select a start and end date", "error"); return; }
     if (seedEnd <= seedStart) { show("End date must be after start date", "error"); return; }
-    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd} at ~${seedFillPct}% occupancy? This will insert DEMO_ANALYTICS rows (1y/2y back).`)) return;
+    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd} at ~${seedFillPct}% occupancy? This will DELETE bookings in that historical window and recreate them as DEMO_ANALYTICS.`)) return;
     setSeedLoading(true);
     try {
       const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd, fill_pct: seedFillPct });
