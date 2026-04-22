@@ -116,13 +116,13 @@ async def seed_analytics_history(
     if future_end <= future_start:
         raise RuntimeError("end date must be after start date")
 
-    run_tag = f"{future_start.isoformat()}..{future_end.isoformat()}"
+    # The UI selects a *historical* date range to seed. We seed exactly that range.
+    # (Previously we seeded 1y/2y-back offsets; that made it hard to verify in the UI.)
+    if future_end > as_of:
+        raise RuntimeError("Historical seed range must be in the past")
 
-    hist_offsets = [364, 728]  # ~1y and ~2y back
-    hist_windows = [
-        (future_start - timedelta(days=o), future_end - timedelta(days=o))
-        for o in hist_offsets
-    ]
+    run_tag = f"{future_start.isoformat()}..{future_end.isoformat()}"
+    hist_windows = [(future_start, future_end)]
 
     rooms = (await db.execute(
         select(Room).where(Room.is_active == True).order_by(Room.category, Room.id)
@@ -137,13 +137,17 @@ async def seed_analytics_history(
     hist_min = min(w[0] for w in hist_windows)
     hist_max = max(w[1] for w in hist_windows)
 
-    # Clear any previous demo data in this historical window (regardless of run_tag).
-    # This ensures the selected date range is always fully regenerated.
+    # Full regeneration: wipe ALL bookings in the historical windows (past-only),
+    # then re-seed with demo data at the requested occupancy.
+    #
+    # Rationale: The analytics demo windows are meant to be synthetic ground-truth.
+    # If we only delete prior DEMO rows or only update EMPTY slots, stale bookings
+    # (or non-demo rows) can survive and the range won't match the selected occupancy.
     existing_booking_ids = (await db.execute(
         select(Booking.id).where(
-            Booking.guest_name.like(f"{DEMO_PREFIX}%"),
             Booking.check_out > hist_min,
             Booking.check_in  < hist_max,
+            Booking.check_out <= as_of,
         )
     )).scalars().all()
 
@@ -286,7 +290,9 @@ async def seed_analytics_history(
                             slot_map[sid] = slot
                             inserted_slots += 1
 
-                        if slot.block_type == BlockType.EMPTY and slot.booking_id is None:
+                        # After the wipe step above, slots in this window should be EMPTY.
+                        # Still, be defensive: only overwrite if unbooked.
+                        if slot.booking_id is None and slot.block_type != BlockType.HARD:
                             slot.block_type      = BlockType.SOFT
                             slot.booking_id      = booking.id
                             slot.channel         = channel
