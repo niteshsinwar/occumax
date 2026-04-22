@@ -668,6 +668,7 @@ async def get_channel_performance(
     db: AsyncSession,
     as_of: date,
     window_days: int = 30,
+    categories: list[RoomCategory] | None = None,
 ) -> ChannelPerformanceResponse:
     """
     Channel revenue breakdown for the past `window_days` days.
@@ -676,6 +677,10 @@ async def get_channel_performance(
     window_start = as_of - timedelta(days=window_days)
 
     # Occupied slots with channel + partner info in the window
+    category_filter = []
+    if categories:
+        category_filter = [Room.category.in_(categories)]
+
     rows = (await db.execute(
         select(Slot.channel, Slot.channel_partner, Slot.current_rate)
         .join(Room, Room.id == Slot.room_id)
@@ -684,6 +689,7 @@ async def get_channel_performance(
             Slot.block_type != BlockType.EMPTY,
             Slot.date >= window_start,
             Slot.date <= as_of,
+            *category_filter,
         )
     )).all()
 
