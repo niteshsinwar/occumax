@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { commitPlan, fireOptimise, getHeatmap, patchSlot } from "../../api/client";
-import type { GapInfo, HeatmapResponse, HeatmapRow, OptimiseResult, SwapStep } from "../../types";
+import { commitPlan, fireOptimise, getHeatmap, getOccupancyForecast, patchSlot } from "../../api/client";
+import type { GapInfo, HeatmapResponse, HeatmapRow, OccupancyForecastResponse, OptimiseResult, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
+import { BirdseyeCompressionInsights } from "../BirdseyeCompressionInsights";
+import { BirdseyeForecastInsights } from "../BirdseyeForecastInsights";
 import { useToast } from "../shared/Toast";
 import { simulateRows } from "../../utils/simulateRows";
+import { calendarDayKey } from "../../utils/calendarDayKey";
 import {
   Zap,
   CheckCircle2,
@@ -198,6 +201,8 @@ function GapEntry({ gap }: { gap: GapInfo }) {
  */
 export function OccupancyOptimizationTab() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
+  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const [gaps, setGaps] = useState<GapInfo[]>([]);
   const [swapPlan, setSwapPlan] = useState<SwapStep[]>([]);
   const [stage, setStage] = useState<Stage>("idle");
@@ -220,6 +225,26 @@ export function OccupancyOptimizationTab() {
   useEffect(() => {
     loadHeatmap();
   }, [loadHeatmap]);
+
+  const loadForecast = useCallback(async () => {
+    if (!heatmap) return;
+    setForecastLoading(true);
+    try {
+      const startStr = heatmap.dates[0];
+      const endStr = heatmap.dates[Math.min(heatmap.dates.length - 1, 20)];
+      const asOfStr = new Date().toISOString().split("T")[0];
+      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
+      setForecast(res.data as OccupancyForecastResponse);
+    } catch {
+      setForecast(null);
+    } finally {
+      setForecastLoading(false);
+    }
+  }, [heatmap]);
+
+  useEffect(() => {
+    loadForecast();
+  }, [loadForecast]);
 
   const runOptimization = async () => {
     setStage("processing");
@@ -259,6 +284,11 @@ export function OccupancyOptimizationTab() {
     () => (stage === "preview" && gaps.length > 0 ? computeRunMetrics(simulated) : null),
     [simulated, stage, gaps.length],
   );
+
+  const visibleForecastDateKeys = useMemo(() => {
+    if (!heatmap) return [];
+    return heatmap.dates.slice(0, 20).map(d => calendarDayKey(String(d)));
+  }, [heatmap]);
 
   const handleCommit = async () => {
     if (!swapPlan.length) return;
@@ -413,6 +443,31 @@ export function OccupancyOptimizationTab() {
           )}
         </div>
       </div>
+
+      {/* AI prediction moved from Dashboard → Occupancy tab */}
+      {heatmap && (forecast || forecastLoading) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch mb-8">
+          {forecast ? (
+            <BirdseyeForecastInsights forecast={forecast} selectedCategories={[]} visibleForecastDateKeys={visibleForecastDateKeys} />
+          ) : (
+            <div className="bg-surface border border-border shadow-subtle">
+              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
+                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
+                </div>
+                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
+                  Analysing booking pickup patterns…
+                </p>
+              </div>
+              <div className="p-3">
+                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
+              </div>
+            </div>
+          )}
+          <BirdseyeCompressionInsights dates={heatmap.dates} rows={heatmap.rows} maxDays={20} />
+        </div>
+      )}
 
       {/* Operational KPI cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">

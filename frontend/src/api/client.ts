@@ -78,7 +78,7 @@ export const commitPricing  = (items: { category: string; date: string; new_rate
 export const getRevenueSummary = (as_of?: string) =>
   api.get("/analytics/revenue-summary", as_of ? { params: { as_of } } : undefined);
 
-export const getChannelPerformance = (params?: { as_of?: string; window_days?: number }) =>
+export const getChannelPerformance = (params?: { as_of?: string; window_days?: number; categories?: string[] }) =>
   api.get("/analytics/channel-performance", params ? { params } : undefined);
 
 export const getChannelRecommendations = () =>

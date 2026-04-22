@@ -1,11 +1,18 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getHeatmap, getOccupancyForecast, dashboardOptimisePreview, patchSlot } from "../api/client";
-import type { HeatmapResponse, HeatmapRow, OccupancyForecastResponse, RoomCategory, SwapStep, DashboardOptimisePreviewResponse } from "../types";
+import { getChannelPerformance, getHeatmap, dashboardOptimisePreview, patchSlot } from "../api/client";
+import type {
+  ChannelPerformanceResponse,
+  ChannelStat,
+  DashboardOptimisePreviewResponse,
+  HeatmapResponse,
+  HeatmapRow,
+  PartnerStat,
+  RoomCategory,
+  SwapStep,
+} from "../types";
 import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
-import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
-import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
@@ -44,6 +51,53 @@ type BirdseyeDashboardKpis = {
   orphanNightsAtRisk: number;
   orphanRevenueAtRisk: number;
 };
+
+type RunMetrics = {
+  orphanGaps: number;
+  orphanNights: number;
+  dist: { n1: number; n2_3: number; n4_7: number; n8p: number };
+};
+
+/**
+ * Scan heatmap rows and classify consecutive EMPTY runs by length.
+ * Orphan = EMPTY run ≤5 nights bounded by non-EMPTY on both sides.
+ */
+function computeRunMetrics(rows: HeatmapRow[], maxDays: number): RunMetrics {
+  const runs: Array<{ length: number; isOrphan: boolean }> = [];
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    let i = 0;
+    while (i < cells.length) {
+      if (cells[i]?.block_type !== "EMPTY") {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < cells.length && cells[i]?.block_type === "EMPTY") i++;
+      const length = i - start;
+      const before = start > 0 ? cells[start - 1]?.block_type : null;
+      const after = i < cells.length ? cells[i]?.block_type : null;
+      const isOrphan =
+        length <= 5 &&
+        before !== null &&
+        before !== "EMPTY" &&
+        after !== null &&
+        after !== "EMPTY";
+      runs.push({ length, isOrphan });
+    }
+  }
+  const orphans = runs.filter(r => r.isOrphan);
+  return {
+    orphanGaps: orphans.length,
+    orphanNights: orphans.reduce((s, r) => s + r.length, 0),
+    dist: {
+      n1: runs.filter(r => r.length === 1).length,
+      n2_3: runs.filter(r => r.length >= 2 && r.length <= 3).length,
+      n4_7: runs.filter(r => r.length >= 4 && r.length <= 7).length,
+      n8p: runs.filter(r => r.length >= 8).length,
+    },
+  };
+}
 
 /**
  * Builds occupancy, ADR-style average rate, and orphan-gap counts for the Bird's Eye KPI strip.
@@ -134,15 +188,15 @@ export function Dashboard() {
   const [activeTab, setActiveTab] = useState<OverviewTab>("dashboard");
 
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
-  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
-  const [isForecastLoading, setIsForecastLoading] = useState<boolean>(false);
   const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
   const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
+  const [channelData, setChannelData] = useState<ChannelPerformanceResponse | null>(null);
+  const [isChannelLoading, setIsChannelLoading] = useState<boolean>(false);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async () => {
@@ -169,32 +223,6 @@ export function Dashboard() {
     loadHeatmap();
   }, [loadHeatmap]);
 
-  const loadForecast = useCallback(async () => {
-    if (!heatmap) return;
-    setIsForecastLoading(true);
-    try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-      // `as_of` is the pickup / on-books cutoff for the analytics API: bookings with created_at
-      // after this date are excluded. Must match "today" so on-the-books % aligns with the live
-      // heatmap; using the window start made on-books look nearly empty while the grid showed SOFT.
-      const asOfStr = formatISO(new Date(), { representation: "date" });
-
-      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
-      setForecast(res.data);
-    } catch {
-      // Keep the dashboard functional even if analytics is unavailable.
-      setForecast(null);
-    }
-    setIsForecastLoading(false);
-  }, [heatmap, weekSpan]);
-
-  useEffect(() => {
-    loadForecast();
-  }, [loadForecast]);
-
   /** Categories present on the loaded heatmap (one row per active room from the API). */
   const heatmapCategories = useMemo(
     () => (heatmap ? uniqueCategoriesFromHeatmapRows(heatmap.rows) : []),
@@ -219,15 +247,14 @@ export function Dashboard() {
     return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
-  /** Calendar keys for heatmap columns in view; keeps forecast chart aligned with the grid span. */
-  const visibleForecastDateKeys = useMemo(
-    () => (heatmap ? heatmap.dates.slice(0, spanDays).map(d => calendarDayKey(String(d))) : []),
-    [heatmap, spanDays],
-  );
-
   const snapshot = useMemo(() => {
     if (!heatmap) return null;
     return computeEmptyRunInventory(filteredRows, spanDays);
+  }, [heatmap, filteredRows, spanDays]);
+
+  const runMetrics = useMemo(() => {
+    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
+    return computeRunMetrics(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
   const simulatedRows = useMemo(() => {
@@ -239,6 +266,25 @@ export function Dashboard() {
     if (!simulatedRows) return null;
     return computeEmptyRunInventory(simulatedRows, spanDays);
   }, [simulatedRows, spanDays]);
+
+  const loadChannelPerformance = useCallback(async () => {
+    if (!heatmap || spanDays === 0) return;
+    setIsChannelLoading(true);
+    try {
+      const windowDays = Math.max(7, Math.min(90, spanDays));
+      const res = await getChannelPerformance({ window_days: windowDays, categories: selectedCategories });
+      setChannelData(res.data as ChannelPerformanceResponse);
+    } catch {
+      setChannelData(null);
+    } finally {
+      setIsChannelLoading(false);
+    }
+  }, [heatmap, spanDays, selectedCategories]);
+
+  useEffect(() => {
+    if (activeTab !== "dashboard") return;
+    loadChannelPerformance();
+  }, [activeTab, loadChannelPerformance]);
 
   /**
    * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
@@ -515,36 +561,6 @@ export function Dashboard() {
         </div>
       )}
 
-      {heatmap && (forecast || isForecastLoading) && (
-        <div className="mt-6">
-          {forecast ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-              <BirdseyeForecastInsights
-                forecast={forecast}
-                selectedCategories={selectedCategories}
-                visibleForecastDateKeys={visibleForecastDateKeys}
-              />
-              <BirdseyeCompressionInsights dates={heatmap.dates} rows={filteredRows} maxDays={spanDays} />
-            </div>
-          ) : (
-            <div className="bg-surface border border-border shadow-subtle">
-              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">Occupancy forecast</h3>
-                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
-                </div>
-                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                  Analysing past booking patterns to predict upcoming occupancy…
-                </p>
-              </div>
-              <div className="p-3">
-                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {heatmap && snapshot && (
         <>
           {filteredRows.length === 0 ? (
@@ -552,24 +568,206 @@ export function Dashboard() {
               No rooms match the selected types for this hotel.
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch mt-8">
-              <div className="min-h-[320px] min-w-0">
-                <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
-                  <HeatmapGrid
-                    dates={heatmap.dates}
-                    rows={filteredRows}
-                    title="Current Occupancy"
-                    compact
-                    maxDays={spanDays}
-                    hideLegend
-                    onCellClick={setSlotModal}
-                  />
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch mt-8">
+                <div className="min-h-[320px] min-w-0">
+                  <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
+                    <HeatmapGrid
+                      dates={heatmap.dates}
+                      rows={filteredRows}
+                      title="Current Occupancy"
+                      compact
+                      maxDays={spanDays}
+                      hideLegend
+                      onCellClick={setSlotModal}
+                    />
+                  </div>
                 </div>
+                <aside className="flex flex-col min-h-0">
+                  <BirdseyeInventoryHighlights snapshot={snapshot} projectedSnapshot={projectedSnapshot} maxDays={spanDays} />
+                </aside>
               </div>
-              <aside className="flex flex-col min-h-0">
-                <BirdseyeInventoryHighlights snapshot={snapshot} projectedSnapshot={projectedSnapshot} maxDays={spanDays} />
-              </aside>
-            </div>
+
+              {runMetrics && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
+                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
+                    <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
+                    <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
+                  </div>
+                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
+                    <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
+                      {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
+                  </div>
+                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+                    <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
+                      {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h3 className="font-bold text-xs text-text uppercase tracking-widest flex items-center gap-2">
+                      <BarChart2 className="w-3.5 h-3.5 text-accent" /> Channel performance
+                    </h3>
+                    <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
+                      Filtered to selected room types · last {Math.max(7, Math.min(90, spanDays))} days
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={() => loadChannelPerformance()}
+                    disabled={isChannelLoading}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
+                  </button>
+                </div>
+
+              {isChannelLoading && (
+                <div className="py-10 text-center border border-border bg-surface">
+                  <div className="w-6 h-6 border-2 border-border border-t-accent rounded-full animate-spin mx-auto mb-3" />
+                  <p className="text-xs text-text-muted uppercase tracking-widest">Loading channel data…</p>
+                </div>
+              )}
+
+              {!isChannelLoading && channelData && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-surface border border-border p-4">
+                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Total Gross</div>
+                      <div className="text-2xl font-serif font-bold text-text">₹{channelData.total_gross_revenue.toLocaleString()}</div>
+                      <div className="text-[10px] text-text-muted mt-1">{channelData.total_room_nights} room nights</div>
+                    </div>
+                    <div className="bg-surface border border-occugreen/30 p-4">
+                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Net Revenue</div>
+                      <div className="text-2xl font-serif font-bold text-occugreen">₹{channelData.total_net_revenue.toLocaleString()}</div>
+                      <div className="text-[10px] text-text-muted mt-1">after commissions</div>
+                    </div>
+                    <div className="bg-occuorange/5 border border-occuorange/30 p-4">
+                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3 text-occuorange" />
+                        Commission Drain
+                      </div>
+                      <div className="text-2xl font-serif font-bold text-occuorange">
+                        ₹{(channelData.total_gross_revenue - channelData.total_net_revenue).toLocaleString()}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-1">paid to channels</div>
+                    </div>
+                    <div className="bg-surface border border-border p-4">
+                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Avg Rate</div>
+                      <div className="text-2xl font-serif font-bold text-text">
+                        ₹{channelData.total_room_nights > 0 ? Math.round(channelData.total_gross_revenue / channelData.total_room_nights).toLocaleString() : 0}
+                      </div>
+                      <div className="text-[10px] text-text-muted mt-1">gross ADR</div>
+                    </div>
+                  </div>
+
+                  <div className="bg-surface border border-border">
+                    <div className="px-6 py-3 border-b border-border bg-surface-2/60 flex items-center gap-2">
+                      <BarChart2 className="w-3.5 h-3.5 text-accent" />
+                      <span className="text-xs font-bold uppercase tracking-widest text-text">Channel Breakdown</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50">
+                            <th className="px-6 py-3 text-left">Channel</th>
+                            <th className="px-4 py-3 text-right">Nights</th>
+                            <th className="px-4 py-3 text-right">Share</th>
+                            <th className="px-4 py-3 text-right">Gross ADR</th>
+                            <th className="px-4 py-3 text-right">Commission</th>
+                            <th className="px-4 py-3 text-right">Gross Revenue</th>
+                            <th className="px-4 py-3 text-right">Net Revenue</th>
+                            <th className="px-6 py-3 text-left">Net Bar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {channelData.channels.map((ch: ChannelStat) => {
+                            const maxNet = Math.max(...channelData.channels.map(c => c.net_revenue));
+                            const barWidth = maxNet > 0 ? Math.round((ch.net_revenue / maxNet) * 100) : 0;
+                            const isOta = ch.channel === "OTA" || ch.channel === "GDS";
+                            const channelBadge = `text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border ${
+                              ch.channel === "OTA"
+                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                : ch.channel === "GDS"
+                                  ? "bg-violet-50 text-violet-700 border-violet-200"
+                                  : ch.channel === "DIRECT"
+                                    ? "bg-teal-50 text-teal-700 border-teal-200"
+                                    : ch.channel === "WALKIN"
+                                      ? "bg-orange-50 text-orange-700 border-orange-200"
+                                      : "bg-surface-2 text-text-muted border-border"
+                            }`;
+                            return (
+                              <>
+                                <tr key={ch.channel} className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
+                                  <td className="px-6 py-3">
+                                    <span className={channelBadge}>{ch.channel}</span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{ch.room_nights}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="text-xs font-bold text-text">{ch.share_pct}%</span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-mono text-xs text-text">₹{ch.avg_rate.toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    {ch.commission_pct > 0 ? (
+                                      <span className="text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-1.5 py-0.5">
+                                        {ch.commission_pct}%
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-1.5 py-0.5">
+                                        0%
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">₹{ch.gross_revenue.toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">₹{ch.net_revenue.toLocaleString()}</td>
+                                  <td className="px-6 py-3">
+                                    <div className="w-32 bg-surface-2 border border-border/30 h-3 relative">
+                                      <div className={`h-full ${isOta ? "bg-occuorange/60" : "bg-occugreen/60"}`} style={{ width: `${barWidth}%` }} />
+                                    </div>
+                                  </td>
+                                </tr>
+                                {ch.partners.map((pt: PartnerStat) => (
+                                  <tr key={`${ch.channel}-${pt.partner}`} className="border-b border-border/10 bg-surface-2/20">
+                                    <td className="px-6 py-1.5 pl-10">
+                                      <span className="text-[10px] text-text-muted font-medium">↳ {pt.partner}</span>
+                                    </td>
+                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">{pt.room_nights}</td>
+                                    <td className="px-4 py-1.5 text-right text-[10px] text-text-muted">{pt.share_of_channel_pct}% of {ch.channel}</td>
+                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.avg_rate.toLocaleString()}</td>
+                                    <td className="px-4 py-1.5" />
+                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.gross_revenue.toLocaleString()}</td>
+                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.net_revenue.toLocaleString()}</td>
+                                    <td className="px-6 py-1.5" />
+                                  </tr>
+                                ))}
+                              </>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!isChannelLoading && !channelData && (
+                <div className="py-10 text-center border border-border bg-surface">
+                  <BarChart2 className="w-8 h-8 text-accent/30 mx-auto mb-4" />
+                  <p className="text-sm text-text-muted">No channel data available for this filter/window.</p>
+                </div>
+              )}
+              </div>
+            </>
           )}
         </>
       )}
