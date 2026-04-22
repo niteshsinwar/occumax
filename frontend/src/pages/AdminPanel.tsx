@@ -133,7 +133,7 @@ export function AdminPanel() {
       const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd, fill_pct: seedFillPct });
       const d = res.data ?? {};
       show(
-        `Seeded analytics history: ${d.inserted_bookings ?? 0} bookings (${d.updated_slots ?? 0} nights).`,
+        `Seeded analytics history: deleted ${d.deleted_bookings ?? 0} bookings (${d.cleared_slots ?? 0} nights), created ${d.inserted_bookings ?? 0} bookings (${d.updated_slots ?? 0} nights).`,
         "success"
       );
     } catch (e: unknown) {
