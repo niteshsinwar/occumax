@@ -137,10 +137,11 @@ async def seed_analytics_history(
     hist_min = min(w[0] for w in hist_windows)
     hist_max = max(w[1] for w in hist_windows)
 
-    # Idempotent: delete any previous demo data for this run_tag
+    # Clear any previous demo data in this historical window (regardless of run_tag).
+    # This ensures the selected date range is always fully regenerated.
     existing_booking_ids = (await db.execute(
         select(Booking.id).where(
-            Booking.guest_name.like(f"{DEMO_PREFIX}[{run_tag}]%"),
+            Booking.guest_name.like(f"{DEMO_PREFIX}%"),
             Booking.check_out > hist_min,
             Booking.check_in  < hist_max,
         )
@@ -152,7 +153,12 @@ async def seed_analytics_history(
         clear_res = await db.execute(
             update(Slot)
             .where(Slot.booking_id.in_(existing_booking_ids))
-            .values(block_type=BlockType.EMPTY, booking_id=None, channel=Channel.DIRECT)
+            .values(
+                block_type=BlockType.EMPTY,
+                booking_id=None,
+                channel=Channel.DIRECT,
+                channel_partner=None,
+            )
             .execution_options(synchronize_session=False)
         )
         cleared_slots = int(clear_res.rowcount or 0)
