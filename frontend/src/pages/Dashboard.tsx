@@ -10,7 +10,7 @@ import type {
   RoomCategory,
   SwapStep,
 } from "../types";
-import { HeatmapGrid, type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
+import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
@@ -569,23 +569,12 @@ export function Dashboard() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-stretch mt-8">
-                <div className="min-h-[320px] min-w-0">
-                  <div className="bg-surface border border-border p-4 sm:p-6 h-full overflow-x-auto">
-                    <HeatmapGrid
-                      dates={heatmap.dates}
-                      rows={filteredRows}
-                      title="Current Occupancy"
-                      compact
-                      maxDays={spanDays}
-                      hideLegend
-                      onCellClick={setSlotModal}
-                    />
-                  </div>
-                </div>
-                <aside className="flex flex-col min-h-0">
-                  <BirdseyeInventoryHighlights snapshot={snapshot} projectedSnapshot={projectedSnapshot} maxDays={spanDays} />
-                </aside>
+              <div className="mt-8">
+                <BirdseyeInventoryHighlights
+                  snapshot={snapshot}
+                  projectedSnapshot={projectedSnapshot}
+                  maxDays={spanDays}
+                />
               </div>
 
               {runMetrics && (
