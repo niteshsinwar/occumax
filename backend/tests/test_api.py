@@ -99,6 +99,45 @@ class TestAdmin:
         assert r.status_code == 200
         client.patch(f"/admin/slots/{slot_id}", json={"block_type": "EMPTY"})
 
+    def test_admin_booking_crud(self, client):
+        # Create a real booking first via receptionist
+        check = client.post("/receptionist/check", json={
+            "category": "STANDARD",
+            "check_in": d(20),
+            "check_out": d(22),
+            "guest_name": "Admin Booking CRUD",
+        }).json()
+        if check["state"] == "NOT_POSSIBLE":
+            pytest.skip("No STANDARD room available to create booking")
+
+        confirm = client.post("/receptionist/confirm", json={
+            "request": {
+                "category": "STANDARD",
+                "check_in": d(20),
+                "check_out": d(22),
+                "guest_name": "Admin Booking CRUD",
+            },
+            "room_id": check["room_id"],
+            "swap_plan": check.get("swap_plan"),
+        })
+        assert confirm.status_code == 200
+        booking_id = confirm.json()["booking_id"]
+
+        # List bookings in a range that includes the stay dates
+        r = client.get("/admin/bookings", params={"start": d(19), "end": d(23)})
+        assert r.status_code == 200
+        rows = r.json()
+        assert any(b.get("id") == booking_id for b in rows), "Created booking not in admin list"
+
+        # Update guest name (no slot resync needed)
+        r = client.patch(f"/admin/bookings/{booking_id}", json={"guest_name": "Admin Edited"})
+        assert r.status_code == 200
+
+        # Delete booking (should free its slots)
+        r = client.delete(f"/admin/bookings/{booking_id}")
+        assert r.status_code == 200
+        assert r.json().get("status") == "deleted"
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. MANAGER
 # ═════════════════════════════════════════════════════════════════════════════

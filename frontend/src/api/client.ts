@@ -99,3 +99,10 @@ export const adminListCategories = () => api.get("/admin/categories");
 export const getChannelPartners = () => api.get("/admin/channel-partners");
 export const adminSeedAnalyticsHistory = (body: { start: string; end: string; fill_pct: number }) =>
   api.post("/admin/seed-analytics-history", body);
+
+export const adminListBookings = (params?: { start?: string; end?: string }) =>
+  api.get("/admin/bookings", params ? { params } : undefined);
+export const adminUpdateBooking = (bookingId: string, body: { guest_name?: string; room_id?: string; check_in?: string; check_out?: string; category?: string }) =>
+  api.patch(`/admin/bookings/${bookingId}`, body);
+export const adminDeleteBooking = (bookingId: string) =>
+  api.delete(`/admin/bookings/${bookingId}`);

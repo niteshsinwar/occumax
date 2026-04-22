@@ -288,3 +288,16 @@ export interface RevenueSummaryResponse {
   mtd_days: number;
 }
 
+export interface AdminBookingRow {
+  id: string;
+  guest_name: string;
+  category: RoomCategory | string;
+  room_id: string | null;
+  check_in: string;
+  check_out: string;
+  created_at: string | null;
+  stay_group_id: string | null;
+  segment_index: number | null;
+  discount_pct: number;
+}
+
