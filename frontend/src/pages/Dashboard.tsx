@@ -199,7 +199,7 @@ export function Dashboard() {
   const [isChannelLoading, setIsChannelLoading] = useState<boolean>(false);
   const { show, Toasts } = useToast();
 
-  const loadHeatmap = useCallback(async () => {
+  const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
     setIsHeatmapLoading(true);
     setHeatmapLoadError(null);
     try {
@@ -211,12 +211,15 @@ export function Dashboard() {
         const next = prev.filter(c => allowed.has(c));
         return next.length > 0 ? next : [...fromDb];
       });
+      setIsHeatmapLoading(false);
+      return h.data;
     } catch {
       setHeatmap(null);
       setSelectedCategories([]);
       setHeatmapLoadError("The occupancy matrix could not be loaded. Check the API connection, then try again.");
+      setIsHeatmapLoading(false);
+      return null;
     }
-    setIsHeatmapLoading(false);
   }, [show]);
 
   useEffect(() => {
@@ -267,19 +270,31 @@ export function Dashboard() {
     return computeEmptyRunInventory(simulatedRows, spanDays);
   }, [simulatedRows, spanDays]);
 
-  const loadChannelPerformance = useCallback(async () => {
-    if (!heatmap || spanDays === 0) return;
+  const fetchChannelPerformance = useCallback(async (windowDays: number, categories: RoomCategory[]) => {
     setIsChannelLoading(true);
     try {
-      const windowDays = Math.max(7, Math.min(90, spanDays));
-      const res = await getChannelPerformance({ window_days: windowDays, categories: selectedCategories });
+      const res = await getChannelPerformance({ window_days: windowDays, categories });
       setChannelData(res.data as ChannelPerformanceResponse);
     } catch {
       setChannelData(null);
     } finally {
       setIsChannelLoading(false);
     }
-  }, [heatmap, spanDays, selectedCategories]);
+  }, []);
+
+  const loadChannelPerformance = useCallback(async () => {
+    if (!heatmap || spanDays === 0) return;
+    const windowDays = Math.max(7, Math.min(90, spanDays));
+    await fetchChannelPerformance(windowDays, selectedCategories);
+  }, [fetchChannelPerformance, heatmap, selectedCategories, spanDays]);
+
+  const refreshAllData = useCallback(async () => {
+    const nextHeatmap = await loadHeatmap();
+    if (!nextHeatmap) return;
+    const nextSpanDays = Math.min(weekSpan * 7, nextHeatmap.dates.length);
+    const windowDays = Math.max(7, Math.min(90, nextSpanDays));
+    await fetchChannelPerformance(windowDays, selectedCategories);
+  }, [fetchChannelPerformance, loadHeatmap, selectedCategories, weekSpan]);
 
   useEffect(() => {
     if (activeTab !== "dashboard") return;
@@ -476,7 +491,7 @@ export function Dashboard() {
           <button
             type="button"
             className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
-            onClick={() => loadHeatmap()}
+            onClick={() => refreshAllData()}
           >
             <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
           </button>
@@ -501,13 +516,26 @@ export function Dashboard() {
       </div>
 
       {heatmap && (
-        <BirdseyeFilters
-          weekSpan={weekSpan}
-          onWeekSpanChange={setWeekSpan}
-          availableCategories={heatmapCategories}
-          selectedCategories={selectedCategories}
-          onToggleCategory={handleToggleCategory}
-        />
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+          <BirdseyeFilters
+            weekSpan={weekSpan}
+            onWeekSpanChange={setWeekSpan}
+            availableCategories={heatmapCategories}
+            selectedCategories={selectedCategories}
+            onToggleCategory={handleToggleCategory}
+          />
+          {activeTab === "dashboard" && (
+            <button
+              type="button"
+              className="self-start bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={() => refreshAllData()}
+              disabled={isChannelLoading}
+              title="Refresh all dashboard data for the current filters"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
+            </button>
+          )}
+        </div>
       )}
 
       {dashboardKpis && (
@@ -569,14 +597,6 @@ export function Dashboard() {
             </div>
           ) : (
             <>
-              <div className="mt-8">
-                <BirdseyeInventoryHighlights
-                  snapshot={snapshot}
-                  projectedSnapshot={projectedSnapshot}
-                  maxDays={spanDays}
-                />
-              </div>
-
               {runMetrics && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
                   <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
@@ -602,7 +622,16 @@ export function Dashboard() {
               )}
 
               <div className="mt-8">
-                <div className="flex items-center justify-between mb-3">
+                <BirdseyeInventoryHighlights
+                  snapshot={snapshot}
+                  projectedSnapshot={projectedSnapshot}
+                  maxDays={spanDays}
+                  columns={2}
+                />
+              </div>
+
+              <div className="mt-8">
+                <div className="mb-3">
                   <div>
                     <h3 className="font-bold text-xs text-text uppercase tracking-widest flex items-center gap-2">
                       <BarChart2 className="w-3.5 h-3.5 text-accent" /> Channel performance
@@ -611,14 +640,6 @@ export function Dashboard() {
                       Filtered to selected room types · last {Math.max(7, Math.min(90, spanDays))} days
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={() => loadChannelPerformance()}
-                    disabled={isChannelLoading}
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
-                  </button>
                 </div>
 
               {isChannelLoading && (

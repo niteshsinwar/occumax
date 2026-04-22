@@ -164,13 +164,14 @@ interface BirdseyeInventoryHighlightsProps {
   snapshot: EmptyRunInventorySnapshot;
   projectedSnapshot?: EmptyRunInventorySnapshot | null;
   maxDays: number;
+  columns?: 1 | 2;
 }
 
 /**
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
  * Four panels: 1–3 nights each on their own, then one combined panel for 4-night and 4+ buckets.
  */
-export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays }: BirdseyeInventoryHighlightsProps) {
+export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays, columns = 1 }: BirdseyeInventoryHighlightsProps) {
   const base = snapshot;
   const after = projectedSnapshot ?? null;
   const baseGrandTotal = BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + base.totalsByBucket[b], 0);
@@ -196,8 +197,9 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
         </p>
       </div>
 
-      <div className="p-3 space-y-4 overflow-y-auto flex-1 max-h-[calc(100vh-220px)] lg:max-h-none">
-        {GLANCE_SECTIONS.map(section => {
+      <div className="p-3 overflow-y-auto flex-1 max-h-[calc(100vh-220px)] lg:max-h-none">
+        <div className={`grid gap-4 ${columns === 2 ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"}`}>
+          {GLANCE_SECTIONS.map(section => {
           const baseBreakdown = mergeBreakdown(base, section.buckets);
           const afterBreakdown = after ? mergeBreakdown(after, section.buckets) : baseBreakdown;
           const baseTotal = mergeTotal(base, section.buckets);
@@ -278,7 +280,8 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
               )}
             </section>
           );
-        })}
+          })}
+        </div>
       </div>
     </div>
   );
