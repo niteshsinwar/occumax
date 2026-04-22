@@ -64,9 +64,18 @@ async def get_revenue_summary(
 async def get_channel_performance(
     as_of: date | None = Query(None),
     window_days: int = Query(30, ge=7, le=90),
+    start: date | None = Query(None),
+    end: date | None = Query(None),
     categories: list[RoomCategory] | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import date as date_type
     effective_as_of = as_of or date_type.today()
-    return await ctrl.get_channel_performance(db=db, as_of=effective_as_of, window_days=window_days, categories=categories)
+    return await ctrl.get_channel_performance(
+        db=db,
+        as_of=effective_as_of,
+        window_days=window_days,
+        start=start,
+        end=end,
+        categories=categories,
+    )

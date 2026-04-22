@@ -270,10 +270,10 @@ export function Dashboard() {
     return computeEmptyRunInventory(simulatedRows, spanDays);
   }, [simulatedRows, spanDays]);
 
-  const fetchChannelPerformance = useCallback(async (windowDays: number, categories: RoomCategory[]) => {
+  const fetchChannelPerformance = useCallback(async (args: { start: string; end: string; categories: RoomCategory[] }) => {
     setIsChannelLoading(true);
     try {
-      const res = await getChannelPerformance({ window_days: windowDays, categories });
+      const res = await getChannelPerformance({ start: args.start, end: args.end, categories: args.categories });
       setChannelData(res.data as ChannelPerformanceResponse);
     } catch {
       setChannelData(null);
@@ -284,16 +284,18 @@ export function Dashboard() {
 
   const loadChannelPerformance = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
-    const windowDays = Math.max(7, Math.min(90, spanDays));
-    await fetchChannelPerformance(windowDays, selectedCategories);
+    const start = formatISO(parseISO(heatmap.dates[0]), { representation: "date" });
+    const end = formatISO(addDays(parseISO(heatmap.dates[0]), spanDays - 1), { representation: "date" });
+    await fetchChannelPerformance({ start, end, categories: selectedCategories });
   }, [fetchChannelPerformance, heatmap, selectedCategories, spanDays]);
 
   const refreshAllData = useCallback(async () => {
     const nextHeatmap = await loadHeatmap();
     if (!nextHeatmap) return;
     const nextSpanDays = Math.min(weekSpan * 7, nextHeatmap.dates.length);
-    const windowDays = Math.max(7, Math.min(90, nextSpanDays));
-    await fetchChannelPerformance(windowDays, selectedCategories);
+    const start = formatISO(parseISO(nextHeatmap.dates[0]), { representation: "date" });
+    const end = formatISO(addDays(parseISO(nextHeatmap.dates[0]), nextSpanDays - 1), { representation: "date" });
+    await fetchChannelPerformance({ start, end, categories: selectedCategories });
   }, [fetchChannelPerformance, loadHeatmap, selectedCategories, weekSpan]);
 
   useEffect(() => {
@@ -637,7 +639,7 @@ export function Dashboard() {
                       <BarChart2 className="w-3.5 h-3.5 text-accent" /> Channel performance
                     </h3>
                     <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                      Filtered to selected room types · last {Math.max(7, Math.min(90, spanDays))} days
+                      Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
                     </p>
                   </div>
                 </div>

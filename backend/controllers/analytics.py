@@ -668,13 +668,19 @@ async def get_channel_performance(
     db: AsyncSession,
     as_of: date,
     window_days: int = 30,
+    start: date | None = None,
+    end: date | None = None,
     categories: list[RoomCategory] | None = None,
 ) -> ChannelPerformanceResponse:
     """
-    Channel revenue breakdown for the past `window_days` days.
+    Channel revenue breakdown.
+
+    - If `start` and `end` are provided: uses that inclusive date window.
+    - Else: uses the past `window_days` ending at `as_of`.
     Computes gross revenue, commission-adjusted net revenue, and ADR per channel.
     """
-    window_start = as_of - timedelta(days=window_days)
+    window_start = start or (as_of - timedelta(days=window_days))
+    window_end = end or as_of
 
     # Occupied slots with channel + partner info in the window
     category_filter = []
@@ -688,7 +694,7 @@ async def get_channel_performance(
             Room.is_active == True,
             Slot.block_type != BlockType.EMPTY,
             Slot.date >= window_start,
-            Slot.date <= as_of,
+            Slot.date <= window_end,
             *category_filter,
         )
     )).all()
@@ -784,9 +790,9 @@ async def get_channel_performance(
         )
 
     return ChannelPerformanceResponse(
-        as_of=as_of,
+        as_of=window_end,
         window_start=window_start,
-        window_end=as_of,
+        window_end=window_end,
         channels=stats,
         total_gross_revenue=round(total_gross, 0),
         total_net_revenue=round(total_net, 0),
