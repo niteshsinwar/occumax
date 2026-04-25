@@ -201,7 +201,6 @@ export function Dashboard() {
   const [tetrisLoading, setTetrisLoading] = useState(false);
   const [tetrisCommitLoading, setTetrisCommitLoading] = useState(false);
   const [tetrisCategory, setTetrisCategory] = useState<RoomCategory>("DELUXE");
-  const [tetrisCheckIn, setTetrisCheckIn] = useState<string>("");
   const [tetrisNights, setTetrisNights] = useState<number>(2);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
@@ -365,46 +364,62 @@ export function Dashboard() {
 
   const clearOptimisePreview = useCallback(() => setSwapPlan(null), []);
 
-  useEffect(() => {
-    if (!heatmap || heatmap.dates.length === 0) return;
-    setTetrisCheckIn(prev => prev || heatmap.dates[0]);
-  }, [heatmap]);
-
   const runTetrisCheck = useCallback(async () => {
     if (!heatmap || heatmap.dates.length < 2) return;
-    if (!tetrisCheckIn) return;
     setTetrisLoading(true);
     setTetrisResult(null);
     try {
       const nights = Math.max(1, Math.min(14, Math.floor(tetrisNights || 1)));
-      const startIdx = heatmap.dates.indexOf(tetrisCheckIn);
-      if (startIdx === -1) {
-        show("Check-in date is outside the loaded heatmap window", "error");
-        return;
-      }
-      const endIdx = startIdx + nights;
-      if (endIdx >= heatmap.dates.length) {
-        show("Selected stay runs beyond the loaded heatmap window", "error");
+      const windowDays = Math.min(spanDays || heatmap.dates.length, heatmap.dates.length);
+      const maxStartIdx = windowDays - nights;
+      if (maxStartIdx < 0) {
+        show("Not enough days in the current dashboard window for this stay length", "error");
         return;
       }
 
-      const checkIn = heatmap.dates[startIdx];
-      const checkOut = heatmap.dates[endIdx];
-      const res = await checkAvailability({
-        category: tetrisCategory,
-        check_in: checkIn,
-        check_out: checkOut,
-        guest_name: "Dashboard probe",
-      });
-      const body = res.data as { state: string; message: string; swap_plan: SwapStep[] | null };
-      setTetrisResult(body);
+      let best: { state: string; message: string; swap_plan: SwapStep[] | null; checkIn: string; checkOut: string } | null = null;
+
+      for (let startIdx = 0; startIdx <= maxStartIdx; startIdx++) {
+        const checkIn = heatmap.dates[startIdx];
+        const checkOut = heatmap.dates[startIdx + nights];
+        const res = await checkAvailability({
+          category: tetrisCategory,
+          check_in: checkIn,
+          check_out: checkOut,
+          guest_name: "Dashboard probe",
+        });
+        const body = res.data as { state: string; message: string; swap_plan: SwapStep[] | null };
+
+        // Prefer DIRECT_AVAILABLE immediately; otherwise keep first SHUFFLE_POSSIBLE.
+        if (body.state === "DIRECT_AVAILABLE") {
+          best = { ...body, checkIn, checkOut };
+          break;
+        }
+        if (!best && body.state === "SHUFFLE_POSSIBLE") {
+          best = { ...body, checkIn, checkOut };
+        }
+      }
+
+      if (!best) {
+        setTetrisResult({
+          state: "NOT_POSSIBLE",
+          message: `No ${tetrisCategory} window of ${nights} night(s) can be created within the current dashboard range.`,
+          swap_plan: null,
+        });
+      } else {
+        setTetrisResult({
+          state: best.state,
+          message: `${best.message} (Window: ${best.checkIn} → ${best.checkOut})`,
+          swap_plan: best.swap_plan,
+        });
+      }
     } catch {
       show("Tetris check failed", "error");
       setTetrisResult(null);
     } finally {
       setTetrisLoading(false);
     }
-  }, [heatmap, show, tetrisCategory, tetrisCheckIn, tetrisNights]);
+  }, [heatmap, show, spanDays, tetrisCategory, tetrisNights]);
 
   const commitTetrisShuffle = useCallback(async () => {
     if (!tetrisResult?.swap_plan || tetrisResult.swap_plan.length === 0) return;
@@ -751,18 +766,6 @@ export function Dashboard() {
                 </select>
               </div>
               <div className="space-y-1">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Check-in</div>
-                <select
-                  value={tetrisCheckIn}
-                  onChange={e => setTetrisCheckIn(e.target.value)}
-                  className="bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                >
-                  {heatmap.dates.slice(0, Math.max(1, spanDays)).map(d => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
                 <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Nights</div>
                 <input
                   type="number"
@@ -777,7 +780,7 @@ export function Dashboard() {
                 type="button"
                 className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => runTetrisCheck()}
-                disabled={tetrisLoading || !tetrisCheckIn}
+                disabled={tetrisLoading}
               >
                 {tetrisLoading ? "Checking…" : "Run Tetris check"}
               </button>
