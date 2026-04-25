@@ -10,6 +10,7 @@ export interface CellClickInfo {
   channel: string | null;
   booking_id: string | null;
   category: string;
+  offer_type: string | null;
 }
 
 interface HeatmapGridProps {
@@ -106,14 +107,19 @@ export function HeatmapGrid({
                   if (onCellClick) finalClass += " cursor-pointer hover:shadow-md hover:brightness-105";
 
                   const ch = (cell as any).channel as string | null | undefined;
-                  const tooltip = cell.block_type === "SOFT" && ch
+                  const offerType = (cell as any).offer_type as string | null | undefined;
+                  const tooltipBase = cell.block_type === "SOFT" && ch
                     ? `${cell.room_id} · ${cell.date} · ${ch}`
                     : `${cell.room_id} · ${cell.date} · ${cell.block_type}`;
+                  const tooltip = offerType
+                    ? `${tooltipBase} · OFFER=${offerType}`
+                    : tooltipBase;
                   const rawId        = cell.booking_id || "";
                   const shortId      = rawId.replace(/^BK[A-Z]*/, "") || rawId.slice(0, bookingChars);
                   const bookingLabel = cell.block_type === "SOFT" && rawId
                     ? shortId.slice(0, bookingChars)
                     : null;
+                  const offerLabel = !bookingLabel && offerType ? "٪" : null;
 
                   return (
                     <div
@@ -129,6 +135,7 @@ export function HeatmapGrid({
                           channel:    (cell as any).channel ?? null,
                           booking_id: cell.booking_id,
                           category:   cell.category,
+                          offer_type: offerType ?? null,
                         })
                       }
                       className={finalClass}
@@ -140,6 +147,15 @@ export function HeatmapGrid({
                           }`}
                         >
                           {bookingLabel}
+                        </span>
+                      )}
+                      {offerLabel && (
+                        <span
+                          className={`text-white/90 font-mono font-black leading-none select-none ${
+                            compact ? "text-[7px]" : "text-[9px]"
+                          }`}
+                        >
+                          {offerLabel}
                         </span>
                       )}
                     </div>

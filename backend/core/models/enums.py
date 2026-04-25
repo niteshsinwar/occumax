@@ -23,3 +23,9 @@ class Channel(str, PyEnum):
     WALKIN = "WALKIN"
     CLOSED = "CLOSED"
 
+
+class OfferType(str, PyEnum):
+    SANDWICH_ORPHAN = "SANDWICH_ORPHAN"
+    EXTENSION_OFFER = "EXTENSION_OFFER"
+    LAST_MINUTE = "LAST_MINUTE"
+

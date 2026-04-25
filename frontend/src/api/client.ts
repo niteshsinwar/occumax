@@ -13,6 +13,7 @@ export const dashboardOptimisePreview = (body: { start: string; end: string; cat
   api.post("/dashboard/optimise-preview", body);
 export const dashboardSandwichPlaybook = (body: { start: string; end: string; categories: string[] }) =>
   api.post("/dashboard/sandwich-playbook", body);
+export const dashboardCommitShuffle = (swapPlan: any[]) => api.post("/dashboard/commit-shuffle", { swap_plan: swapPlan });
 export const getPace = (params: { start: string; end: string; as_of: string; max_lead_days?: number }) =>
   api.get("/analytics/pace", { params });
 export const getEventInsights = (params: { start: string; end: string; as_of: string; category?: string | null }) =>

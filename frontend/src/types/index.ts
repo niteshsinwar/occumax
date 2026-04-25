@@ -15,6 +15,7 @@ export interface HeatmapCell {
   channel: Channel | null;
   min_stay_active: boolean;
   min_stay_nights: number;
+  offer_type: string | null;
 }
 
 export interface HeatmapRow {

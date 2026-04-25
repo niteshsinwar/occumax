@@ -12,10 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, BlockType, RoomCategory, Channel
+from core.models import Room, Slot, BlockType, RoomCategory, Channel, Offer, OfferType
 from core.schemas import HeatmapCell, HeatmapRow, HeatmapResponse
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewResponse
 from core.schemas.sandwich_playbook import SandwichPlaybookResponse
+from core.schemas.manager import CommitRequest, CommitResult
+from controllers import manager as manager_ctrl
 from core.schemas.manager import SwapStep
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 
@@ -66,6 +68,12 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
     slots = slots_result.scalars().all()
     slot_map: dict[str, Slot] = {s.id: s for s in slots}
 
+    offer_ids = sorted({s.offer_id for s in slots if s.offer_id})
+    offer_map: dict[str, Offer] = {}
+    if offer_ids:
+        offer_rows = (await db.execute(select(Offer).where(Offer.id.in_(offer_ids)))).scalars().all()
+        offer_map = {o.id: o for o in offer_rows}
+
     # Live gap metrics
     slot_infos = _slots_to_slotinfo(slots, room_map)
     detector   = GapDetector(slot_infos, today)
@@ -82,6 +90,7 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
         for d in dates:
             slot_id = f"{room.id}_{d}"
             slot = slot_map.get(slot_id)
+            offer = offer_map.get(slot.offer_id) if slot and slot.offer_id else None
             cells.append(HeatmapCell(
                 slot_id=slot_id,
                 room_id=room.id,
@@ -93,6 +102,7 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
                 channel=slot.channel if slot else None,
                 min_stay_active=slot.min_stay_active if slot else False,
                 min_stay_nights=slot.min_stay_nights if slot else 1,
+                offer_type=(offer.offer_type.value if offer else None),
             ))
         rows.append(HeatmapRow(
             room_id=room.id,
@@ -233,17 +243,32 @@ async def apply_sandwich_playbook(
             slot = slot_by_id.get(sid)
             if not slot:
                 room = room_map[room_id]
+                original_rate = float(room.base_rate)
+                discount_pct = 0.50
+                discounted_rate = round(original_rate * (1 - discount_pct), 2)
+                offer = Offer(
+                    offer_type=OfferType.SANDWICH_ORPHAN,
+                    category=room.category,
+                    offer_date=d,
+                    discount_pct=discount_pct,
+                    original_rate=original_rate,
+                    discounted_rate=discounted_rate,
+                    reason="Auto playbook: sandwich orphan night",
+                )
+                db.add(offer)
+                await db.flush()
                 slot = Slot(
                     id=sid,
                     room_id=room_id,
                     date=d,
                     block_type=BlockType.EMPTY,
                     booking_id=None,
-                    current_rate=room.base_rate,
+                    current_rate=discounted_rate,
                     channel=Channel.DIRECT,
                     channel_partner=None,
                     min_stay_active=True,
                     min_stay_nights=1,
+                    offer_id=offer.id,
                 )
                 db.add(slot)
                 slot_by_id[sid] = slot
@@ -256,6 +281,38 @@ async def apply_sandwich_playbook(
                 slot.min_stay_nights = 1
                 slots_updated += 1
 
+            # Apply (or refresh) discount offer for this slot if it's empty
+            if slot.block_type == BlockType.EMPTY:
+                original_rate = float(slot.current_rate) if slot.current_rate else float(room_map[room_id].base_rate)
+                discount_pct = 0.50
+                discounted_rate = round(original_rate * (1 - discount_pct), 2)
+
+                if slot.offer_id:
+                    offer = await db.get(Offer, slot.offer_id)
+                    if offer:
+                        offer.offer_type = OfferType.SANDWICH_ORPHAN
+                        offer.category = room_map[room_id].category
+                        offer.offer_date = d
+                        offer.discount_pct = discount_pct
+                        offer.original_rate = original_rate
+                        offer.discounted_rate = discounted_rate
+                        offer.reason = "Auto playbook: sandwich orphan night"
+                else:
+                    offer = Offer(
+                        offer_type=OfferType.SANDWICH_ORPHAN,
+                        category=room_map[room_id].category,
+                        offer_date=d,
+                        discount_pct=discount_pct,
+                        original_rate=original_rate,
+                        discounted_rate=discounted_rate,
+                        reason="Auto playbook: sandwich orphan night",
+                    )
+                    db.add(offer)
+                    await db.flush()
+                    slot.offer_id = offer.id
+
+                slot.current_rate = discounted_rate
+
     if slots_updated:
         await db.commit()
 
@@ -266,5 +323,15 @@ async def apply_sandwich_playbook(
         orphan_slots_found=len(orphan_slot_ids),
         slots_updated=slots_updated,
     )
+
+
+async def commit_shuffle(body: CommitRequest, db: AsyncSession) -> CommitResult:
+    """
+    Commit a swap plan to the slots table (vacate/fill) without placing a new booking.
+
+    This is reused by the Dashboard "Commit Shuffle" flow so the heatmap can improve
+    immediately after a Tetris placement check.
+    """
+    return await manager_ctrl.commit_plan(body, db)
 
 

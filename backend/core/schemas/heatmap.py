@@ -16,6 +16,7 @@ class HeatmapCell(BaseModel):
     channel: Optional[Channel] = None
     min_stay_active: bool = False
     min_stay_nights: int = 1
+    offer_type: str | None = None
 
 
 class HeatmapRow(BaseModel):
