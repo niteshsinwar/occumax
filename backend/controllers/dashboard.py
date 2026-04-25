@@ -20,6 +20,8 @@ from core.schemas.manager import CommitRequest, CommitResult
 from controllers import manager as manager_ctrl
 from core.schemas.manager import SwapStep
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
+from core.schemas.dashboard_k_optimise import DashboardKNightPreviewResponse
+from services.algorithm.k_night_optimiser import KNightWindowOptimiser
 
 
 def _fill_prob(gap_length: int) -> float:
@@ -167,6 +169,51 @@ async def optimise_preview(
         shuffle_count=shuffle_count,
         converged=converged,
         fully_clean=fully_clean,
+        swap_plan=swap_plan,
+    )
+
+
+async def optimise_k_night_preview(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    categories: list[RoomCategory],
+    target_nights: int,
+) -> DashboardKNightPreviewResponse:
+    """
+    Preview optimiser that maximizes the number of k-night bookable windows across the slice.
+
+    Returns a swap plan only (no DB writes). Commit using /dashboard/commit-shuffle.
+    """
+    today = date.today()
+    cats = list(dict.fromkeys(categories))  # stable dedupe
+    k = max(1, min(14, int(target_nights or 1)))
+
+    rooms_q = select(Room).where(Room.is_active == True)
+    if cats:
+        rooms_q = rooms_q.where(Room.category.in_(cats))
+    rooms_q = rooms_q.order_by(Room.category, Room.id)
+    rooms = (await db.execute(rooms_q)).scalars().all()
+    room_map = {r.id: r for r in rooms}
+
+    slots_q = (
+        select(Slot)
+        .where(
+            Slot.date >= start,
+            Slot.date < end,
+            Slot.room_id.in_(list(room_map.keys())) if room_map else False,
+        )
+    )
+    slots = (await db.execute(slots_q)).scalars().all()
+    slot_infos = _slots_to_slotinfo(slots, room_map)
+
+    optimiser = KNightWindowOptimiser(slot_infos, today)
+    raw = optimiser.run(target_nights=k, categories=cats)
+    swap_plan = [SwapStep(**s) for s in raw.swap_steps]
+
+    return DashboardKNightPreviewResponse(
+        target_nights=k,
+        shuffle_count=len(swap_plan),
         swap_plan=swap_plan,
     )
 

@@ -14,6 +14,8 @@ export const dashboardOptimisePreview = (body: { start: string; end: string; cat
 export const dashboardSandwichPlaybook = (body: { start: string; end: string; categories: string[] }) =>
   api.post("/dashboard/sandwich-playbook", body);
 export const dashboardCommitShuffle = (swapPlan: any[]) => api.post("/dashboard/commit-shuffle", { swap_plan: swapPlan });
+export const dashboardOptimiseKNightPreview = (body: { start: string; end: string; categories: string[]; target_nights: number }) =>
+  api.post("/dashboard/optimise-k-night-preview", body);
 export const getPace = (params: { start: string; end: string; as_of: string; max_lead_days?: number }) =>
   api.get("/analytics/pace", { params });
 export const getEventInsights = (params: { start: string; end: string; as_of: string; category?: string | null }) =>

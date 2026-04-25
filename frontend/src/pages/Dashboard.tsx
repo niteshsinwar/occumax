@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { checkAvailability, dashboardCommitShuffle, getChannelPerformance, getHeatmap, dashboardOptimisePreview, dashboardSandwichPlaybook, patchSlot } from "../api/client";
+import { dashboardCommitShuffle, dashboardOptimiseKNightPreview, getChannelPerformance, getHeatmap, dashboardOptimisePreview, dashboardSandwichPlaybook, patchSlot } from "../api/client";
 import type {
   ChannelPerformanceResponse,
   ChannelStat,
@@ -197,11 +197,10 @@ export function Dashboard() {
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
-  const [tetrisResult, setTetrisResult] = useState<{ state: string; message: string; swap_plan: SwapStep[] | null } | null>(null);
-  const [tetrisLoading, setTetrisLoading] = useState(false);
-  const [tetrisCommitLoading, setTetrisCommitLoading] = useState(false);
-  const [tetrisCategory, setTetrisCategory] = useState<RoomCategory>("DELUXE");
-  const [tetrisNights, setTetrisNights] = useState<number>(2);
+  const [kNightNights, setKNightNights] = useState<number>(2);
+  const [kNightSwapPlan, setKNightSwapPlan] = useState<SwapStep[] | null>(null);
+  const [kNightLoading, setKNightLoading] = useState(false);
+  const [kNightCommitLoading, setKNightCommitLoading] = useState(false);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
@@ -272,9 +271,10 @@ export function Dashboard() {
   }, [heatmap, filteredRows, spanDays]);
 
   const simulatedRows = useMemo(() => {
-    if (!heatmap || !swapPlan || swapPlan.length === 0) return null;
-    return simulateRows(filteredRows, swapPlan);
-  }, [heatmap, filteredRows, swapPlan]);
+    const plan = (kNightSwapPlan && kNightSwapPlan.length > 0) ? kNightSwapPlan : swapPlan;
+    if (!heatmap || !plan || plan.length === 0) return null;
+    return simulateRows(filteredRows, plan);
+  }, [heatmap, filteredRows, kNightSwapPlan, swapPlan]);
 
   const projectedSnapshot = useMemo(() => {
     if (!simulatedRows) return null;
@@ -364,77 +364,51 @@ export function Dashboard() {
 
   const clearOptimisePreview = useCallback(() => setSwapPlan(null), []);
 
-  const runTetrisCheck = useCallback(async () => {
-    if (!heatmap || heatmap.dates.length < 2) return;
-    setTetrisLoading(true);
-    setTetrisResult(null);
+  const runKNightPreview = useCallback(async () => {
+    if (!heatmap) return;
+    setKNightLoading(true);
+    setKNightSwapPlan(null);
     try {
-      const nights = Math.max(1, Math.min(14, Math.floor(tetrisNights || 1)));
-      const windowDays = Math.min(spanDays || heatmap.dates.length, heatmap.dates.length);
-      const maxStartIdx = windowDays - nights;
-      if (maxStartIdx < 0) {
-        show("Not enough days in the current dashboard window for this stay length", "error");
-        return;
-      }
-
-      let best: { state: string; message: string; swap_plan: SwapStep[] | null; checkIn: string; checkOut: string } | null = null;
-
-      for (let startIdx = 0; startIdx <= maxStartIdx; startIdx++) {
-        const checkIn = heatmap.dates[startIdx];
-        const checkOut = heatmap.dates[startIdx + nights];
-        const res = await checkAvailability({
-          category: tetrisCategory,
-          check_in: checkIn,
-          check_out: checkOut,
-          guest_name: "Dashboard probe",
-        });
-        const body = res.data as { state: string; message: string; swap_plan: SwapStep[] | null };
-
-        // Prefer DIRECT_AVAILABLE immediately; otherwise keep first SHUFFLE_POSSIBLE.
-        if (body.state === "DIRECT_AVAILABLE") {
-          best = { ...body, checkIn, checkOut };
-          break;
-        }
-        if (!best && body.state === "SHUFFLE_POSSIBLE") {
-          best = { ...body, checkIn, checkOut };
-        }
-      }
-
-      if (!best) {
-        setTetrisResult({
-          state: "NOT_POSSIBLE",
-          message: `No ${tetrisCategory} window of ${nights} night(s) can be created within the current dashboard range.`,
-          swap_plan: null,
-        });
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const nights = Math.max(1, Math.min(14, Math.floor(kNightNights || 1)));
+      const res = await dashboardOptimiseKNightPreview({
+        start: startStr,
+        end: endStr,
+        categories: selectedCategories,
+        target_nights: nights,
+      });
+      const body = res.data as { shuffle_count: number; swap_plan: SwapStep[]; target_nights: number };
+      setKNightSwapPlan(body.swap_plan ?? []);
+      if ((body.swap_plan?.length ?? 0) === 0) {
+        show(`No k-night improvements found for k=${body.target_nights} in this slice.`, "info");
       } else {
-        setTetrisResult({
-          state: best.state,
-          message: `${best.message} (Window: ${best.checkIn} → ${best.checkOut})`,
-          swap_plan: best.swap_plan,
-        });
+        show(`k-night preview ready (k=${body.target_nights}): ${body.shuffle_count} shuffle steps`, "success");
       }
     } catch {
-      show("Tetris check failed", "error");
-      setTetrisResult(null);
+      show("Failed to run k-night preview", "error");
+      setKNightSwapPlan(null);
     } finally {
-      setTetrisLoading(false);
+      setKNightLoading(false);
     }
-  }, [heatmap, show, spanDays, tetrisCategory, tetrisNights]);
+  }, [heatmap, kNightNights, selectedCategories, show, weekSpan]);
 
-  const commitTetrisShuffle = useCallback(async () => {
-    if (!tetrisResult?.swap_plan || tetrisResult.swap_plan.length === 0) return;
-    setTetrisCommitLoading(true);
+  const commitKNightShuffle = useCallback(async () => {
+    if (!kNightSwapPlan || kNightSwapPlan.length === 0) return;
+    setKNightCommitLoading(true);
     try {
-      await dashboardCommitShuffle(tetrisResult.swap_plan);
-      show(`Committed ${tetrisResult.swap_plan.length} shuffle step(s)`, "success");
-      setTetrisResult(null);
+      await dashboardCommitShuffle(kNightSwapPlan);
+      show(`Committed ${kNightSwapPlan.length} shuffle step(s)`, "success");
+      setKNightSwapPlan(null);
       await loadHeatmap();
     } catch {
       show("Failed to commit shuffle", "error");
     } finally {
-      setTetrisCommitLoading(false);
+      setKNightCommitLoading(false);
     }
-  }, [loadHeatmap, show, tetrisResult]);
+  }, [kNightSwapPlan, loadHeatmap, show]);
 
   const runSandwichPlaybook = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
@@ -746,60 +720,50 @@ export function Dashboard() {
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">
-                Room Tetris (shuffle to accept stays)
+                k-night window optimisation
               </div>
               <div className="text-xs text-text-muted leading-relaxed">
-                Runs the booking placement optimiser (same as Front Desk) to see if a contiguous stay can be created via swaps. If it returns <span className="font-bold text-text">SHUFFLE_POSSIBLE</span>, you can opt-in to commit the shuffle (no booking) so the heatmap becomes less fragmented.
+                Rearranges existing SOFT bookings to maximize the total number of bookable windows of length <span className="font-bold text-text">k</span> within the current dashboard slice (selected categories + visible date range). Preview first, then opt-in to commit.
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 shrink-0 items-end">
               <div className="space-y-1">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Category</div>
-                <select
-                  value={tetrisCategory}
-                  onChange={e => setTetrisCategory(e.target.value as RoomCategory)}
-                  className="bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                >
-                  {heatmapCategories.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Nights</div>
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k (nights)</div>
                 <input
                   type="number"
                   min={1}
                   max={14}
-                  value={tetrisNights}
-                  onChange={e => setTetrisNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                  value={kNightNights}
+                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
                   className="w-24 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
                 />
               </div>
               <button
                 type="button"
                 className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runTetrisCheck()}
-                disabled={tetrisLoading}
+                onClick={() => runKNightPreview()}
+                disabled={kNightLoading}
               >
-                {tetrisLoading ? "Checking…" : "Run Tetris check"}
+                {kNightLoading ? "Previewing…" : "Preview shuffle"}
               </button>
-              {tetrisResult?.state === "SHUFFLE_POSSIBLE" && (tetrisResult.swap_plan?.length ?? 0) > 0 && (
+              {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
                 <button
                   type="button"
                   className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => commitTetrisShuffle()}
-                  disabled={tetrisCommitLoading}
+                  onClick={() => commitKNightShuffle()}
+                  disabled={kNightCommitLoading}
                 >
-                  {tetrisCommitLoading ? "Committing…" : `Commit shuffle (${tetrisResult.swap_plan?.length ?? 0})`}
+                  {kNightCommitLoading ? "Committing…" : `Commit shuffle (${kNightSwapPlan.length ?? 0})`}
                 </button>
               )}
             </div>
           </div>
 
-          {tetrisResult && (
+          {kNightSwapPlan && (
             <div className="mt-3 text-xs text-text-muted">
-              <span className="font-bold text-text">{tetrisResult.state}</span> — {tetrisResult.message}
+              <span className="font-bold text-text">
+                {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} shuffle step(s) ready` : "No shuffle steps"}
+              </span>
             </div>
           )}
         </div>
