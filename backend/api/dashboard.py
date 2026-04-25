@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.database import get_db
 from core.schemas import HeatmapResponse, SandwichPlaybookRequest, SandwichPlaybookResponse
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewRequest, DashboardOptimisePreviewResponse
+from core.schemas.dashboard_k_optimise import DashboardKNightPreviewRequest, DashboardKNightPreviewResponse
 from core.schemas.manager import CommitRequest, CommitResult
 from controllers import dashboard as ctrl
 
@@ -25,6 +26,21 @@ async def optimise_preview(body: DashboardOptimisePreviewRequest, db: AsyncSessi
     Nothing is written to the database.
     """
     return await ctrl.optimise_preview(db=db, start=body.start, end=body.end, categories=body.categories)
+
+
+@router.post("/optimise-k-night-preview", response_model=DashboardKNightPreviewResponse)
+async def optimise_k_night_preview(body: DashboardKNightPreviewRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Preview optimiser that maximizes k-night bookable windows across the slice.
+    Nothing is written to the DB.
+    """
+    return await ctrl.optimise_k_night_preview(
+        db=db,
+        start=body.start,
+        end=body.end,
+        categories=body.categories,
+        target_nights=body.target_nights,
+    )
 
 
 @router.post("/sandwich-playbook", response_model=SandwichPlaybookResponse)
