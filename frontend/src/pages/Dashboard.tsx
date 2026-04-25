@@ -387,8 +387,16 @@ export function Dashboard() {
       } else {
         show(`k-night preview ready (k=${body.target_nights}): ${body.shuffle_count} shuffle steps`, "success");
       }
-    } catch {
-      show("Failed to run k-night preview", "error");
+    } catch (err: unknown) {
+      // Show backend detail when available (404/422/500)
+      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
+      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
+      const status = e?.response?.status;
+      const msg =
+        typeof detail === "string"
+          ? `Failed to run k-night preview (${status ?? "?"}): ${detail}`
+          : `Failed to run k-night preview (${status ?? "?"})`;
+      show(msg, "error");
       setKNightSwapPlan(null);
     } finally {
       setKNightLoading(false);
@@ -706,17 +714,6 @@ export function Dashboard() {
 
       {heatmap && (
         <div className="mt-4 bg-surface border border-border p-4">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">
-            Sandwich orphan strategy
-          </div>
-          <div className="text-xs text-text-muted leading-relaxed">
-            Detects single EMPTY nights trapped between bookings and relaxes MinLOS to 1 night for just those dates.
-          </div>
-        </div>
-      )}
-
-      {heatmap && (
-        <div className="mt-4 bg-surface border border-border p-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
               <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">
@@ -769,6 +766,30 @@ export function Dashboard() {
         </div>
       )}
 
+      {runMetrics && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
+            <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
+          </div>
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
+            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
+              {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
+          </div>
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
+              {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
+          </div>
+        </div>
+      )}
+
       {heatmap && snapshot && (
         <>
           {filteredRows.length === 0 ? (
@@ -777,30 +798,6 @@ export function Dashboard() {
             </div>
           ) : (
             <>
-              {runMetrics && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
-                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
-                    <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
-                    <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
-                  </div>
-                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
-                    <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
-                      {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
-                    </div>
-                    <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
-                  </div>
-                  <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
-                    <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
-                      {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
-                    </div>
-                    <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
-                  </div>
-                </div>
-              )}
-
               <div className="mt-8">
                 <BirdseyeInventoryHighlights
                   snapshot={snapshot}
