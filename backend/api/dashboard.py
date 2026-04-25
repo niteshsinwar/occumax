@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.database import get_db
 from core.schemas import HeatmapResponse, SandwichPlaybookRequest, SandwichPlaybookResponse
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewRequest, DashboardOptimisePreviewResponse
+from core.schemas.manager import CommitRequest, CommitResult
 from controllers import dashboard as ctrl
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -33,3 +34,14 @@ async def sandwich_playbook(body: SandwichPlaybookRequest, db: AsyncSession = De
     Writes changes to DB.
     """
     return await ctrl.apply_sandwich_playbook(db=db, start=body.start, end=body.end, categories=body.categories)
+
+
+@router.post("/commit-shuffle", response_model=CommitResult)
+async def commit_shuffle(body: CommitRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Commit a swap plan without placing a new booking.
+
+    This is the "Room Tetris" opt-in: apply the reshuffle so the heatmap reflects
+    more contiguous empty runs immediately.
+    """
+    return await ctrl.commit_shuffle(body=body, db=db)

@@ -23,6 +23,8 @@ class Slot(Base):
     channel_partner: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     min_stay_active: Mapped[bool] = mapped_column(Boolean, default=False)
     min_stay_nights: Mapped[int] = mapped_column(Integer, default=1)
+    offer_id: Mapped[Optional[str]] = mapped_column(ForeignKey("offers.id"), nullable=True)
 
     room: Mapped["Room"] = relationship("Room", back_populates="slots")
     booking: Mapped[Optional["Booking"]] = relationship("Booking", back_populates="slots")
+    offer: Mapped[Optional["Offer"]] = relationship("Offer")
