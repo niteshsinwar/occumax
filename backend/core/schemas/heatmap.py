@@ -14,6 +14,8 @@ class HeatmapCell(BaseModel):
     current_rate: float
     booking_id: Optional[str] = None
     channel: Optional[Channel] = None
+    min_stay_active: bool = False
+    min_stay_nights: int = 1
 
 
 class HeatmapRow(BaseModel):

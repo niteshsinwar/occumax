@@ -18,6 +18,7 @@ from core.schemas.dashboard_optimise import (
     DashboardOptimisePreviewRequest,
     DashboardOptimisePreviewResponse,
 )
+from core.schemas.sandwich_playbook import SandwichPlaybookRequest, SandwichPlaybookResponse
 
 __all__ = [
     "RoomOut", "RoomCreate", "RoomUpdate",
@@ -28,4 +29,5 @@ __all__ = [
     "OccupancyForecastResponse", "PaceResponse", "EventInsightsResponse", "RevenueSummaryResponse",
     "ChannelPerformanceResponse",
     "DashboardOptimisePreviewRequest", "DashboardOptimisePreviewResponse",
+    "SandwichPlaybookRequest", "SandwichPlaybookResponse",
 ]

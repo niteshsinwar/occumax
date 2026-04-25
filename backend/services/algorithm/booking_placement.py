@@ -57,6 +57,22 @@ class ShuffleEngine:
             if s.booking_id == booking_id
         }
 
+    def _meets_min_stay(self, room_id: str, dates: list[date], nights: int) -> bool:
+        """
+        MinLOS constraint (simplified for MVP):
+        If any date in the requested stay has min_stay_active and min_stay_nights > nights,
+        the room cannot be used for this stay length.
+        Missing SlotInfo rows are treated as EMPTY with no restriction.
+        """
+        room_map = self._matrix.get(room_id, {})
+        for d in dates:
+            s = room_map.get(d)
+            if not s:
+                continue
+            if getattr(s, "min_stay_active", False) and getattr(s, "min_stay_nights", 1) > nights:
+                return False
+        return True
+
     def search(
         self,
         category: RoomCategory,
@@ -122,6 +138,8 @@ class ShuffleEngine:
                 return
 
             if idx == len(bids_to_place):
+                if not self._meets_min_stay(target_room, nights_needed, n_nights):
+                    return
                 overlap_cache = {}
                 for d in nights_needed:
                     overlap_cache[d] = working_state[target_room][d]
@@ -143,12 +161,19 @@ class ShuffleEngine:
 
             bid = bids_to_place[idx]
             dates = self._booking_dates_in_room(target_room, bid)
+            dates_list = sorted(dates)
+            if not dates_list:
+                return
+            bid_len = len(dates_list)
             
             for alt_room in category_rooms:
                 if alt_room == target_room: 
                     continue
                 
-                if all(working_state[alt_room][d] == BlockType.EMPTY for d in dates):
+                if not self._meets_min_stay(alt_room, dates_list, bid_len):
+                    continue
+
+                if all(working_state[alt_room][d] == BlockType.EMPTY for d in dates_list):
                     for d in dates: 
                         working_state[alt_room][d] = BlockType.SOFT
                     
@@ -167,6 +192,8 @@ class ShuffleEngine:
         # Evaluate every room as a potential target
         for target_room in category_rooms:
             if any(working_state[target_room][d] == BlockType.HARD for d in nights_needed):
+                continue
+            if not self._meets_min_stay(target_room, nights_needed, n_nights):
                 continue
                 
             displaced_bids_set = set()

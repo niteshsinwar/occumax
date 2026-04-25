@@ -11,6 +11,8 @@ export const getOccupancyForecast = (params: { start: string; end: string; as_of
   api.get("/analytics/occupancy-forecast", { params });
 export const dashboardOptimisePreview = (body: { start: string; end: string; categories: string[] }) =>
   api.post("/dashboard/optimise-preview", body);
+export const dashboardSandwichPlaybook = (body: { start: string; end: string; categories: string[] }) =>
+  api.post("/dashboard/sandwich-playbook", body);
 export const getPace = (params: { start: string; end: string; as_of: string; max_lead_days?: number }) =>
   api.get("/analytics/pace", { params });
 export const getEventInsights = (params: { start: string; end: string; as_of: string; category?: string | null }) =>

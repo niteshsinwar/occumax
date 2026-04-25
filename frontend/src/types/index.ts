@@ -13,6 +13,8 @@ export interface HeatmapCell {
   current_rate: number;
   booking_id: string | null;
   channel: Channel | null;
+  min_stay_active: boolean;
+  min_stay_nights: number;
 }
 
 export interface HeatmapRow {

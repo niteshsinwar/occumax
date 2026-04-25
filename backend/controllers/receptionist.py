@@ -42,12 +42,26 @@ async def _find_direct_empty_room(
         .exists()
     )
 
+    stay_nights = max(0, (check_out - check_in).days)
+    minlos_violation_exists = (
+        select(Slot.id)
+        .where(
+            Slot.room_id == Room.id,
+            Slot.date >= check_in,
+            Slot.date < check_out,
+            Slot.min_stay_active == True,
+            Slot.min_stay_nights > stay_nights,
+        )
+        .exists()
+    )
+
     res = await db.execute(
         select(Room.id)
         .where(
             Room.category == category,
             Room.is_active == True,
             ~non_empty_exists,
+            ~minlos_violation_exists,
         )
         .order_by(Room.floor_number, Room.id)
         .limit(1)
@@ -89,6 +103,7 @@ async def _load_slots_for_categories(
             base_rate=room.base_rate,
             current_rate=slot.current_rate,
             channel=slot.channel,
+            min_stay_active=slot.min_stay_active,
             min_stay_nights=slot.min_stay_nights,
         )
         for slot, room in rows
@@ -128,6 +143,7 @@ async def _load_category_slots(
             base_rate=room.base_rate,
             current_rate=slot.current_rate,
             channel=slot.channel,
+            min_stay_active=slot.min_stay_active,
             min_stay_nights=slot.min_stay_nights,
         )
         for slot, room in rows
