@@ -33,6 +33,7 @@ class SlotInfo:
     base_rate: float
     current_rate: float
     channel: str
+    min_stay_active: bool
     min_stay_nights: int
 
 

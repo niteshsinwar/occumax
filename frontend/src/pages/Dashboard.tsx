@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { getChannelPerformance, getHeatmap, dashboardOptimisePreview, patchSlot } from "../api/client";
+import { getChannelPerformance, getHeatmap, dashboardOptimisePreview, dashboardSandwichPlaybook, patchSlot } from "../api/client";
 import type {
   ChannelPerformanceResponse,
   ChannelStat,
@@ -50,6 +50,7 @@ type BirdseyeDashboardKpis = {
   avgRateNightCount: number;
   orphanNightsAtRisk: number;
   orphanRevenueAtRisk: number;
+  sandwichMinlosBlockedNights: number;
 };
 
 type RunMetrics = {
@@ -142,6 +143,7 @@ function computeBirdseyeDashboardKpis(
 
   let orphanNightsAtRisk = 0;
   let orphanRevenueAtRisk = 0;
+  let sandwichMinlosBlockedNights = 0;
   if (span >= 3) {
     for (const r of rows) {
       for (let i = 1; i < span - 1; i++) {
@@ -157,6 +159,9 @@ function computeBirdseyeDashboardKpis(
         ) {
           orphanNightsAtRisk += 1;
           orphanRevenueAtRisk += c.current_rate;
+          if (c.min_stay_active && c.min_stay_nights > 1) {
+            sandwichMinlosBlockedNights += 1;
+          }
         }
       }
     }
@@ -172,6 +177,7 @@ function computeBirdseyeDashboardKpis(
     avgRateNightCount: rateCount,
     orphanNightsAtRisk,
     orphanRevenueAtRisk: Math.round(orphanRevenueAtRisk),
+    sandwichMinlosBlockedNights,
   };
 }
 
@@ -353,6 +359,32 @@ export function Dashboard() {
 
   const clearOptimisePreview = useCallback(() => setSwapPlan(null), []);
 
+  const runSandwichPlaybook = useCallback(async () => {
+    if (!heatmap || spanDays === 0) return;
+    try {
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const res = await dashboardSandwichPlaybook({
+        start: startStr,
+        end: endStr,
+        categories: selectedCategories,
+      });
+      const body = res.data as { orphan_slots_found: number; slots_updated: number };
+      if (body.slots_updated > 0) {
+        show(`Relaxed MinLOS on ${body.slots_updated} sandwich night(s)`, "success");
+      } else if (body.orphan_slots_found > 0) {
+        show("Sandwich nights found, but MinLOS was already relaxed in this slice.", "info");
+      } else {
+        show("No sandwich orphan nights found in this slice.", "info");
+      }
+      await loadHeatmap();
+    } catch {
+      show("Failed to apply sandwich-night playbook", "error");
+    }
+  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan]);
+
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
@@ -505,6 +537,15 @@ export function Dashboard() {
           >
             {isOptimiseLoading ? "Scanning…" : "Find empty gaps"}
           </button>
+          <button
+            type="button"
+            className="self-start sm:self-auto bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+            onClick={() => runSandwichPlaybook()}
+            disabled={!heatmap || isOptimiseLoading}
+            title="Relax MinLOS on single-night sandwich gaps in the current slice"
+          >
+            Fix sandwich nights
+          </button>
           {swapPlan && (
             <button
               type="button"
@@ -541,7 +582,7 @@ export function Dashboard() {
       )}
 
       {dashboardKpis && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4">
           <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
               <BedDouble className="w-3 h-3 text-accent" /> Tonight
@@ -587,6 +628,30 @@ export function Dashboard() {
                 ? `₹${dashboardKpis.orphanRevenueAtRisk.toLocaleString()} at risk`
                 : "No orphan gaps in selected range"}
             </div>
+          </div>
+          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "bg-text/3 border-text/20 hover:border-text/30" : "bg-surface border-border hover:border-accent/40"}`}>
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+              <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks
+            </div>
+            <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-text"}`}>
+              {dashboardKpis.sandwichMinlosBlockedNights}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {dashboardKpis.sandwichMinlosBlockedNights > 0
+                ? "1-night sandwich gaps blocked by MinLOS"
+                : "No MinLOS blocks in this slice"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {heatmap && (
+        <div className="mt-4 bg-surface border border-border p-4">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">
+            Sandwich orphan strategy
+          </div>
+          <div className="text-xs text-text-muted leading-relaxed">
+            Detects single EMPTY nights trapped between bookings and relaxes MinLOS to 1 night for just those dates.
           </div>
         </div>
       )}

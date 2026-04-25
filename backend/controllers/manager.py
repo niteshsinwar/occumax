@@ -45,6 +45,7 @@ async def _load_slots(db: AsyncSession, today: date) -> list[SlotInfo]:
             base_rate=room.base_rate,
             current_rate=slot.current_rate,
             channel=slot.channel,
+            min_stay_active=slot.min_stay_active,
             min_stay_nights=slot.min_stay_nights,
         )
         for slot, room in rows
