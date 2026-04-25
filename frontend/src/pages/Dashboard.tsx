@@ -712,6 +712,30 @@ export function Dashboard() {
         </div>
       )}
 
+      {runMetrics && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
+            <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
+          </div>
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
+            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
+              {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
+          </div>
+          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
+              {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
+            </div>
+            <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
+          </div>
+        </div>
+      )}
+
       {heatmap && (
         <div className="mt-4 bg-surface border border-border p-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -763,30 +787,6 @@ export function Dashboard() {
               </span>
             </div>
           )}
-        </div>
-      )}
-
-      {runMetrics && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
-            <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
-            <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
-          </div>
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
-            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
-              {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
-          </div>
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
-            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
-              {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
-          </div>
         </div>
       )}
 
