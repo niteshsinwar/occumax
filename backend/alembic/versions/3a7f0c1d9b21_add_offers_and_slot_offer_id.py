@@ -11,6 +11,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "3a7f0c1d9b21"
 down_revision: Union[str, None] = "b227ced3351d"
@@ -19,17 +20,30 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # roomcategory already exists in production (created in initial_schema).
+    # When creating a new table that reuses it, we must NOT attempt to create the type again.
+    roomcategory_enum = postgresql.ENUM(
+        "DELUXE",
+        "SUITE",
+        "STUDIO",
+        "STANDARD",
+        "PREMIUM",
+        "ECONOMY",
+        name="roomcategory",
+        create_type=False,
+    )
+
     op.create_table(
         "offers",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column(
             "offer_type",
-            sa.Enum("SANDWICH_ORPHAN", "EXTENSION_OFFER", "LAST_MINUTE", name="offertype"),
+            postgresql.ENUM("SANDWICH_ORPHAN", "EXTENSION_OFFER", "LAST_MINUTE", name="offertype"),
             nullable=False,
         ),
         sa.Column(
             "category",
-            sa.Enum("DELUXE", "SUITE", "STUDIO", "STANDARD", "PREMIUM", "ECONOMY", name="roomcategory"),
+            roomcategory_enum,
             nullable=True,
         ),
         sa.Column("offer_date", sa.Date(), nullable=True),
