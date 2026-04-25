@@ -212,6 +212,7 @@ async def apply_sandwich_playbook(
 
     orphan_slot_ids: list[str] = []
     slots_updated = 0
+    has_writes = False
 
     scan_dates = []
     cur = start
@@ -273,6 +274,7 @@ async def apply_sandwich_playbook(
                 db.add(slot)
                 slot_by_id[sid] = slot
                 slots_updated += 1
+                has_writes = True
                 continue
 
             # Only update if not already relaxed
@@ -280,16 +282,25 @@ async def apply_sandwich_playbook(
                 slot.min_stay_active = True
                 slot.min_stay_nights = 1
                 slots_updated += 1
+                has_writes = True
 
             # Apply (or refresh) discount offer for this slot if it's empty
             if slot.block_type == BlockType.EMPTY:
-                original_rate = float(slot.current_rate) if slot.current_rate else float(room_map[room_id].base_rate)
+                # Treat base_rate as the pre-offer "rack" rate for this playbook.
+                original_rate = float(room_map[room_id].base_rate)
                 discount_pct = 0.50
                 discounted_rate = round(original_rate * (1 - discount_pct), 2)
 
                 if slot.offer_id:
                     offer = await db.get(Offer, slot.offer_id)
                     if offer:
+                        prev = (
+                            offer.offer_type,
+                            offer.discount_pct,
+                            offer.original_rate,
+                            offer.discounted_rate,
+                            offer.offer_date,
+                        )
                         offer.offer_type = OfferType.SANDWICH_ORPHAN
                         offer.category = room_map[room_id].category
                         offer.offer_date = d
@@ -297,6 +308,14 @@ async def apply_sandwich_playbook(
                         offer.original_rate = original_rate
                         offer.discounted_rate = discounted_rate
                         offer.reason = "Auto playbook: sandwich orphan night"
+                        if prev != (
+                            offer.offer_type,
+                            offer.discount_pct,
+                            offer.original_rate,
+                            offer.discounted_rate,
+                            offer.offer_date,
+                        ):
+                            has_writes = True
                 else:
                     offer = Offer(
                         offer_type=OfferType.SANDWICH_ORPHAN,
@@ -310,10 +329,14 @@ async def apply_sandwich_playbook(
                     db.add(offer)
                     await db.flush()
                     slot.offer_id = offer.id
+                    has_writes = True
 
-                slot.current_rate = discounted_rate
+                if slot.current_rate != discounted_rate:
+                    slot.current_rate = discounted_rate
+                    slots_updated += 1
+                    has_writes = True
 
-    if slots_updated:
+    if has_writes:
         await db.commit()
 
     return SandwichPlaybookResponse(
