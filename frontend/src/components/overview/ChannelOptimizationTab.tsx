@@ -10,6 +10,7 @@ import type {
   ChannelRecommendResponse,
   ChannelRecommendation,
   ChannelStat,
+  PartnerStat,
 } from "../../types";
 import { useToast } from "../shared/Toast";
 import {
@@ -450,6 +451,94 @@ export function ChannelOptimizationTab() {
                 )}
               </div>
             )}
+          </div>
+
+          {/* Channel Breakdown (moved from Dashboard overview) */}
+          <div className="bg-surface border border-border">
+            <div className="px-6 py-3 border-b border-border bg-surface-2/60 flex items-center gap-2">
+              <BarChart2 className="w-3.5 h-3.5 text-accent" />
+              <span className="text-xs font-bold uppercase tracking-widest text-text">Channel Breakdown</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50">
+                    <th className="px-6 py-3 text-left">Channel</th>
+                    <th className="px-4 py-3 text-right">Nights</th>
+                    <th className="px-4 py-3 text-right">Share</th>
+                    <th className="px-4 py-3 text-right">Gross ADR</th>
+                    <th className="px-4 py-3 text-right">Commission</th>
+                    <th className="px-4 py-3 text-right">Gross Revenue</th>
+                    <th className="px-4 py-3 text-right">Net Revenue</th>
+                    <th className="px-6 py-3 text-left">Net Bar</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {channelData.channels.map((ch: ChannelStat) => {
+                    const maxNet = Math.max(...channelData.channels.map(c => c.net_revenue));
+                    const barWidth = maxNet > 0 ? Math.round((ch.net_revenue / maxNet) * 100) : 0;
+                    const isOta = ch.channel === "OTA" || ch.channel === "GDS";
+                    const channelBadge = `text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border ${
+                      ch.channel === "OTA"
+                        ? "bg-amber-50 text-amber-700 border-amber-200"
+                        : ch.channel === "GDS"
+                          ? "bg-violet-50 text-violet-700 border-violet-200"
+                          : ch.channel === "DIRECT"
+                            ? "bg-teal-50 text-teal-700 border-teal-200"
+                            : ch.channel === "WALKIN"
+                              ? "bg-orange-50 text-orange-700 border-orange-200"
+                              : "bg-surface-2 text-text-muted border-border"
+                    }`;
+                    return (
+                      <>
+                        <tr key={ch.channel} className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
+                          <td className="px-6 py-3">
+                            <span className={channelBadge}>{ch.channel}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{ch.room_nights}</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className="text-xs font-bold text-text">{ch.share_pct}%</span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-xs text-text">₹{ch.avg_rate.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right">
+                            {ch.commission_pct > 0 ? (
+                              <span className="text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-1.5 py-0.5">
+                                {ch.commission_pct}%
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-1.5 py-0.5">
+                                0%
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">₹{ch.gross_revenue.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">₹{ch.net_revenue.toLocaleString()}</td>
+                          <td className="px-6 py-3">
+                            <div className="w-32 bg-surface-2 border border-border/30 h-3 relative">
+                              <div className={`h-full ${isOta ? "bg-occuorange/60" : "bg-occugreen/60"}`} style={{ width: `${barWidth}%` }} />
+                            </div>
+                          </td>
+                        </tr>
+                        {ch.partners.map((pt: PartnerStat) => (
+                          <tr key={`${ch.channel}-${pt.partner}`} className="border-b border-border/10 bg-surface-2/20">
+                            <td className="px-6 py-1.5 pl-10">
+                              <span className="text-[10px] text-text-muted font-medium">↳ {pt.partner}</span>
+                            </td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">{pt.room_nights}</td>
+                            <td className="px-4 py-1.5 text-right text-[10px] text-text-muted">{pt.share_of_channel_pct}% of {ch.channel}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.avg_rate.toLocaleString()}</td>
+                            <td className="px-4 py-1.5" />
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.gross_revenue.toLocaleString()}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.net_revenue.toLocaleString()}</td>
+                            <td className="px-6 py-1.5" />
+                          </tr>
+                        ))}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}
