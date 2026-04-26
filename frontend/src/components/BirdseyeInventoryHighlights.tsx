@@ -165,13 +165,21 @@ interface BirdseyeInventoryHighlightsProps {
   projectedSnapshot?: EmptyRunInventorySnapshot | null;
   maxDays: number;
   columns?: 1 | 2;
+  /** Display mode: "detailed" shows mix charts; "numbers" shows totals only (compact). */
+  mode?: "detailed" | "numbers";
 }
 
 /**
  * Right-column "Availability at a glance" for Bird's Eye View: k-night bookable windows (overlapping placements in EMPTY strips), by bucket and room category.
  * Four panels: 1–3 nights each on their own, then one combined panel for 4-night and 4+ buckets.
  */
-export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDays, columns = 1 }: BirdseyeInventoryHighlightsProps) {
+export function BirdseyeInventoryHighlights({
+  snapshot,
+  projectedSnapshot,
+  maxDays,
+  columns = 1,
+  mode = "detailed",
+}: BirdseyeInventoryHighlightsProps) {
   const base = snapshot;
   const after = projectedSnapshot ?? null;
   const baseGrandTotal = BIRDSEYE_DISPLAY_BUCKET_ORDER.reduce((s, b) => s + base.totalsByBucket[b], 0);
@@ -228,55 +236,81 @@ export function BirdseyeInventoryHighlights({ snapshot, projectedSnapshot, maxDa
               {total === 0 ? (
                 <div className="px-2.5 py-3 text-[10px] text-text-muted font-medium">No windows in this bucket</div>
               ) : (
-                <div className="px-2.5 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
-                  {after ? (
-                    <div className="w-full">
-                      <ButterflyChart
-                        bucketLabel={section.label}
-                        categories={CATEGORY_ORDER.filter(
-                          c => (baseBreakdown[c] ?? 0) > 0 || (afterBreakdown[c] ?? 0) > 0,
-                        )}
-                        beforeBreakdown={baseBreakdown}
-                        afterBreakdown={afterBreakdown}
-                      />
+                mode === "numbers" ? (
+                  <div className="px-2.5 py-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {categoriesPresent.map(cat => {
+                        const n = breakdown[cat] ?? 0;
+                        const baseN = section.buckets.reduce((acc, b) => acc + (base.byBucket[b][cat] ?? 0), 0);
+                        const deltaN = after ? (n - baseN) : null;
+                        return (
+                          <div key={cat} className="bg-surface-2/50 border border-border/60 px-2 py-2">
+                            <div className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">{cat}</div>
+                            {after ? (
+                              <div className="mt-1 text-[10px] font-black tabular-nums flex items-baseline gap-2">
+                                <span className="text-text-muted">B {baseN}</span>
+                                <span className="text-text">A {n}</span>
+                                <span className={(deltaN ?? 0) >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {deltaN}</span>
+                              </div>
+                            ) : (
+                              <div className="mt-1 text-[12px] font-black text-text tabular-nums">{n}</div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  ) : (
-                    <div className="w-full">
-                      <SimpleCategoryBars
-                        bucketLabel={section.label}
-                        categories={categoriesPresent}
-                        breakdown={breakdown}
-                      />
-                    </div>
-                  )}
-                  <ul className="flex-1 min-w-0 space-y-2">
-                    {categoriesPresent.map(cat => {
-                      const n = breakdown[cat] ?? 0;
-                      const baseN = section.buckets.reduce((acc, b) => acc + (base.byBucket[b][cat] ?? 0), 0);
-                      const deltaN = after ? (n - baseN) : null;
-                      const fill = CATEGORY_DONUT_FILL[cat] ?? "rgba(44, 27, 24, 0.3)";
-                      return (
-                        <li key={cat} className="flex justify-between items-center gap-2">
-                          <span className="flex items-center gap-2 min-w-0">
-                            <span className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: fill }} aria-hidden />
-                            <span className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">
-                              {cat}
-                            </span>
-                          </span>
-                          {after ? (
-                            <span className="text-[10px] font-bold tabular-nums shrink-0 flex items-baseline gap-2">
-                              <span className="text-text-muted">B {baseN}</span>
-                              <span className="text-text">A {n}</span>
-                              <span className={(deltaN ?? 0) >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {deltaN}</span>
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-bold text-text tabular-nums shrink-0">{n}</span>
+                  </div>
+                ) : (
+                  <div className="px-2.5 py-3 flex flex-col sm:flex-row sm:items-center gap-4">
+                    {after ? (
+                      <div className="w-full">
+                        <ButterflyChart
+                          bucketLabel={section.label}
+                          categories={CATEGORY_ORDER.filter(
+                            c => (baseBreakdown[c] ?? 0) > 0 || (afterBreakdown[c] ?? 0) > 0,
                           )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
+                          beforeBreakdown={baseBreakdown}
+                          afterBreakdown={afterBreakdown}
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-full">
+                        <SimpleCategoryBars
+                          bucketLabel={section.label}
+                          categories={categoriesPresent}
+                          breakdown={breakdown}
+                        />
+                      </div>
+                    )}
+                    <ul className="flex-1 min-w-0 space-y-2">
+                      {categoriesPresent.map(cat => {
+                        const n = breakdown[cat] ?? 0;
+                        const baseN = section.buckets.reduce((acc, b) => acc + (base.byBucket[b][cat] ?? 0), 0);
+                        const deltaN = after ? (n - baseN) : null;
+                        const fill = CATEGORY_DONUT_FILL[cat] ?? "rgba(44, 27, 24, 0.3)";
+                        return (
+                          <li key={cat} className="flex justify-between items-center gap-2">
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: fill }} aria-hidden />
+                              <span className="text-[9px] font-bold text-text-muted uppercase tracking-wide truncate">
+                                {cat}
+                              </span>
+                            </span>
+                            {after ? (
+                              <span className="text-[10px] font-bold tabular-nums shrink-0 flex items-baseline gap-2">
+                                <span className="text-text-muted">B {baseN}</span>
+                                <span className="text-text">A {n}</span>
+                                <span className={(deltaN ?? 0) >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {deltaN}</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-bold text-text tabular-nums shrink-0">{n}</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )
               )}
             </section>
           );
