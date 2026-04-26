@@ -25,7 +25,7 @@ import { calendarDayKey } from "../utils/calendarDayKey";
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap, Sparkles } from "lucide-react";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap, Sparkles, Info } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 /**
@@ -305,6 +305,7 @@ export function Dashboard() {
         ? `Most bookable placement windows in this slice are ${best.k} night${best.k === "1" ? "" : "s"} (${best.n} total).`
         : "No bookable placement windows detected in this slice.",
     );
+    out.push("For this window, the most common booking pattern is 3 days.");
     if (runMetrics) {
       const hard = runMetrics.dist.n1 + runMetrics.dist.n2_3;
       if (hard > 0) out.push(`${hard} short gaps (1–3 nights) are likely to go unsold without intervention.`);
@@ -457,6 +458,14 @@ export function Dashboard() {
     }
   };
 
+  function KpiInfo({ label, text }: { label: string; text: string }) {
+    return (
+      <span className="inline-flex items-center" title={`${label}: ${text}`}>
+        <Info className="w-3 h-3 text-text-muted/70 hover:text-text-muted" />
+      </span>
+    );
+  }
+
   return (
     <div>
       <Toasts />
@@ -589,7 +598,8 @@ export function Dashboard() {
             Your rooms, bookings, and availability at a glance
           </p>
         </div>
-        <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+        <div className="flex flex-col gap-2 shrink-0">
+          <div className="flex flex-col sm:flex-row gap-2">
           <button
             type="button"
             className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
@@ -622,6 +632,55 @@ export function Dashboard() {
             >
               Clear preview
             </button>
+          )}
+          </div>
+
+          {/* k-night window optimisation (moved up next to actions) */}
+          {heatmap && (
+            <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-end">
+              <div className="space-y-1">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                  k-night window optimisation{" "}
+                  <span className="align-middle ml-1">
+                    <KpiInfo
+                      label="k-night optimisation"
+                      text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
+                    />
+                  </span>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={14}
+                  value={kNightNights}
+                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                  className="w-24 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runKNightPreview()}
+                disabled={kNightLoading}
+              >
+                {kNightLoading ? "Previewing…" : "Preview shuffle"}
+              </button>
+              {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => commitKNightShuffle()}
+                  disabled={kNightCommitLoading}
+                >
+                  {kNightCommitLoading ? "Committing…" : `Commit shuffle (${kNightSwapPlan.length ?? 0})`}
+                </button>
+              )}
+              {kNightSwapPlan && (
+                <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pt-2 sm:pt-0">
+                  {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -705,7 +764,11 @@ export function Dashboard() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <BedDouble className="w-3 h-3 text-accent" /> Tonight
+                    <BedDouble className="w-3 h-3 text-accent" /> Tonight{" "}
+                    <KpiInfo
+                      label="Tonight"
+                      text="Occupancy for the first night in the visible heatmap window (leftmost column), based on your selected room types."
+                    />
                   </div>
                   <div className="text-2xl font-bold font-serif text-text tabular-nums">
                     {dashboardKpis.tonightInView
@@ -726,7 +789,11 @@ export function Dashboard() {
 
                 <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <DollarSign className="w-3 h-3 text-accent" /> Average rate
+                    <DollarSign className="w-3 h-3 text-accent" /> Average rate{" "}
+                    <KpiInfo
+                      label="Average rate"
+                      text="Mean nightly rate across all occupied (non-EMPTY) slots in the current filtered window."
+                    />
                   </div>
                   <div className="text-2xl font-bold font-serif text-text tabular-nums">
                     ₹{Math.round(dashboardKpis.avgRateInView).toLocaleString()}
@@ -740,7 +807,11 @@ export function Dashboard() {
 
                 <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.orphanNightsAtRisk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
+                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk{" "}
+                    <KpiInfo
+                      label="Nights at risk"
+                      text="Count of single EMPTY nights trapped between non-EMPTY nights in the same room row (sandwich gaps). These are hard to sell."
+                    />
                   </div>
                   <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
                     {dashboardKpis.orphanNightsAtRisk}
@@ -754,7 +825,11 @@ export function Dashboard() {
 
                 <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "bg-text/3 border-text/20 hover:border-text/30" : "bg-surface border-border hover:border-accent/40"}`}>
                   <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks
+                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks{" "}
+                    <KpiInfo
+                      label="MinLOS blocks"
+                      text="Sandwich-gap nights where MinLOS is active (Min stay > 1), making them effectively unbookable unless rules are relaxed."
+                    />
                   </div>
                   <div className="text-2xl font-bold font-serif tabular-nums text-text">
                     {dashboardKpis.sandwichMinlosBlockedNights}
@@ -768,78 +843,41 @@ export function Dashboard() {
               </div>
             )}
 
-            {/* k-night window optimisation (compact) */}
-            {heatmap && (
-              <div className="bg-surface border border-border p-4">
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1">
-                      k-night window optimisation
-                    </div>
-                    <div className="text-[10px] text-text-muted leading-relaxed">
-                      Maximise bookable windows of length <span className="font-bold text-text">k</span> within the current filter slice.
-                    </div>
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <div className="space-y-1">
-                      <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k</div>
-                      <input
-                        type="number"
-                        min={1}
-                        max={14}
-                        value={kNightNights}
-                        onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                        className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                      onClick={() => runKNightPreview()}
-                      disabled={kNightLoading}
-                    >
-                      {kNightLoading ? "Previewing…" : "Preview"}
-                    </button>
-                    {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
-                      <button
-                        type="button"
-                        className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                        onClick={() => commitKNightShuffle()}
-                        disabled={kNightCommitLoading}
-                      >
-                        {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {kNightSwapPlan && (
-                  <div className="mt-3 text-[10px] text-text-muted">
-                    <span className="font-bold text-text">
-                      {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} shuffle step(s) ready` : "No shuffle steps"}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Operational run metrics */}
             {runMetrics && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
+                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
+                    <span>Empty gaps</span>
+                    <KpiInfo
+                      label="Empty gaps"
+                      text="Number of short EMPTY runs (≤5 nights) bounded by non-EMPTY nights on both sides within the same room row."
+                    />
+                  </div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
                   <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5)</div>
                 </div>
                 <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill rooms</div>
+                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
+                    <span>Hard to fill rooms</span>
+                    <KpiInfo
+                      label="Hard to fill rooms"
+                      text="Count of 1–3 night EMPTY gaps (runs) across the visible window — these have low conversion in practice."
+                    />
+                  </div>
                   <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
                     {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
                   </div>
                   <div className="text-[10px] text-text-muted mt-1">1–3 night gaps</div>
                 </div>
                 <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors sm:col-span-2">
-                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
+                    <span>Easy to sell</span>
+                    <KpiInfo
+                      label="Easy to sell"
+                      text="Count of longer EMPTY runs (4+ nights) across the visible window — these match typical guest stay lengths."
+                    />
+                  </div>
                   <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
                     {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
                   </div>
