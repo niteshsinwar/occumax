@@ -6,13 +6,11 @@ import {
   dashboardOptimisePreview,
   dashboardSandwichPlaybook,
   patchSlot,
-  getOccupancyForecast,
 } from "../api/client";
 import type {
   DashboardOptimisePreviewResponse,
   HeatmapResponse,
   HeatmapRow,
-  OccupancyForecastResponse,
   RoomCategory,
   SwapStep,
 } from "../types";
@@ -20,8 +18,6 @@ import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
-import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionInsights";
-import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
@@ -214,8 +210,6 @@ export function Dashboard() {
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
   const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
-  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
-  const [forecastLoading, setForecastLoading] = useState(false);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -293,32 +287,6 @@ export function Dashboard() {
   const refreshAllData = useCallback(async () => {
     await loadHeatmap();
   }, [loadHeatmap]);
-
-  const visibleForecastDateKeys = useMemo(() => {
-    if (!heatmap) return [];
-    return heatmap.dates.slice(0, spanDays).map(d => calendarDayKey(String(d)));
-  }, [heatmap, spanDays]);
-
-  const loadForecast = useCallback(async () => {
-    if (!heatmap || spanDays === 0) return;
-    setForecastLoading(true);
-    try {
-      const startStr = formatISO(parseISO(heatmap.dates[0]), { representation: "date" });
-      const endStr = formatISO(addDays(parseISO(heatmap.dates[0]), spanDays - 1), { representation: "date" });
-      const asOfStr = new Date().toISOString().split("T")[0];
-      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
-      setForecast(res.data as OccupancyForecastResponse);
-    } catch {
-      setForecast(null);
-    } finally {
-      setForecastLoading(false);
-    }
-  }, [heatmap, spanDays]);
-
-  useEffect(() => {
-    if (activeTab !== "dashboard") return;
-    loadForecast();
-  }, [activeTab, loadForecast]);
 
   const dashboardInsights = useMemo(() => {
     if (!snapshot || spanDays === 0) return [];
@@ -672,7 +640,7 @@ export function Dashboard() {
               type="button"
               className="self-start bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
               onClick={() => refreshAllData()}
-              disabled={forecastLoading}
+              disabled={isHeatmapLoading}
               title="Refresh all dashboard data for the current filters"
             >
               <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
@@ -681,127 +649,8 @@ export function Dashboard() {
         </div>
       )}
 
-      {dashboardKpis && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-4">
-          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <BedDouble className="w-3 h-3 text-accent" /> Tonight
-            </div>
-            <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              {dashboardKpis.tonightInView
-                ? (
-                  <>
-                    {dashboardKpis.tonightOccupancyPct.toFixed(0)}
-                    <span className="text-sm font-normal text-text-muted">%</span>
-                  </>
-                )
-                : "—"}
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {dashboardKpis.tonightInView
-                ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}`
-                : "No calendar loaded"}
-            </div>
-          </div>
-          <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <DollarSign className="w-3 h-3 text-accent" /> Average rate
-            </div>
-            <div className="text-2xl font-bold font-serif text-text tabular-nums">
-              ₹{Math.round(dashboardKpis.avgRateInView).toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {dashboardKpis.avgRateNightCount > 0
-                ? `Mean nightly rate · ${dashboardKpis.avgRateNightCount} occupied night${dashboardKpis.avgRateNightCount === 1 ? "" : "s"} in range`
-                : "No occupied nights in selected range"}
-            </div>
-          </div>
-          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.orphanNightsAtRisk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
-            </div>
-            <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
-              {dashboardKpis.orphanNightsAtRisk}
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {dashboardKpis.orphanNightsAtRisk > 0
-                ? `₹${dashboardKpis.orphanRevenueAtRisk.toLocaleString()} at risk`
-                : "No orphan gaps in selected range"}
-            </div>
-          </div>
-          <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "bg-text/3 border-text/20 hover:border-text/30" : "bg-surface border-border hover:border-accent/40"}`}>
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-              <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks
-            </div>
-            <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-text"}`}>
-              {dashboardKpis.sandwichMinlosBlockedNights}
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {dashboardKpis.sandwichMinlosBlockedNights > 0
-                ? "1-night sandwich gaps blocked by MinLOS"
-                : "No MinLOS blocks in this slice"}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {runMetrics && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-6">
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
-            <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
-            <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5) between bookings</div>
-          </div>
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
-            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
-              {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted mt-1">1–3 night gaps (low conversion)</div>
-          </div>
-          <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
-            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
-              {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
-            </div>
-            <div className="text-[10px] text-text-muted mt-1">4+ night stretches (standard stays)</div>
-          </div>
-        </div>
-      )}
-
-      {heatmap && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8 items-stretch">
-          {forecast ? (
-            <BirdseyeForecastInsights
-              forecast={forecast}
-              selectedCategories={selectedCategories}
-              visibleForecastDateKeys={visibleForecastDateKeys}
-            />
-          ) : (
-            <div className="bg-surface border border-border shadow-subtle h-full">
-              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
-                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">
-                    {forecastLoading ? "Loading" : "Unavailable"}
-                  </div>
-                </div>
-                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                  Analysing booking pickup patterns…
-                </p>
-              </div>
-              <div className="p-3">
-                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
-              </div>
-            </div>
-          )}
-
-          <BirdseyeCompressionInsights dates={heatmap.dates} rows={filteredRows} maxDays={spanDays} />
-        </div>
-      )}
-
       {heatmap && dashboardInsights.length > 0 && (
-        <div className="mt-6 bg-accent/5 border border-accent/20 p-6">
+        <div className="mt-4 bg-accent/5 border border-accent/20 p-6">
           <div className="flex items-start gap-3">
             <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
               <Sparkles className="w-4 h-4 text-accent" />
@@ -825,95 +674,198 @@ export function Dashboard() {
         </div>
       )}
 
+      {/* 60/40 layout: Heatmap (60) + KPIs (40) */}
       {heatmap && (
-        <div className="mt-4 bg-surface border border-border p-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">
-                k-night window optimisation
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6 items-start">
+          <div className="bg-surface border border-border p-6">
+            <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-text">Inventory Heatmap</h3>
+                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
+                  Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
+                </p>
               </div>
-              <div className="text-xs text-text-muted leading-relaxed">
-                Rearranges existing SOFT bookings to maximize the total number of bookable windows of length <span className="font-bold text-text">k</span> within the current dashboard slice (selected categories + visible date range). Preview first, then opt-in to commit.
+              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold">
+                Sandwich gaps outlined
               </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 shrink-0 items-end">
-              <div className="space-y-1">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k (nights)</div>
-                <input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={kNightNights}
-                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                  className="w-24 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                />
-              </div>
-              <button
-                type="button"
-                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runKNightPreview()}
-                disabled={kNightLoading}
-              >
-                {kNightLoading ? "Previewing…" : "Preview shuffle"}
-              </button>
-              {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
-                <button
-                  type="button"
-                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => commitKNightShuffle()}
-                  disabled={kNightCommitLoading}
-                >
-                  {kNightCommitLoading ? "Committing…" : `Commit shuffle (${kNightSwapPlan.length ?? 0})`}
-                </button>
-              )}
-            </div>
+
+            <HeatmapGrid
+              dates={heatmap.dates}
+              rows={simulatedRows ?? filteredRows}
+              maxDays={spanDays}
+              highlightSandwichGaps
+              onCellClick={setSlotModal}
+            />
           </div>
 
-          {kNightSwapPlan && (
-            <div className="mt-3 text-xs text-text-muted">
-              <span className="font-bold text-text">
-                {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} shuffle step(s) ready` : "No shuffle steps"}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
+          <div className="space-y-6">
+            {/* KPI strip */}
+            {dashboardKpis && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+                    <BedDouble className="w-3 h-3 text-accent" /> Tonight
+                  </div>
+                  <div className="text-2xl font-bold font-serif text-text tabular-nums">
+                    {dashboardKpis.tonightInView
+                      ? (
+                        <>
+                          {dashboardKpis.tonightOccupancyPct.toFixed(0)}
+                          <span className="text-sm font-normal text-text-muted">%</span>
+                        </>
+                      )
+                      : "—"}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {dashboardKpis.tonightInView
+                      ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}`
+                      : "No calendar loaded"}
+                  </div>
+                </div>
 
-      {heatmap && snapshot && (
-        <>
-          {filteredRows.length === 0 ? (
-            <div className="bg-surface border border-border py-12 px-6 text-center text-sm text-text-muted">
-              No rooms match the selected types for this hotel.
-            </div>
-          ) : (
-            <>
-              <div className="mt-8">
-                <BirdseyeInventoryHighlights
-                  snapshot={snapshot}
-                  projectedSnapshot={projectedSnapshot}
-                  maxDays={spanDays}
-                  columns={2}
-                />
-              </div>
+                <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+                    <DollarSign className="w-3 h-3 text-accent" /> Average rate
+                  </div>
+                  <div className="text-2xl font-bold font-serif text-text tabular-nums">
+                    ₹{Math.round(dashboardKpis.avgRateInView).toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {dashboardKpis.avgRateNightCount > 0
+                      ? `${dashboardKpis.avgRateNightCount} occupied night${dashboardKpis.avgRateNightCount === 1 ? "" : "s"} in range`
+                      : "No occupied nights in selected range"}
+                  </div>
+                </div>
 
-              <div className="mt-8">
-                <div className="bg-surface border border-border p-6">
-                  <h3 className="font-serif font-bold text-lg text-text mb-4">Inventory Heatmap</h3>
-                  <HeatmapGrid
-                    dates={heatmap.dates}
-                    rows={simulatedRows ?? filteredRows}
-                    maxDays={spanDays}
-                    highlightSandwichGaps
-                    onCellClick={setSlotModal}
-                  />
-                  <div className="mt-3 text-[9px] text-text-muted uppercase tracking-widest font-bold">
-                    Tip: sandwich gaps are outlined · click a cell to inspect slot details
+                <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.orphanNightsAtRisk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk
+                  </div>
+                  <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
+                    {dashboardKpis.orphanNightsAtRisk}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {dashboardKpis.orphanNightsAtRisk > 0
+                      ? `₹${dashboardKpis.orphanRevenueAtRisk.toLocaleString()} at risk`
+                      : "No orphan gaps in selected range"}
+                  </div>
+                </div>
+
+                <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "bg-text/3 border-text/20 hover:border-text/30" : "bg-surface border-border hover:border-accent/40"}`}>
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
+                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks
+                  </div>
+                  <div className="text-2xl font-bold font-serif tabular-nums text-text">
+                    {dashboardKpis.sandwichMinlosBlockedNights}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {dashboardKpis.sandwichMinlosBlockedNights > 0
+                      ? "1-night sandwich gaps blocked by MinLOS"
+                      : "No MinLOS blocks in this slice"}
                   </div>
                 </div>
               </div>
-            </>
-          )}
-        </>
+            )}
+
+            {/* k-night window optimisation (compact) */}
+            {heatmap && (
+              <div className="bg-surface border border-border p-4">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1">
+                      k-night window optimisation
+                    </div>
+                    <div className="text-[10px] text-text-muted leading-relaxed">
+                      Maximise bookable windows of length <span className="font-bold text-text">k</span> within the current filter slice.
+                    </div>
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <div className="space-y-1">
+                      <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k</div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={14}
+                        value={kNightNights}
+                        onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                        className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() => runKNightPreview()}
+                      disabled={kNightLoading}
+                    >
+                      {kNightLoading ? "Previewing…" : "Preview"}
+                    </button>
+                    {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
+                      <button
+                        type="button"
+                        className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                        onClick={() => commitKNightShuffle()}
+                        disabled={kNightCommitLoading}
+                      >
+                        {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {kNightSwapPlan && (
+                  <div className="mt-3 text-[10px] text-text-muted">
+                    <span className="font-bold text-text">
+                      {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} shuffle step(s) ready` : "No shuffle steps"}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Operational run metrics */}
+            {runMetrics && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Empty gaps</div>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
+                  <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5)</div>
+                </div>
+                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill rooms</div>
+                  <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
+                    {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1">1–3 night gaps</div>
+                </div>
+                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors sm:col-span-2">
+                  <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+                  <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
+                    {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1">4+ night stretches</div>
+                </div>
+              </div>
+            )}
+
+            {/* Availability at a glance (numbers-only to save space) */}
+            {snapshot && (
+              <BirdseyeInventoryHighlights
+                snapshot={snapshot}
+                projectedSnapshot={projectedSnapshot}
+                maxDays={spanDays}
+                columns={1}
+                mode="numbers"
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {heatmap && snapshot && filteredRows.length === 0 && (
+        <div className="bg-surface border border-border py-12 px-6 text-center text-sm text-text-muted mt-6">
+          No rooms match the selected types for this hotel.
+        </div>
       )}
 
       {!heatmap && (
