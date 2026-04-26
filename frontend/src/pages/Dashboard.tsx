@@ -21,6 +21,7 @@ import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFi
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
+import { calendarDayKey } from "../utils/calendarDayKey";
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
