@@ -591,97 +591,100 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-6 border-b border-border/50 pb-6">
+      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6 border-b border-border/50 pb-6">
         <div>
           <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Occupancy Overview</h1>
           <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
             Your rooms, bookings, and availability at a glance
           </p>
         </div>
-        <div className="flex flex-col gap-2 shrink-0">
-          <div className="flex flex-col sm:flex-row gap-2">
-          <button
-            type="button"
-            className="self-start sm:self-auto bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
-            onClick={() => refreshAllData()}
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
-          </button>
-          <button
-            type="button"
-            className="self-start sm:self-auto bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={() => runOptimisePreview()}
-            disabled={!heatmap || isOptimiseLoading}
-          >
-            {isOptimiseLoading ? "Scanning…" : "Find empty gaps"}
-          </button>
-          <button
-            type="button"
-            className="self-start sm:self-auto bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-            onClick={() => runSandwichPlaybook()}
-            disabled={!heatmap || isOptimiseLoading}
-            title="Relax MinLOS on single-night sandwich gaps in the current slice"
-          >
-            Fix sandwich nights
-          </button>
-          {swapPlan && (
-            <button
-              type="button"
-              className="self-start sm:self-auto bg-surface text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
-              onClick={() => clearOptimisePreview()}
-            >
-              Clear preview
-            </button>
-          )}
-          </div>
-
-          {/* k-night window optimisation (moved up next to actions) */}
-          {heatmap && (
-            <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-end">
-              <div className="space-y-1">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                  k-night window optimisation{" "}
-                  <span className="align-middle ml-1">
-                    <KpiInfo
-                      label="k-night optimisation"
-                      text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
-                    />
-                  </span>
-                </div>
-                <input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={kNightNights}
-                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                  className="w-24 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                />
-              </div>
+        <div className="shrink-0 w-full lg:w-auto">
+          <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
+            <div className="flex flex-wrap gap-2 items-center">
               <button
                 type="button"
-                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runKNightPreview()}
-                disabled={kNightLoading}
+                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
+                onClick={() => refreshAllData()}
               >
-                {kNightLoading ? "Previewing…" : "Preview shuffle"}
+                <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
               </button>
-              {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
+              <button
+                type="button"
+                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runOptimisePreview()}
+                disabled={!heatmap || isOptimiseLoading}
+              >
+                {isOptimiseLoading ? "Scanning…" : "Find empty gaps"}
+              </button>
+              <button
+                type="button"
+                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runSandwichPlaybook()}
+                disabled={!heatmap || isOptimiseLoading}
+                title="Relax MinLOS on single-night sandwich gaps in the current slice"
+              >
+                Fix sandwich nights
+              </button>
+              {swapPlan && (
                 <button
                   type="button"
-                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => commitKNightShuffle()}
-                  disabled={kNightCommitLoading}
+                  className="bg-surface text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
+                  onClick={() => clearOptimisePreview()}
                 >
-                  {kNightCommitLoading ? "Committing…" : `Commit shuffle (${kNightSwapPlan.length ?? 0})`}
+                  Clear preview
                 </button>
               )}
-              {kNightSwapPlan && (
-                <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pt-2 sm:pt-0">
-                  {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
-                </div>
-              )}
             </div>
-          )}
+
+            {/* Secondary row: k-night optimiser */}
+            {heatmap && (
+              <div className="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-end gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                    k-night window optimisation
+                  </div>
+                  <KpiInfo
+                    label="k-night optimisation"
+                    text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
+                  />
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={14}
+                    value={kNightNights}
+                    onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                    className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    aria-label="k nights"
+                  />
+                  <button
+                    type="button"
+                    className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={() => runKNightPreview()}
+                    disabled={kNightLoading}
+                  >
+                    {kNightLoading ? "Previewing…" : "Preview shuffle"}
+                  </button>
+                  {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                      onClick={() => commitKNightShuffle()}
+                      disabled={kNightCommitLoading}
+                    >
+                      {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
+                    </button>
+                  )}
+                  {kNightSwapPlan && (
+                    <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pb-0.5">
+                      {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -869,19 +872,6 @@ export function Dashboard() {
                     {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
                   </div>
                   <div className="text-[10px] text-text-muted mt-1">1–3 night gaps</div>
-                </div>
-                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors sm:col-span-2">
-                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
-                    <span>Easy to sell</span>
-                    <KpiInfo
-                      label="Easy to sell"
-                      text="Count of longer EMPTY runs (4+ nights) across the visible window — these match typical guest stay lengths."
-                    />
-                  </div>
-                  <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">
-                    {(runMetrics.dist.n4_7 + runMetrics.dist.n8p).toLocaleString()}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">4+ night stretches</div>
                 </div>
               </div>
             )}
