@@ -21,6 +21,8 @@ interface HeatmapGridProps {
   maxDays?: number;
   hideDateHeader?: boolean;
   hideLegend?: boolean;
+  /** When enabled, highlights 1-night EMPTY sandwich gaps between non-EMPTY cells. */
+  highlightSandwichGaps?: boolean;
   onCellClick?: (cell: CellClickInfo) => void;
 }
 
@@ -50,10 +52,10 @@ export function HeatmapGrid({
   maxDays,
   hideDateHeader,
   hideLegend,
+  highlightSandwichGaps,
   onCellClick,
 }: HeatmapGridProps) {
   const visibleDates    = maxDays ? dates.slice(0, maxDays) : dates;
-  const visibleDateSet  = new Set(visibleDates);
   // Compact: 20×20px  Normal: 28×28px — large enough to read booking IDs
   const cellSizeClass   = compact ? "w-5 h-5" : "w-7 h-7";
   const labelWidthClass = compact ? "w-[52px]" : "w-[68px]";
@@ -97,14 +99,32 @@ export function HeatmapGrid({
                 {row.room_id}
               </div>
 
-              {row.cells
-                .filter(cell => !maxDays || visibleDateSet.has(String(cell.date)))
-                .map(cell => {
+              {(maxDays ? row.cells.slice(0, maxDays) : row.cells).map((cell, idx, visibleCells) => {
                   const baseClass = cellClass(cell.block_type, (cell as any).channel);
                   let finalClass =
                     `${cellSizeClass} shrink-0 rounded-[2px] flex items-center justify-center ` +
                     `overflow-hidden transition-colors mr-0.5 border border-black/10 ${baseClass}`;
                   if (onCellClick) finalClass += " cursor-pointer hover:shadow-md hover:brightness-105";
+
+                  if (highlightSandwichGaps) {
+                    const before = idx > 0 ? visibleCells[idx - 1] : null;
+                    const after = idx < visibleCells.length - 1 ? visibleCells[idx + 1] : null;
+                    const isSandwichGap =
+                      cell.block_type === "EMPTY" &&
+                      before != null &&
+                      before.block_type !== "EMPTY" &&
+                      after != null &&
+                      after.block_type !== "EMPTY";
+
+                    if (isSandwichGap) {
+                      const minStayActive = Boolean((cell as any).min_stay_active);
+                      const minStayNights = Number((cell as any).min_stay_nights ?? 0);
+                      const isMinLosBlocked = minStayActive && minStayNights > 1;
+                      finalClass += isMinLosBlocked
+                        ? " ring-2 ring-black/50"
+                        : " ring-2 ring-occuorange/70";
+                    }
+                  }
 
                   const ch = (cell as any).channel as string | null | undefined;
                   const offerType = (cell as any).offer_type as string | null | undefined;

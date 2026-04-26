@@ -1,18 +1,27 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { dashboardCommitShuffle, dashboardOptimiseKNightPreview, getChannelPerformance, getHeatmap, dashboardOptimisePreview, dashboardSandwichPlaybook, patchSlot } from "../api/client";
+import {
+  dashboardCommitShuffle,
+  dashboardOptimiseKNightPreview,
+  getHeatmap,
+  dashboardOptimisePreview,
+  dashboardSandwichPlaybook,
+  patchSlot,
+  getOccupancyForecast,
+} from "../api/client";
 import type {
-  ChannelPerformanceResponse,
-  ChannelStat,
   DashboardOptimisePreviewResponse,
   HeatmapResponse,
   HeatmapRow,
-  PartnerStat,
+  OccupancyForecastResponse,
   RoomCategory,
   SwapStep,
 } from "../types";
 import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
+import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
+import { BirdseyeCompressionInsights } from "../components/BirdseyeCompressionInsights";
+import { BirdseyeForecastInsights } from "../components/BirdseyeForecastInsights";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
@@ -20,7 +29,7 @@ import { calendarDayKey } from "../utils/calendarDayKey";
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap } from "lucide-react";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap, Sparkles } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 /**
@@ -205,8 +214,8 @@ export function Dashboard() {
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
   const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
-  const [channelData, setChannelData] = useState<ChannelPerformanceResponse | null>(null);
-  const [isChannelLoading, setIsChannelLoading] = useState<boolean>(false);
+  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
+  const [forecastLoading, setForecastLoading] = useState(false);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -281,38 +290,62 @@ export function Dashboard() {
     return computeEmptyRunInventory(simulatedRows, spanDays);
   }, [simulatedRows, spanDays]);
 
-  const fetchChannelPerformance = useCallback(async (args: { start: string; end: string; categories: RoomCategory[] }) => {
-    setIsChannelLoading(true);
-    try {
-      const res = await getChannelPerformance({ start: args.start, end: args.end, categories: args.categories });
-      setChannelData(res.data as ChannelPerformanceResponse);
-    } catch {
-      setChannelData(null);
-    } finally {
-      setIsChannelLoading(false);
-    }
-  }, []);
-
-  const loadChannelPerformance = useCallback(async () => {
-    if (!heatmap || spanDays === 0) return;
-    const start = formatISO(parseISO(heatmap.dates[0]), { representation: "date" });
-    const end = formatISO(addDays(parseISO(heatmap.dates[0]), spanDays - 1), { representation: "date" });
-    await fetchChannelPerformance({ start, end, categories: selectedCategories });
-  }, [fetchChannelPerformance, heatmap, selectedCategories, spanDays]);
-
   const refreshAllData = useCallback(async () => {
-    const nextHeatmap = await loadHeatmap();
-    if (!nextHeatmap) return;
-    const nextSpanDays = Math.min(weekSpan * 7, nextHeatmap.dates.length);
-    const start = formatISO(parseISO(nextHeatmap.dates[0]), { representation: "date" });
-    const end = formatISO(addDays(parseISO(nextHeatmap.dates[0]), nextSpanDays - 1), { representation: "date" });
-    await fetchChannelPerformance({ start, end, categories: selectedCategories });
-  }, [fetchChannelPerformance, loadHeatmap, selectedCategories, weekSpan]);
+    await loadHeatmap();
+  }, [loadHeatmap]);
+
+  const visibleForecastDateKeys = useMemo(() => {
+    if (!heatmap) return [];
+    return heatmap.dates.slice(0, spanDays).map(d => calendarDayKey(String(d)));
+  }, [heatmap, spanDays]);
+
+  const loadForecast = useCallback(async () => {
+    if (!heatmap || spanDays === 0) return;
+    setForecastLoading(true);
+    try {
+      const startStr = formatISO(parseISO(heatmap.dates[0]), { representation: "date" });
+      const endStr = formatISO(addDays(parseISO(heatmap.dates[0]), spanDays - 1), { representation: "date" });
+      const asOfStr = new Date().toISOString().split("T")[0];
+      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
+      setForecast(res.data as OccupancyForecastResponse);
+    } catch {
+      setForecast(null);
+    } finally {
+      setForecastLoading(false);
+    }
+  }, [heatmap, spanDays]);
 
   useEffect(() => {
     if (activeTab !== "dashboard") return;
-    loadChannelPerformance();
-  }, [activeTab, loadChannelPerformance]);
+    loadForecast();
+  }, [activeTab, loadForecast]);
+
+  const dashboardInsights = useMemo(() => {
+    if (!snapshot || spanDays === 0) return [];
+    const totals = snapshot.totalsByBucket;
+    const buckets: Array<{ k: string; n: number }> = [
+      { k: "1", n: totals["1"] ?? 0 },
+      { k: "2", n: totals["2"] ?? 0 },
+      { k: "3", n: totals["3"] ?? 0 },
+      { k: "4", n: totals["4"] ?? 0 },
+      { k: "4+", n: totals["4+"] ?? 0 },
+    ];
+    const best = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
+    const out: string[] = [];
+    out.push(
+      best.n > 0
+        ? `Most bookable placement windows in this slice are ${best.k} night${best.k === "1" ? "" : "s"} (${best.n} total).`
+        : "No bookable placement windows detected in this slice.",
+    );
+    if (runMetrics) {
+      const hard = runMetrics.dist.n1 + runMetrics.dist.n2_3;
+      if (hard > 0) out.push(`${hard} short gaps (1–3 nights) are likely to go unsold without intervention.`);
+    }
+    if (dashboardKpis?.sandwichMinlosBlockedNights) {
+      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} sandwich night(s) are blocked by MinLOS rules — “Fix sandwich nights” can unlock them.`);
+    }
+    return out.slice(0, 4);
+  }, [dashboardKpis?.sandwichMinlosBlockedNights, runMetrics, snapshot, spanDays]);
 
   /**
    * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
@@ -639,7 +672,7 @@ export function Dashboard() {
               type="button"
               className="self-start bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
               onClick={() => refreshAllData()}
-              disabled={isChannelLoading}
+              disabled={forecastLoading}
               title="Refresh all dashboard data for the current filters"
             >
               <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
@@ -737,6 +770,62 @@ export function Dashboard() {
       )}
 
       {heatmap && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8 items-stretch">
+          {forecast ? (
+            <BirdseyeForecastInsights
+              forecast={forecast}
+              selectedCategories={selectedCategories}
+              visibleForecastDateKeys={visibleForecastDateKeys}
+            />
+          ) : (
+            <div className="bg-surface border border-border shadow-subtle h-full">
+              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
+                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">
+                    {forecastLoading ? "Loading" : "Unavailable"}
+                  </div>
+                </div>
+                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
+                  Analysing booking pickup patterns…
+                </p>
+              </div>
+              <div className="p-3">
+                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
+              </div>
+            </div>
+          )}
+
+          <BirdseyeCompressionInsights dates={heatmap.dates} rows={filteredRows} maxDays={spanDays} />
+        </div>
+      )}
+
+      {heatmap && dashboardInsights.length > 0 && (
+        <div className="mt-6 bg-accent/5 border border-accent/20 p-6">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Sparkles className="w-4 h-4 text-accent" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
+                Insights (auto-generated)
+              </div>
+              <ul className="space-y-2">
+                {dashboardInsights.map((t, i) => (
+                  <li key={i} className="text-sm text-text leading-relaxed">
+                    {t}
+                  </li>
+                ))}
+              </ul>
+              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
+                Based on the current filters and the visible heatmap window
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {heatmap && (
         <div className="mt-4 bg-surface border border-border p-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
@@ -808,151 +897,19 @@ export function Dashboard() {
               </div>
 
               <div className="mt-8">
-                <div className="mb-3">
-                  <div>
-                    <h3 className="font-bold text-xs text-text uppercase tracking-widest flex items-center gap-2">
-                      <BarChart2 className="w-3.5 h-3.5 text-accent" /> Channel performance
-                    </h3>
-                    <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                      Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
-                    </p>
+                <div className="bg-surface border border-border p-6">
+                  <h3 className="font-serif font-bold text-lg text-text mb-4">Inventory Heatmap</h3>
+                  <HeatmapGrid
+                    dates={heatmap.dates}
+                    rows={simulatedRows ?? filteredRows}
+                    maxDays={spanDays}
+                    highlightSandwichGaps
+                    onCellClick={setSlotModal}
+                  />
+                  <div className="mt-3 text-[9px] text-text-muted uppercase tracking-widest font-bold">
+                    Tip: sandwich gaps are outlined · click a cell to inspect slot details
                   </div>
                 </div>
-
-              {isChannelLoading && (
-                <div className="py-10 text-center border border-border bg-surface">
-                  <div className="w-6 h-6 border-2 border-border border-t-accent rounded-full animate-spin mx-auto mb-3" />
-                  <p className="text-xs text-text-muted uppercase tracking-widest">Loading channel data…</p>
-                </div>
-              )}
-
-              {!isChannelLoading && channelData && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="bg-surface border border-border p-4">
-                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Total Gross</div>
-                      <div className="text-2xl font-serif font-bold text-text">₹{channelData.total_gross_revenue.toLocaleString()}</div>
-                      <div className="text-[10px] text-text-muted mt-1">{channelData.total_room_nights} room nights</div>
-                    </div>
-                    <div className="bg-surface border border-occugreen/30 p-4">
-                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Net Revenue</div>
-                      <div className="text-2xl font-serif font-bold text-occugreen">₹{channelData.total_net_revenue.toLocaleString()}</div>
-                      <div className="text-[10px] text-text-muted mt-1">after commissions</div>
-                    </div>
-                    <div className="bg-occuorange/5 border border-occuorange/30 p-4">
-                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1 flex items-center gap-1">
-                        <AlertTriangle className="w-3 h-3 text-occuorange" />
-                        Commission Drain
-                      </div>
-                      <div className="text-2xl font-serif font-bold text-occuorange">
-                        ₹{(channelData.total_gross_revenue - channelData.total_net_revenue).toLocaleString()}
-                      </div>
-                      <div className="text-[10px] text-text-muted mt-1">paid to channels</div>
-                    </div>
-                    <div className="bg-surface border border-border p-4">
-                      <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Avg Rate</div>
-                      <div className="text-2xl font-serif font-bold text-text">
-                        ₹{channelData.total_room_nights > 0 ? Math.round(channelData.total_gross_revenue / channelData.total_room_nights).toLocaleString() : 0}
-                      </div>
-                      <div className="text-[10px] text-text-muted mt-1">gross ADR</div>
-                    </div>
-                  </div>
-
-                  <div className="bg-surface border border-border">
-                    <div className="px-6 py-3 border-b border-border bg-surface-2/60 flex items-center gap-2">
-                      <BarChart2 className="w-3.5 h-3.5 text-accent" />
-                      <span className="text-xs font-bold uppercase tracking-widest text-text">Channel Breakdown</span>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50">
-                            <th className="px-6 py-3 text-left">Channel</th>
-                            <th className="px-4 py-3 text-right">Nights</th>
-                            <th className="px-4 py-3 text-right">Share</th>
-                            <th className="px-4 py-3 text-right">Gross ADR</th>
-                            <th className="px-4 py-3 text-right">Commission</th>
-                            <th className="px-4 py-3 text-right">Gross Revenue</th>
-                            <th className="px-4 py-3 text-right">Net Revenue</th>
-                            <th className="px-6 py-3 text-left">Net Bar</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {channelData.channels.map((ch: ChannelStat) => {
-                            const maxNet = Math.max(...channelData.channels.map(c => c.net_revenue));
-                            const barWidth = maxNet > 0 ? Math.round((ch.net_revenue / maxNet) * 100) : 0;
-                            const isOta = ch.channel === "OTA" || ch.channel === "GDS";
-                            const channelBadge = `text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 border ${
-                              ch.channel === "OTA"
-                                ? "bg-amber-50 text-amber-700 border-amber-200"
-                                : ch.channel === "GDS"
-                                  ? "bg-violet-50 text-violet-700 border-violet-200"
-                                  : ch.channel === "DIRECT"
-                                    ? "bg-teal-50 text-teal-700 border-teal-200"
-                                    : ch.channel === "WALKIN"
-                                      ? "bg-orange-50 text-orange-700 border-orange-200"
-                                      : "bg-surface-2 text-text-muted border-border"
-                            }`;
-                            return (
-                              <>
-                                <tr key={ch.channel} className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
-                                  <td className="px-6 py-3">
-                                    <span className={channelBadge}>{ch.channel}</span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{ch.room_nights}</td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-xs font-bold text-text">{ch.share_pct}%</span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right font-mono text-xs text-text">₹{ch.avg_rate.toLocaleString()}</td>
-                                  <td className="px-4 py-3 text-right">
-                                    {ch.commission_pct > 0 ? (
-                                      <span className="text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-1.5 py-0.5">
-                                        {ch.commission_pct}%
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px] font-bold text-occugreen bg-occugreen/8 border border-occugreen/20 px-1.5 py-0.5">
-                                        0%
-                                      </span>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">₹{ch.gross_revenue.toLocaleString()}</td>
-                                  <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">₹{ch.net_revenue.toLocaleString()}</td>
-                                  <td className="px-6 py-3">
-                                    <div className="w-32 bg-surface-2 border border-border/30 h-3 relative">
-                                      <div className={`h-full ${isOta ? "bg-occuorange/60" : "bg-occugreen/60"}`} style={{ width: `${barWidth}%` }} />
-                                    </div>
-                                  </td>
-                                </tr>
-                                {ch.partners.map((pt: PartnerStat) => (
-                                  <tr key={`${ch.channel}-${pt.partner}`} className="border-b border-border/10 bg-surface-2/20">
-                                    <td className="px-6 py-1.5 pl-10">
-                                      <span className="text-[10px] text-text-muted font-medium">↳ {pt.partner}</span>
-                                    </td>
-                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">{pt.room_nights}</td>
-                                    <td className="px-4 py-1.5 text-right text-[10px] text-text-muted">{pt.share_of_channel_pct}% of {ch.channel}</td>
-                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.avg_rate.toLocaleString()}</td>
-                                    <td className="px-4 py-1.5" />
-                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.gross_revenue.toLocaleString()}</td>
-                                    <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.net_revenue.toLocaleString()}</td>
-                                    <td className="px-6 py-1.5" />
-                                  </tr>
-                                ))}
-                              </>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {!isChannelLoading && !channelData && (
-                <div className="py-10 text-center border border-border bg-surface">
-                  <BarChart2 className="w-8 h-8 text-accent/30 mx-auto mb-4" />
-                  <p className="text-sm text-text-muted">No channel data available for this filter/window.</p>
-                </div>
-              )}
               </div>
             </>
           )}
