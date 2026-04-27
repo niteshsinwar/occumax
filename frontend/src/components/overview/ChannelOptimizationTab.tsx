@@ -313,10 +313,10 @@ export function ChannelOptimizationTab() {
                           <p className="text-xs text-text-muted leading-relaxed mb-3">{rec.reasoning}</p>
                           <div className="flex items-center gap-4 text-[10px] font-mono">
                             <span className="text-text-muted">
-                              Gross <span className="text-text font-bold">₹{rec.expected_gross.toLocaleString()}</span>
+                              Gross <span className="text-text font-bold">${rec.expected_gross.toLocaleString("en-US")}</span>
                             </span>
-                            {rec.commission_cost > 0 && <span className="text-occuorange">Commission −₹{rec.commission_cost.toLocaleString()}</span>}
-                            <span className="text-occugreen font-bold">Net ₹{rec.expected_net.toLocaleString()}</span>
+                            {rec.commission_cost > 0 && <span className="text-occuorange">Commission −${rec.commission_cost.toLocaleString("en-US")}</span>}
+                            <span className="text-occugreen font-bold">Net ${rec.expected_net.toLocaleString("en-US")}</span>
                           </div>
                         </div>
                         <div className="flex flex-col gap-2 shrink-0">
@@ -504,7 +504,7 @@ export function ChannelOptimizationTab() {
                           <td className="px-4 py-3 text-right">
                             <span className="text-xs font-bold text-text">{ch.share_pct}%</span>
                           </td>
-                          <td className="px-4 py-3 text-right font-mono text-xs text-text">₹{ch.avg_rate.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono text-xs text-text">${ch.avg_rate.toLocaleString("en-US")}</td>
                           <td className="px-4 py-3 text-right">
                             {ch.commission_pct > 0 ? (
                               <span className="text-[10px] font-bold text-occuorange bg-occuorange/8 border border-occuorange/20 px-1.5 py-0.5">
@@ -516,8 +516,8 @@ export function ChannelOptimizationTab() {
                               </span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">₹{ch.gross_revenue.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">₹{ch.net_revenue.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">${ch.gross_revenue.toLocaleString("en-US")}</td>
+                          <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">${ch.net_revenue.toLocaleString("en-US")}</td>
                           <td className="px-6 py-3">
                             <div className="w-32 bg-surface-2 border border-border/30 h-3 relative">
                               <div className={`h-full ${isOta ? "bg-occuorange/60" : "bg-occugreen/60"}`} style={{ width: `${barWidth}%` }} />
@@ -531,10 +531,10 @@ export function ChannelOptimizationTab() {
                             </td>
                             <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">{pt.room_nights}</td>
                             <td className="px-4 py-1.5 text-right text-[10px] text-text-muted">{pt.share_of_channel_pct}% of {ch.channel}</td>
-                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.avg_rate.toLocaleString()}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">${pt.avg_rate.toLocaleString("en-US")}</td>
                             <td className="px-4 py-1.5" />
-                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.gross_revenue.toLocaleString()}</td>
-                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">₹{pt.net_revenue.toLocaleString()}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">${pt.gross_revenue.toLocaleString("en-US")}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-[10px] text-text-muted">${pt.net_revenue.toLocaleString("en-US")}</td>
                             <td className="px-6 py-1.5" />
                           </tr>
                         ))}

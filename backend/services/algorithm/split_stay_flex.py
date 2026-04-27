@@ -201,7 +201,7 @@ class SplitStayFlexEngine:
             f"Split stay across {len(built)} rooms "
             f"({'1 room change' if n_changes == 1 else f'{n_changes} room changes'}). "
             f"{int(discount_pct)}% consecutive-stay discount applied. "
-            f"Total: ₹{total_rate:,.0f} for {len(nights)} nights."
+            f"Total: ${total_rate:,.0f} for {len(nights)} nights."
         )
 
         return FlexSplitPlan(

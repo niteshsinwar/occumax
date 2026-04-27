@@ -484,7 +484,7 @@ export function PricingOptimizationTab() {
                           <div className="text-text-muted">
                             Suggested:{" "}
                             <span className={`font-mono font-bold ${hasDiscount ? "text-occured" : "text-occugreen"}`}>
-                              ₹{rec.suggested_rate.toLocaleString()}
+                              ${rec.suggested_rate.toLocaleString("en-US")}
                             </span>
                             <span className="text-text-muted"> ({rec.change_pct > 0 ? "+" : ""}{rec.change_pct}%)</span>
                           </div>
@@ -586,7 +586,7 @@ export function PricingOptimizationTab() {
                               <div className="text-[9px] text-text-muted">{rec.otb} OTB</div>
                             </td>
                             <td className="px-4 py-3 text-right font-mono text-xs text-text-muted line-through decoration-text-muted/40">
-                              ₹{rec.current_rate.toLocaleString()}
+                              ${rec.current_rate.toLocaleString("en-US")}
                             </td>
                             <td className="px-1 py-3 text-center">
                               {isIncrease
@@ -596,7 +596,7 @@ export function PricingOptimizationTab() {
                             <td className="px-4 py-3 text-right">
                               {isOverride ? (
                                 <div className="flex items-center justify-end gap-1">
-                                  <span className="text-[10px] text-text-muted">₹</span>
+                                  <span className="text-[10px] text-text-muted">$</span>
                                   <input
                                     type="number"
                                     step="100"
@@ -607,7 +607,7 @@ export function PricingOptimizationTab() {
                                 </div>
                               ) : (
                                 <span className={`font-mono text-xs font-bold ${isIncrease ? "text-occugreen" : "text-occured"}`}>
-                                  ₹{rec.suggested_rate.toLocaleString()}
+                                  ${rec.suggested_rate.toLocaleString("en-US")}
                                 </span>
                               )}
                             </td>

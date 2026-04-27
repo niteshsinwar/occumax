@@ -55,7 +55,7 @@ async def _build_hotel_context(db: AsyncSession) -> str:
     get_room_inventory tool.
 
     Format per line:
-      CATEGORY  total=N  free=F  soft=S  hard=H  |  ₹min–max/night  |  floors F1–F2
+      CATEGORY  total=N  free=F  soft=S  hard=H  |  $min–max/night  |  floors F1–F2
     """
     today = date.today()
     window_end = today + timedelta(days=settings.SCAN_WINDOW_DAYS)
@@ -96,9 +96,9 @@ async def _build_hotel_context(db: AsyncSession) -> str:
         rates = [r["rate"] for r in rooms]
         min_r, max_r = min(rates), max(rates)
         rate_str = (
-            f"₹{int(min_r):,}/night"
+            f"${int(min_r):,}/night"
             if min_r == max_r
-            else f"₹{int(min_r):,}–{int(max_r):,}/night"
+            else f"${int(min_r):,}–{int(max_r):,}/night"
         )
 
         floors = sorted({r["floor"] for r in rooms})

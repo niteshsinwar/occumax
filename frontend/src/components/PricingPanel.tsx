@@ -387,7 +387,7 @@ export function PricingPanel() {
 
                         {/* Before */}
                         <td className="px-4 py-3 text-right font-mono text-xs text-text-muted line-through decoration-text-muted/40">
-                          ₹{rec.current_rate.toLocaleString()}
+                          ${rec.current_rate.toLocaleString("en-US")}
                         </td>
 
                         {/* Arrow */}
@@ -401,7 +401,7 @@ export function PricingPanel() {
                         <td className="px-4 py-3 text-right">
                           {isOverride ? (
                             <div className="flex items-center justify-end gap-1">
-                              <span className="text-[10px] text-text-muted">₹</span>
+                              <span className="text-[10px] text-text-muted">$</span>
                               <input
                                 type="number"
                                 step="100"
@@ -414,7 +414,7 @@ export function PricingPanel() {
                             <span className={`font-mono text-xs font-bold ${
                               isIncrease ? "text-occugreen" : "text-occured"
                             }`}>
-                              ₹{rec.suggested_rate.toLocaleString()}
+                              ${rec.suggested_rate.toLocaleString("en-US")}
                             </span>
                           )}
                         </td>

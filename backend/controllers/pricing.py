@@ -131,7 +131,7 @@ def _build_context_text(snapshot: dict, today: date) -> str:
             b = snapshot[cat][d]
             rows.append(
                 f"  {d}: occ={b['occ_pct']}%  otb={b['otb']}/{b['total']}"
-                f"  rate=₹{b['avg_rate']:,.0f}  floor=₹{b['floor_rate']:,.0f}"
+                f"  rate=${b['avg_rate']:,.0f}  floor=${b['floor_rate']:,.0f}"
             )
         if rows:
             lines.append(f"\n[{cat}]")
@@ -195,7 +195,7 @@ async def commit(body: PricingCommitRequest, db: AsyncSession) -> PricingCommitR
             floor = slot.floor_rate or 0.0
             if item.new_rate < floor:
                 logger.warning(
-                    "Pricing commit: ₹%.0f below floor ₹%.0f for %s on %s — skipped",
+                    "Pricing commit: $%.0f below floor $%.0f for %s on %s — skipped",
                     item.new_rate, floor, item.category, item.date,
                 )
                 skipped += 1
