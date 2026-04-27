@@ -89,7 +89,7 @@ Key endpoint groups:
 | `POST /manager/commit` | Apply a swap plan from /optimise to the DB (two-pass vacate→fill) |
 | `POST /manager/channel-allocate` | Pre-block inventory for a specific OTA partner (creates SOFT placeholder bookings) |
 | `GET /manager/channel-recommend` | Run Gemini channel AI — returns ranked OTA/GDS allocation recommendations |
-| `GET /manager/pricing/analyse` | Run Gemini pricing AI — returns per-category-per-date rate recommendations |
+| `GET /manager/pricing/analyse` | Run Gemini pricing AI — returns per-category-per-date rate recommendations plus a **predictive what-if** discount ladder (demand lift, net price index, revenue index; `services/ai/pricing_what_if_agent.py`, heuristic fallback) |
 | `POST /manager/pricing/commit` | Apply pricing recommendations — batch-updates `slot.current_rate` |
 | `POST /ai/chat` | AI receptionist agent (Gemini-backed, full conversation history, returns action_data card) |
 
@@ -145,6 +145,8 @@ Two special input modes triggered by message prefix:
 The agent returns `action_data: { type, data }` alongside its text reply. The frontend renders this as a clickable card (`availability_result`, `split_stay_result`, `booking_confirmed`, `split_stay_confirmed`). Confirm is **never** a tool — all DB writes go through the receptionist's UI button.
 
 **Pricing agent** (`services/ai/pricing_agent.py`) — dynamic rate recommendations. 3 tools: `get_pricing_context`, `get_low_occupancy_dates`, `get_pickup_pace`. Returns a list of `{ category, date, suggested_rate, reason }` items.
+
+**Pricing what-if** (`services/ai/pricing_what_if_agent.py`) — single-shot Gemini JSON (or deterministic heuristic) that simulates a 0–40% discount ladder: `demand_lift_pct`, `net_price_index` (baseline 100), `revenue_index`, and `recommended_index`. Bundled on the same `GET /manager/pricing/analyse` response as `what_if` for the Pricing UI.
 
 **Channel agent** (`services/ai/channel_agent.py`) — OTA/GDS allocation analysis. 3 tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`.
 

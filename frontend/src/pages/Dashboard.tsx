@@ -1138,6 +1138,27 @@ export function Dashboard() {
               <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
                 {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.revenue_at_risk ?? 0).toLocaleString("en-US")}`}
               </div>
+              {scorecard?.before.revenue_weighted_fill_pct != null && scorecard.before.revenue_weighted_fill_pct > 0 && (
+                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
+                  Risk-weighted implied fill{" "}
+                  <span className="font-bold tabular-nums text-text">
+                    {Math.round(scorecard.before.revenue_weighted_fill_pct)}%
+                  </span>
+                  {scorecard?.after?.revenue_weighted_fill_pct != null && scorecard.after.revenue_weighted_fill_pct > 0 && (
+                    <>
+                      {" → "}
+                      <span className="font-bold tabular-nums text-text">
+                        {Math.round(scorecard.after.revenue_weighted_fill_pct)}%
+                      </span>
+                      {" "}
+                      <span className="text-text-muted">(after preview)</span>
+                    </>
+                  )}
+                  <span className="block mt-0.5 text-[9px] uppercase tracking-widest font-bold text-text-muted">
+                    Same gap fill model as the $ at-risk line
+                  </span>
+                </div>
+              )}
               {scorecard?.after && scorecard?.delta && (
                 <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
                   <span className="text-text-muted">After ${Math.round(scorecard.after.revenue_at_risk).toLocaleString("en-US")}</span>

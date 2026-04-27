@@ -116,6 +116,29 @@ def _calc_revenue_at_risk(gaps: list) -> float:
     ), 2)
 
 
+def _revenue_weighted_fill_pct(gaps: list) -> float | None:
+    """
+    Average implied fill probability weighted by each gap's contribution to revenue_at_risk.
+
+    For gap g: risk_weight = (1 - p(L)) * rate * L, contribution to numerator = p(L) * risk_weight.
+    """
+    num = 0.0
+    den = 0.0
+    for g in gaps:
+        gl = int(getattr(g, "gap_length", 0))
+        rate = float(getattr(g, "current_rate", 0) or 0)
+        if gl <= 0 or rate <= 0:
+            continue
+        p = _fill_prob(gl)
+        w = (1 - p) * rate * gl
+        if w > 0:
+            num += p * w
+            den += w
+    if den <= 0:
+        return None
+    return round(100.0 * num / den, 1)
+
+
 async def get_scorecard(
     db: AsyncSession,
     start: date,
@@ -160,6 +183,7 @@ async def get_scorecard(
         orphan_nights=sum(g.gap_length for g in gaps_before),
         revenue_at_risk=_calc_revenue_at_risk(gaps_before),
         k_windows=before_k,
+        revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_before),
     )
 
     if not swap_plan:
@@ -181,6 +205,7 @@ async def get_scorecard(
         orphan_nights=sum(g.gap_length for g in gaps_after),
         revenue_at_risk=_calc_revenue_at_risk(gaps_after),
         k_windows=after_k,
+        revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_after),
     )
 
     delta = CapacityDelta(

@@ -67,6 +67,8 @@ export interface CapacityScore {
   orphan_nights: number;
   revenue_at_risk: number;
   k_windows: Record<number, number>;
+  /** 0–100: risk-weighted implied fill % for gaps that drive revenue_at_risk */
+  revenue_weighted_fill_pct?: number | null;
 }
 
 export interface CapacityDelta {
@@ -189,11 +191,30 @@ export interface PricingRecommendation {
   floor_rate: number;
 }
 
+/** One row in the predictive discount ladder (baseline indices = 100 where applicable). */
+export interface PricingWhatIfScenario {
+  discount_pct: number;
+  demand_lift_pct: number;
+  net_price_index: number;
+  revenue_index: number;
+  rationale: string;
+}
+
+/** AI what-if discount simulation bundled with pricing analyse. */
+export interface PricingWhatIfAnalysis {
+  headline: string;
+  methodology: string;
+  scenarios: PricingWhatIfScenario[];
+  recommended_index: number;
+}
+
 export interface PricingAnalyseResponse {
   hotel_name: string;
   analysis_date: string;
   recommendations: PricingRecommendation[];
   summary: string;
+  /** Present when backend runs the discount what-if ladder with analyse. */
+  what_if?: PricingWhatIfAnalysis | null;
 }
 
 export interface PricingCommitItem {
