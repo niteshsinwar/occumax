@@ -5,6 +5,7 @@ import {
   getHeatmap,
   dashboardOptimisePreview,
   dashboardSandwichPlaybook,
+  dashboardRecoveryEstimate,
   dashboardScorecard,
   patchSlot,
 } from "../api/client";
@@ -222,6 +223,15 @@ export function Dashboard() {
   const [showInsights, setShowInsights] = useState(true);
   const [guidedRecoveryStep, setGuidedRecoveryStep] = useState<number | null>(null);
   const [guidedRecoveryDone, setGuidedRecoveryDone] = useState(false);
+  const [offerEstimate, setOfferEstimate] = useState<{
+    offer_discount_pct: number;
+    offer_recovered_estimated: number;
+    shuffle_recovered: number;
+    total_recovered_projected: number;
+    offer_fill_prob_before: number;
+    offer_fill_prob_after: number;
+    notes?: string | null;
+  } | null>(null);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -497,14 +507,37 @@ export function Dashboard() {
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
       const startStr = formatISO(start, { representation: "date" });
       const endStr = formatISO(end, { representation: "date" });
+
+      // Ask AI for best orphan-night discount + estimated recovery (uses current swapPlan if present)
+      const est = await dashboardRecoveryEstimate({
+        start: startStr,
+        end: endStr,
+        categories: selectedCategories,
+        swap_plan: swapPlan ?? null,
+      });
+      const estBody = est.data as {
+        offer_discount_pct: number;
+        offer_recovered_estimated: number;
+        shuffle_recovered: number;
+        total_recovered_projected: number;
+        offer_fill_prob_before: number;
+        offer_fill_prob_after: number;
+        notes?: string | null;
+      };
+      setOfferEstimate(estBody);
+
       const res = await dashboardSandwichPlaybook({
         start: startStr,
         end: endStr,
         categories: selectedCategories,
+        discount_pct: estBody.offer_discount_pct,
       });
       const body = res.data as { orphan_slots_found: number; slots_updated: number };
       if (body.slots_updated > 0) {
-        show(`Orphan-night offers updated on ${body.slots_updated} slot(s)`, "success");
+        show(
+          `Offers applied (${Math.round(estBody.offer_discount_pct * 100)}% off) on ${body.slots_updated} slot(s) · est +$${Math.round(estBody.offer_recovered_estimated).toLocaleString("en-US")}`,
+          "success",
+        );
       } else if (body.orphan_slots_found > 0) {
         show("Orphan nights found, but no rule/offer changes were needed in this slice.", "info");
       } else {
@@ -514,7 +547,7 @@ export function Dashboard() {
     } catch {
       show("Failed to apply orphan-night offers", "error");
     }
-  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan]);
+  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan, swapPlan]);
 
   const runRecoveryPlan = useCallback(async () => {
     // Demo-friendly playbook (no auto-commit): make the steps visible for hackathon storytelling.
@@ -959,14 +992,34 @@ export function Dashboard() {
             {scorecard?.after && scorecard?.delta
               ? (
                 <>
-                  <span className="font-bold">
-                    ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
-                  </span>{" "}
-                  recovered by rescuing{" "}
-                  <span className="font-bold">
-                    {Math.max(0, -scorecard.delta.orphan_nights).toLocaleString("en-US")}
-                  </span>{" "}
-                  orphan night(s) in this slice.
+                  <div className="space-y-1">
+                    <div>
+                      <span className="font-bold">
+                        ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
+                      </span>{" "}
+                      recovered via shuffle (deterministic)
+                    </div>
+                    <div className="text-text-muted">
+                      {offerEstimate
+                        ? (
+                          <>
+                            Est{" "}
+                            <span className="font-bold text-text">
+                              +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
+                            </span>{" "}
+                            via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
+                          </>
+                        )
+                        : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
+                    </div>
+                    {offerEstimate && (
+                      <div className="text-[10px] text-text-muted">
+                        Fill prob {Math.round(offerEstimate.offer_fill_prob_before * 100)}% →{" "}
+                        {Math.round(offerEstimate.offer_fill_prob_after * 100)}%{" "}
+                        {offerEstimate.notes ? `· ${offerEstimate.notes}` : ""}
+                      </div>
+                    )}
+                  </div>
                 </>
               )
               : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}

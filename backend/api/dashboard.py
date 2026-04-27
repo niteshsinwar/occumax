@@ -10,6 +10,8 @@ from core.schemas import (
     SandwichPlaybookResponse,
     DashboardScorecardRequest,
     DashboardScorecardResponse,
+    RecoveryEstimateRequest,
+    RecoveryEstimateResponse,
 )
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewRequest, DashboardOptimisePreviewResponse
 from core.schemas.dashboard_k_optimise import DashboardKNightPreviewRequest, DashboardKNightPreviewResponse
@@ -55,7 +57,13 @@ async def sandwich_playbook(body: SandwichPlaybookRequest, db: AsyncSession = De
     Relax MinLOS restrictions for true sandwich orphan nights in the given slice.
     Writes changes to DB.
     """
-    return await ctrl.apply_sandwich_playbook(db=db, start=body.start, end=body.end, categories=body.categories)
+    return await ctrl.apply_sandwich_playbook(
+        db=db,
+        start=body.start,
+        end=body.end,
+        categories=body.categories,
+        discount_pct=body.discount_pct,
+    )
 
 
 @router.post("/commit-shuffle", response_model=CommitResult)
@@ -85,3 +93,20 @@ async def scorecard(body: DashboardScorecardRequest, db: AsyncSession = Depends(
         k_nights=body.k_nights,
         swap_plan=body.swap_plan,
     )
+
+
+@router.post("/recovery-estimate", response_model=RecoveryEstimateResponse)
+async def recovery_estimate(body: RecoveryEstimateRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Demo-friendly recovery estimate:
+    - deterministic shuffle recovery from swap_plan simulation
+    - AI-assisted orphan-night offer discount + estimated incremental recovery
+    """
+    data = await ctrl.get_recovery_estimate(
+        db=db,
+        start=body.start,
+        end=body.end,
+        categories=body.categories,
+        swap_plan=body.swap_plan,
+    )
+    return RecoveryEstimateResponse(**data)
