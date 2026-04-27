@@ -1,24 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { commitPlan, fireOptimise, getHeatmap, getOccupancyForecast, patchSlot } from "../../api/client";
-import type { GapInfo, HeatmapResponse, HeatmapRow, OccupancyForecastResponse, OptimiseResult, SwapStep } from "../../types";
+import { dashboardCommitShuffle, dashboardOptimiseKNightPreview, dashboardSandwichPlaybook, getHeatmap } from "../../api/client";
+import type { HeatmapResponse, HeatmapRow, RoomCategory, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
-import { BirdseyeCompressionInsights } from "../BirdseyeCompressionInsights";
-import { BirdseyeForecastInsights } from "../BirdseyeForecastInsights";
 import { useToast } from "../shared/Toast";
 import { simulateRows } from "../../utils/simulateRows";
-import { calendarDayKey } from "../../utils/calendarDayKey";
 import {
-  Zap,
+  AlertTriangle,
   CheckCircle2,
-  XCircle,
-  Lock,
-  Unlock,
+  RefreshCw,
+  Sparkles,
   TrendingUp,
 } from "lucide-react";
-
-type Stage = "idle" | "processing" | "preview" | "applied" | "converged";
-
-// ── Run-metric helpers ────────────────────────────────────────────────────────
+import { addDays, formatISO, parseISO } from "date-fns";
 
 type RunMetrics = {
   orphanGaps: number;
@@ -26,29 +19,22 @@ type RunMetrics = {
   dist: { n1: number; n2_3: number; n4_7: number; n8p: number };
 };
 
-/**
- * Scan heatmap rows and classify consecutive EMPTY runs by length.
- * Orphan = EMPTY run ≤5 nights bounded by SOFT/HARD on both sides.
- */
-function computeRunMetrics(rows: HeatmapRow[], maxDays = 20): RunMetrics {
+function computeRunMetrics(rows: HeatmapRow[], maxDays: number): RunMetrics {
   const runs: Array<{ length: number; isOrphan: boolean }> = [];
   for (const row of rows) {
     const cells = row.cells.slice(0, maxDays);
     let i = 0;
     while (i < cells.length) {
-      if (cells[i].block_type !== "EMPTY") {
-        i++;
-        continue;
-      }
+      if (cells[i]?.block_type !== "EMPTY") { i++; continue; }
       const start = i;
-      while (i < cells.length && cells[i].block_type === "EMPTY") i++;
+      while (i < cells.length && cells[i]?.block_type === "EMPTY") i++;
       const length = i - start;
-      const before = start > 0 ? cells[start - 1].block_type : null;
-      const after = i < cells.length ? cells[i].block_type : null;
+      const before = start > 0 ? cells[start - 1]?.block_type : null;
+      const after = i < cells.length ? cells[i]?.block_type : null;
       const isOrphan =
         length <= 5 &&
-        (before === "SOFT" || before === "HARD") &&
-        (after === "SOFT" || after === "HARD");
+        before !== null && before !== "EMPTY" &&
+        after !== null && after !== "EMPTY";
       runs.push({ length, isOrphan });
     }
   }
@@ -65,151 +51,79 @@ function computeRunMetrics(rows: HeatmapRow[], maxDays = 20): RunMetrics {
   };
 }
 
-const BUCKETS: Array<{
-  label: string;
-  key: keyof RunMetrics["dist"];
-  desc: string;
-  positiveIsMore: boolean;
-}> = [
-  { label: "1 night", key: "n1", desc: "Almost impossible to fill", positiveIsMore: false },
-  { label: "2–3 nights", key: "n2_3", desc: "Short gaps — hard to sell", positiveIsMore: false },
-  { label: "4–7 nights", key: "n4_7", desc: "Standard stays — easy to book", positiveIsMore: true },
-  { label: "8+ nights", key: "n8p", desc: "Long stretches — high value guests", positiveIsMore: true },
-];
-
-function RunDistributionWidget({
-  current,
-  projected,
-  stage,
-}: {
-  current: RunMetrics;
-  projected: RunMetrics | null;
-  stage: Stage;
-}) {
-  const showProjected = projected !== null && (stage === "preview" || stage === "applied");
-  const maxVal = Math.max(
-    ...BUCKETS.flatMap(b => [current.dist[b.key], projected ? projected.dist[b.key] : 0]),
-    1,
-  );
-
-  return (
-    <div className="bg-surface border border-border shadow-subtle p-6 mb-8">
-      <div className="flex items-center justify-between mb-5 pb-4 border-b border-border/50">
-        <div>
-          <h3 className="font-serif font-bold text-lg text-text">Booking gap analysis</h3>
-          <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest font-bold">
-            {showProjected ? "Current vs after applying fixes" : "How your empty nights are distributed — next 20 days"}
-          </p>
-        </div>
-        {showProjected && (
-          <div className="flex items-center gap-5 text-[9px] font-bold uppercase tracking-widest text-text-muted">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-2 bg-text/20 inline-block border border-border/60" /> Current
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-2 bg-occugreen/50 inline-block border border-occugreen/30" /> Projected
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-5">
-        {BUCKETS.map(({ label, key, desc, positiveIsMore }) => {
-          const cur = current.dist[key];
-          const proj = projected?.dist[key] ?? null;
-          const delta = proj !== null ? proj - cur : null;
-          const isGoodDelta = delta !== null && (positiveIsMore ? delta > 0 : delta < 0);
-          const isBadDelta = delta !== null && delta !== 0 && !isGoodDelta;
-          return (
-            <div key={key} className="flex items-start gap-4">
-              <div className="w-28 shrink-0 text-right pt-0.5">
-                <div className="text-[10px] font-bold text-text uppercase tracking-wider leading-tight">{label}</div>
-                <div className="text-[9px] text-text-muted mt-0.5 leading-tight hidden sm:block">{desc}</div>
-              </div>
-              <div className="flex-1 space-y-1.5">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-6 bg-surface-2 relative overflow-hidden border border-border/50">
-                    <div
-                      className={`h-full transition-all duration-500 ${positiveIsMore ? "bg-accent/25" : "bg-occured/20"}`}
-                      style={{ width: cur > 0 ? `${Math.max((cur / maxVal) * 100, 5)}%` : "0%" }}
-                    />
-                    <span className="absolute left-2 top-0 h-full flex items-center text-[10px] font-bold text-text">
-                      {cur} run{cur !== 1 ? "s" : ""}
-                    </span>
-                  </div>
-                </div>
-                {showProjected && proj !== null && (
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-6 relative overflow-hidden border bg-occugreen/5 border-occugreen/20">
-                      <div
-                        className="h-full bg-occugreen/50 transition-all duration-700"
-                        style={{ width: proj > 0 ? `${Math.max((proj / maxVal) * 100, 5)}%` : "0%" }}
-                      />
-                      <span className="absolute left-2 top-0 h-full flex items-center gap-2 text-[10px] font-bold text-occugreen">
-                        {proj} run{proj !== 1 ? "s" : ""}
-                        {delta !== null && delta !== 0 && (
-                          <span className={`text-[9px] font-black ${isGoodDelta ? "text-occugreen" : isBadDelta ? "text-occured" : ""}`}>
-                            {delta > 0 ? `+${delta}` : delta}
-                          </span>
-                        )}
-                        {delta === 0 && <span className="text-[9px] text-text-muted font-normal">no change</span>}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+function computeKNightWindows(rows: HeatmapRow[], maxDays: number, k: number): number {
+  const kk = Math.max(1, Math.floor(k || 1));
+  let total = 0;
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    let run = 0;
+    for (const c of cells) {
+      if (c?.block_type === "EMPTY") run += 1;
+      else {
+        if (run >= kk) total += (run - kk + 1);
+        run = 0;
+      }
+    }
+    if (run >= kk) total += (run - kk + 1);
+  }
+  return total;
 }
 
-function GapEntry({ gap }: { gap: GapInfo }) {
-  return (
-    <div className="bg-surface-2 border border-border/50 p-4 relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-1 h-full bg-accent" />
-      <div className="flex items-center gap-3 mb-2">
-        <span className="text-[9px] font-bold tracking-wider uppercase bg-accent-dim text-accent px-2 py-0.5 border border-accent/20">
-          Room move
-        </span>
-        <span className="text-xs text-text font-medium">
-          Room {gap.room_id} · {gap.gap_length}-night gap · {gap.date_range}
-        </span>
-        <span className="ml-auto text-[10px] font-bold text-occugreen uppercase tracking-wider">
-          {gap.gap_length} nights recovered
-        </span>
-      </div>
-      <div className="pl-2 border-l border-border/60 ml-2 space-y-1.5">
-        {gap.shuffle_plan.map((step, i) => (
-          <div key={i} className="text-[11px] text-text-muted flex items-center gap-2">
-            <span className="text-text font-mono tracking-tighter">{step.booking_id.slice(-6)}</span>
-            <span className="bg-surface border border-border px-1.5 py-0.5">{step.from_room}</span>
-            <span className="text-border">&rarr;</span>
-            <span className="bg-surface border border-border font-bold text-text px-1.5 py-0.5">{step.to_room}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function computeMinLosSandwichBlocks(rows: HeatmapRow[], maxDays: number): number {
+  let blocked = 0;
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (let i = 1; i < cells.length - 1; i++) {
+      const c = cells[i];
+      if (!c || c.block_type !== "EMPTY") continue;
+      const before = cells[i - 1];
+      const after = cells[i + 1];
+      if (!before || !after) continue;
+      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
+      if (c.min_stay_active && c.min_stay_nights > 1) blocked += 1;
+    }
+  }
+  return blocked;
+}
+
+function computeSandwichOfferCount(rows: HeatmapRow[], maxDays: number): number {
+  let n = 0;
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (const c of cells) {
+      if ((c as any)?.offer_type === "SANDWICH_ORPHAN") n += 1;
+    }
+  }
+  return n;
+}
+
+function topFragmentedRooms(rows: HeatmapRow[], maxDays: number): Array<{ roomId: string; category: string; shortGaps: number }> {
+  const scored = rows.map(r => {
+    const cells = r.cells.slice(0, maxDays);
+    let shortGaps = 0;
+    let i = 0;
+    while (i < cells.length) {
+      if (cells[i]?.block_type !== "EMPTY") { i++; continue; }
+      const start = i;
+      while (i < cells.length && cells[i]?.block_type === "EMPTY") i++;
+      const len = i - start;
+      if (len >= 1 && len <= 3) shortGaps += 1;
+    }
+    return { roomId: r.room_id, category: String(r.category), shortGaps };
+  });
+  return scored.sort((a, b) => b.shortGaps - a.shortGaps).slice(0, 5);
 }
 
 /**
- * Occupancy Insights and Optimization tab: full calendar gap scan, before/after preview, and commit.
- * Pulled from the legacy Manager page Yield tab to be reused inside Overview.
+ * Occupancy tab (hackathon): usable capacity KPIs + before/after preview + playbooks.
  */
 export function OccupancyOptimizationTab() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
-  const [forecast, setForecast] = useState<OccupancyForecastResponse | null>(null);
-  const [forecastLoading, setForecastLoading] = useState(false);
-  const [gaps, setGaps] = useState<GapInfo[]>([]);
-  const [swapPlan, setSwapPlan] = useState<SwapStep[]>([]);
-  const [stage, setStage] = useState<Stage>("idle");
-  const [loadingCommit, setLoadingCommit] = useState(false);
-  const [slotModal, setSlotModal] = useState<{ id: string; room: string; date: string; block: string } | null>(null);
-  const [appliedGains, setAppliedGains] = useState<{ gapsElim: number; nightsFreed: number; shuffleCount: number } | null>(null);
-  const [convergedState, setConvergedState] = useState<"clean" | "stuck">("clean");
+  const [k, setK] = useState<number>(2);
+  const [kSwapPlan, setKSwapPlan] = useState<SwapStep[] | null>(null);
+  const [kLoading, setKLoading] = useState(false);
+  const [kCommitLoading, setKCommitLoading] = useState(false);
+  const [sandwichLoading, setSandwichLoading] = useState(false);
 
   const { show, Toasts } = useToast();
 
@@ -226,461 +140,387 @@ export function OccupancyOptimizationTab() {
     loadHeatmap();
   }, [loadHeatmap]);
 
-  const loadForecast = useCallback(async () => {
+  const maxDays = 20;
+
+  const rowsInView = useMemo(() => (heatmap ? heatmap.rows : []), [heatmap]);
+  const spanDays = useMemo(() => Math.min(maxDays, heatmap?.dates.length ?? 0), [heatmap]);
+
+  const simulatedRows = useMemo(() => {
+    if (!heatmap || !kSwapPlan || kSwapPlan.length === 0) return null;
+    return simulateRows(heatmap.rows, kSwapPlan);
+  }, [heatmap, kSwapPlan]);
+
+  const kpis = useMemo(() => {
+    if (!heatmap || spanDays === 0) return null;
+    const tonightIdx = 0;
+    const totalRooms = heatmap.rows.length;
+    let tonightOccupied = 0;
+    for (const r of heatmap.rows) {
+      const c = r.cells[tonightIdx];
+      if (c && c.block_type !== "EMPTY") tonightOccupied += 1;
+    }
+    const tonightOccPct = totalRooms > 0 ? (tonightOccupied / totalRooms) * 100 : 0;
+
+    const run = computeRunMetrics(heatmap.rows, spanDays);
+    const minlosBlocks = computeMinLosSandwichBlocks(heatmap.rows, spanDays);
+    const sandwichOffers = computeSandwichOfferCount(heatmap.rows, spanDays);
+
+    const k2 = computeKNightWindows(heatmap.rows, spanDays, 2);
+    const k3 = computeKNightWindows(heatmap.rows, spanDays, 3);
+    const k2After = simulatedRows ? computeKNightWindows(simulatedRows, spanDays, 2) : null;
+    const k3After = simulatedRows ? computeKNightWindows(simulatedRows, spanDays, 3) : null;
+
+    return {
+      tonightOccPct,
+      tonightOccupied,
+      totalRooms,
+      orphanNights: run.orphanNights,
+      orphanGaps: run.orphanGaps,
+      hardToFill: run.dist.n1 + run.dist.n2_3,
+      easyToSell: run.dist.n4_7 + run.dist.n8p,
+      minlosBlocks,
+      sandwichOffers,
+      k2,
+      k3,
+      k2After,
+      k3After,
+      topFrag: topFragmentedRooms(heatmap.rows, spanDays),
+      runDist: run.dist,
+    };
+  }, [heatmap, spanDays, simulatedRows]);
+
+  const kWindowBars = useMemo(() => {
+    if (!heatmap || spanDays === 0) return null;
+    const ks = [1, 2, 3, 4];
+    const current = ks.map(kk => computeKNightWindows(rowsInView, spanDays, kk));
+    const projected = simulatedRows ? ks.map(kk => computeKNightWindows(simulatedRows, spanDays, kk)) : null;
+    const maxVal = Math.max(...current, ...(projected ?? []), 1);
+    return { ks, current, projected, maxVal };
+  }, [heatmap, rowsInView, simulatedRows, spanDays]);
+
+  const previewK = useCallback(async () => {
     if (!heatmap) return;
-    setForecastLoading(true);
+    setKLoading(true);
+    setKSwapPlan(null);
     try {
-      const startStr = heatmap.dates[0];
-      const endStr = heatmap.dates[Math.min(heatmap.dates.length - 1, 20)];
-      const asOfStr = new Date().toISOString().split("T")[0];
-      const res = await getOccupancyForecast({ start: startStr, end: endStr, as_of: asOfStr });
-      setForecast(res.data as OccupancyForecastResponse);
-    } catch {
-      setForecast(null);
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, spanDays);
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const targetNights = Math.max(1, Math.min(14, Math.floor(k || 1)));
+      const categories: RoomCategory[] = Array.from(new Set(heatmap.rows.map(r => r.category)));
+      const res = await dashboardOptimiseKNightPreview({
+        start: startStr,
+        end: endStr,
+        categories,
+        target_nights: targetNights,
+      });
+      const body = res.data as { shuffle_count: number; swap_plan: SwapStep[]; target_nights: number };
+      setKSwapPlan(body.swap_plan ?? []);
+      if ((body.swap_plan?.length ?? 0) === 0) show(`No k-night improvements found for k=${body.target_nights} in this slice.`, "info");
+      else show(`Preview ready (k=${body.target_nights}): ${body.shuffle_count} shuffle steps`, "success");
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
+      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
+      const status = e?.response?.status;
+      show(typeof detail === "string" ? `k-night preview failed (${status ?? "?"}): ${detail}` : `k-night preview failed (${status ?? "?"})`, "error");
+      setKSwapPlan(null);
     } finally {
-      setForecastLoading(false);
+      setKLoading(false);
     }
-  }, [heatmap]);
+  }, [heatmap, k, show, spanDays]);
 
-  useEffect(() => {
-    loadForecast();
-  }, [loadForecast]);
-
-  const runOptimization = async () => {
-    setStage("processing");
+  const commitK = useCallback(async () => {
+    if (!kSwapPlan || kSwapPlan.length === 0) return;
+    setKCommitLoading(true);
     try {
-      const res = await fireOptimise();
-      const result = res.data as OptimiseResult;
+      await dashboardCommitShuffle(kSwapPlan);
+      show(`Committed ${kSwapPlan.length} shuffle step(s)`, "success");
+      setKSwapPlan(null);
       await loadHeatmap();
-
-      if (result.fully_clean || result.converged) {
-        setConvergedState(result.fully_clean ? "clean" : "stuck");
-        setGaps([]);
-        setSwapPlan([]);
-        setStage("converged");
-        return;
-      }
-
-      setGaps(result.gaps);
-      setSwapPlan(result.swap_plan);
-      setStage("preview");
-    } catch {
-      show("Failed to run optimization", "error");
-      setStage("idle");
-    }
-  };
-
-  const simulated = useMemo(
-    () => (heatmap ? simulateRows(heatmap.rows, swapPlan) : []),
-    [heatmap, swapPlan],
-  );
-
-  const currentMetrics = useMemo(
-    () => (heatmap ? computeRunMetrics(heatmap.rows) : null),
-    [heatmap],
-  );
-
-  const projectedMetrics = useMemo(
-    () => (stage === "preview" && gaps.length > 0 ? computeRunMetrics(simulated) : null),
-    [simulated, stage, gaps.length],
-  );
-
-  const visibleForecastDateKeys = useMemo(() => {
-    if (!heatmap) return [];
-    return heatmap.dates.slice(0, 20).map(d => calendarDayKey(String(d)));
-  }, [heatmap]);
-
-  const handleCommit = async () => {
-    if (!swapPlan.length) return;
-
-    const gapsElim = projectedMetrics ? (currentMetrics?.orphanGaps ?? 0) - projectedMetrics.orphanGaps : 0;
-    const nightsFreed = projectedMetrics ? (currentMetrics?.orphanNights ?? 0) - projectedMetrics.orphanNights : 0;
-
-    setLoadingCommit(true);
-    show(`Committing ${swapPlan.length} optimization steps…`, "info");
-    try {
-      await commitPlan(swapPlan);
-      setAppliedGains({ gapsElim, nightsFreed, shuffleCount: swapPlan.length });
-      setGaps([]);
-      setSwapPlan([]);
-      await loadHeatmap();
-      setStage("applied");
-      show(`${swapPlan.length} room moves applied — calendar optimised`, "success");
     } catch {
       show("Commit failed", "error");
     } finally {
-      setLoadingCommit(false);
+      setKCommitLoading(false);
     }
-  };
+  }, [kSwapPlan, loadHeatmap, show]);
 
-  const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
-    if (!slotModal) return;
+  const applySandwich = useCallback(async () => {
+    if (!heatmap) return;
+    setSandwichLoading(true);
     try {
-      await patchSlot(slotModal.id, { block_type, reason: "Manual edit by manager" });
-      setSlotModal(null);
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, spanDays);
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+      const categories: RoomCategory[] = Array.from(new Set(heatmap.rows.map(r => r.category)));
+      const res = await dashboardSandwichPlaybook({ start: startStr, end: endStr, categories });
+      const body = res.data as { orphan_slots_found: number; slots_updated: number };
+      if (body.slots_updated > 0) show(`Applied sandwich strategy to ${body.slots_updated} slot(s)`, "success");
+      else if (body.orphan_slots_found > 0) show("Sandwich nights found, but no changes were needed.", "info");
+      else show("No sandwich orphan nights found in this slice.", "info");
       await loadHeatmap();
-    } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot edit this slot";
-      show(msg, "error");
+    } catch {
+      show("Sandwich strategy failed", "error");
+    } finally {
+      setSandwichLoading(false);
     }
-  };
+  }, [heatmap, loadHeatmap, show, spanDays]);
 
   return (
     <div>
       <Toasts />
 
-      {/* Slot edit modal */}
-      {slotModal && (
-        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]">
-          <div className="bg-surface border border-border shadow-2xl p-6 w-full max-w-sm">
-            <h2 className="font-serif font-bold text-xl text-text mb-2">Configure Slot</h2>
-            <div className="text-sm text-text-muted mb-6 flex items-center gap-2">
-              Room {slotModal.room} · {slotModal.date}
-              <span
-                className={`text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 border ${
-                  slotModal.block === "EMPTY"
-                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                    : slotModal.block === "SOFT"
-                      ? "bg-sky-100 text-sky-800 border-sky-300"
-                      : "bg-stone-100 text-stone-700 border-stone-300"
-                }`}
-              >
-                {slotModal.block}
-              </span>
+      <div className="flex items-center justify-between gap-3 mb-6">
+        <div>
+          <div className="text-xs tracking-widest text-text-muted uppercase font-bold">Occupancy</div>
+          <div className="font-serif font-bold text-2xl text-text">Usable capacity & fragmentation</div>
+        </div>
+        <button
+          type="button"
+          className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
+          onClick={() => loadHeatmap()}
+        >
+          <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
+        </button>
+      </div>
+
+      {kpis && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-3">
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Tonight occupancy</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">
+              {kpis.tonightOccPct.toFixed(0)}<span className="text-sm font-normal text-text-muted">%</span>
             </div>
-            {slotModal.block === "SOFT" ? (
-              <div className="bg-occuorange/10 border border-occuorange/20 text-occuorange text-xs font-semibold p-3 mb-6">
-                Active guest reservation. Cannot override manually.
-              </div>
-            ) : (
-              <div className="flex gap-2 mb-6">
-                {slotModal.block !== "EMPTY" && (
-                  <button
-                    className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("EMPTY")}
-                  >
-                    <Unlock className="w-3.5 h-3.5" /> Free
-                  </button>
-                )}
-                {slotModal.block !== "HARD" && (
-                  <button
-                    className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                    onClick={() => handleSlotPatch("HARD")}
-                  >
-                    <Lock className="w-3.5 h-3.5" /> Block
-                  </button>
-                )}
+            <div className="text-[10px] text-text-muted">{kpis.tonightOccupied} / {kpis.totalRooms} rooms</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Nights at risk</div>
+            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">{kpis.orphanNights}</div>
+            <div className="text-[10px] text-text-muted">{kpis.orphanGaps} orphan gap(s)</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
+            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">{kpis.hardToFill}</div>
+            <div className="text-[10px] text-text-muted">1–3 night gaps</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">{kpis.easyToSell}</div>
+            <div className="text-[10px] text-text-muted">4+ night runs</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Usable k=2</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">
+              {kpis.k2}
+              {kpis.k2After !== null && (
+                <span className={`text-xs font-black ml-2 ${kpis.k2After - kpis.k2 > 0 ? "text-occugreen" : "text-text-muted"}`}>
+                  {kpis.k2After - kpis.k2 > 0 ? `+${kpis.k2After - kpis.k2}` : "0"}
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] text-text-muted">2-night windows</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">Usable k=3</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">
+              {kpis.k3}
+              {kpis.k3After !== null && (
+                <span className={`text-xs font-black ml-2 ${kpis.k3After - kpis.k3 > 0 ? "text-occugreen" : "text-text-muted"}`}>
+                  {kpis.k3After - kpis.k3 > 0 ? `+${kpis.k3After - kpis.k3}` : "0"}
+                </span>
+              )}
+            </div>
+            <div className="text-[10px] text-text-muted">3-night windows</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">MinLOS blocks</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">{kpis.minlosBlocks}</div>
+            <div className="text-[10px] text-text-muted">{kpis.sandwichOffers} sandwich offer(s)</div>
+          </div>
+        </div>
+      )}
+
+      {kWindowBars && (
+        <div className="mt-6 bg-surface border border-border p-6">
+          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Usable capacity</div>
+              <div className="font-serif font-bold text-lg text-text">k-night windows (current vs projected)</div>
+            </div>
+            {simulatedRows && (
+              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-4">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 border border-border/60 inline-block" /> Current</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/50 border border-occugreen/30 inline-block" /> Projected</span>
               </div>
             )}
-            <button
-              className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
-              onClick={() => setSlotModal(null)}
-            >
-              Dismiss
-            </button>
           </div>
-        </div>
-      )}
-
-      <div className="flex items-end justify-between mb-8 border-b border-border/50">
-        <div className="pb-3">
-          <div className="text-xs tracking-wider text-text-muted uppercase">
-            {stage === "idle" && "Find and fix empty nights trapped between bookings"}
-            {stage === "processing" && "Scanning your booking calendar..."}
-            {stage === "preview" && "Here's what we can fix — review and confirm"}
-            {stage === "applied" && "Changes applied successfully"}
-            {stage === "converged" &&
-              (convergedState === "clean"
-                ? "Your calendar is clean — no gaps to fix right now"
-                : "Some gaps exist but can't be moved without disturbing current guests")}
-          </div>
-        </div>
-        <div className="flex gap-3 pb-3">
-          {(stage === "idle" || stage === "applied" || stage === "converged") && (
-            <button
-              className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all shadow-sm flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-text"
-              onClick={runOptimization}
-            >
-              <Zap className="w-3.5 h-3.5 text-accent" /> Find & Fix Gaps
-            </button>
-          )}
-          {stage === "processing" && (
-            <button
-              className="bg-surface-2 text-text font-semibold disabled:opacity-40 flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-border"
-              disabled
-            >
-              <div className="w-3 h-3 border border-text border-t-accent rounded-full animate-spin" /> Processing
-            </button>
-          )}
-          {stage === "preview" && (
-            <>
-              <button
-                className="bg-accent text-white font-semibold hover:brightness-110 active:scale-95 disabled:opacity-40 shadow-sm flex items-center gap-2 text-xs uppercase tracking-widest px-6 py-3 rounded-sm border border-accent"
-                onClick={handleCommit}
-                disabled={loadingCommit || !swapPlan.length}
-              >
-                {loadingCommit ? (
-                  <>
-                    <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> Committing
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Commit All ({swapPlan.length})
-                  </>
-                )}
-              </button>
-              <button
-                className="bg-surface hover:bg-surface-2 border border-border text-text text-xs uppercase tracking-widest px-6 py-3 font-semibold rounded-sm transition-colors flex items-center gap-2"
-                onClick={() => {
-                  setGaps([]);
-                  setSwapPlan([]);
-                  setStage("idle");
-                }}
-              >
-                <XCircle className="w-3.5 h-3.5 text-text-muted" /> Discard
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* AI prediction moved from Dashboard → Occupancy tab */}
-      {heatmap && (forecast || forecastLoading) && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch mb-8">
-          {forecast ? (
-            <BirdseyeForecastInsights forecast={forecast} selectedCategories={[]} visibleForecastDateKeys={visibleForecastDateKeys} />
-          ) : (
-            <div className="bg-surface border border-border shadow-subtle">
-              <div className="px-4 py-3 border-b border-border/60 bg-surface-2/40">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-bold text-xs text-text uppercase tracking-widest">AI forecast</h3>
-                  <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold">Loading</div>
-                </div>
-                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-0.5 leading-relaxed">
-                  Analysing booking pickup patterns…
-                </p>
-              </div>
-              <div className="p-3">
-                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
-              </div>
-            </div>
-          )}
-          <BirdseyeCompressionInsights dates={heatmap.dates} rows={heatmap.rows} maxDays={20} />
-        </div>
-      )}
-
-      {/* Operational KPI cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        {[
-          {
-            label: "Empty Gaps",
-            value: currentMetrics?.orphanGaps ?? "—",
-            sub: `${currentMetrics?.orphanNights ?? 0} nights stuck between bookings`,
-            color: "border-occured text-occured",
-          },
-          {
-            label: "Hard to Fill",
-            value: (currentMetrics?.dist.n1 ?? 0) + (currentMetrics?.dist.n2_3 ?? 0),
-            sub: "1–3 night gaps — guests rarely book these",
-            color: "border-occuorange text-occuorange",
-          },
-          (() => {
-            const delta = projectedMetrics != null ? (currentMetrics?.orphanGaps ?? 0) - projectedMetrics.orphanGaps : null;
-            const nightsDelta =
-              projectedMetrics != null ? (currentMetrics?.orphanNights ?? 0) - projectedMetrics.orphanNights : null;
-            const improved = delta !== null && delta > 0;
-            const neutral = delta !== null && delta === 0;
-            return {
-              label: "Gaps Fixed",
-              value: delta === null ? "—" : improved ? `+${delta}` : delta === 0 ? "0" : "~0",
-              sub:
-                nightsDelta === null
-                  ? "run scan to see impact"
-                  : nightsDelta > 0
-                    ? `${nightsDelta} nights recovered`
-                    : nightsDelta < 0
-                      ? "gaps consolidated — minor tradeoffs"
-                      : "no orphan change",
-              color: improved ? "border-occugreen text-occugreen" : neutral ? "border-border text-text-muted" : "border-occuorange text-occuorange",
-            };
-          })(),
-          {
-            label: "Easy to Sell",
-            value:
-              projectedMetrics != null
-                ? projectedMetrics.dist.n4_7 + projectedMetrics.dist.n8p
-                : (currentMetrics?.dist.n4_7 ?? 0) + (currentMetrics?.dist.n8p ?? 0),
-            sub:
-              projectedMetrics != null
-                ? `after applying fixes (was ${(currentMetrics?.dist.n4_7 ?? 0) + (currentMetrics?.dist.n8p ?? 0)})`
-                : "stretches of 4+ nights — bookable",
-            color: "border-accent text-accent",
-          },
-        ].map((m, i) => (
-          <div key={i} className="bg-surface border border-border shadow-subtle p-5 relative overflow-hidden">
-            <div className={`absolute top-0 left-0 w-1 h-full ${m.color.split(" ")[0].replace("border", "bg")}`} />
-            <div className="text-[10px] font-bold text-text-muted uppercase tracking-[0.1em]">{m.label}</div>
-            <div className={`text-3xl font-serif font-bold mt-2 ${m.color.split(" ")[1]}`}>{m.value}</div>
-            <div className="text-xs text-text-muted mt-1 font-medium">{m.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Run distribution widget */}
-      {currentMetrics && stage !== "processing" && (
-        <RunDistributionWidget current={currentMetrics} projected={projectedMetrics} stage={stage} />
-      )}
-
-      {/* Processing state */}
-      {stage === "processing" && (
-        <div className="bg-surface-2 border border-border p-10 mb-8 flex items-center justify-center">
-          <div className="flex flex-col items-center max-w-sm text-center">
-            <div className="w-10 h-10 border-2 border-border border-t-accent rounded-full animate-spin mb-6" />
-            <h3 className="text-lg font-serif font-bold text-text">Scanning your booking calendar...</h3>
-            <p className="text-xs text-text-muted mt-2 tracking-wide">
-              Looking for empty nights trapped between bookings that can be moved to create longer, more bookable stretches.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Heatmap(s) */}
-      {heatmap && stage !== "processing" && (
-        <div className="bg-surface border border-border">
-          {stage === "preview" && gaps.length > 0 ? (
-            <>
-              <div className="px-6 py-4 flex justify-between items-center bg-surface-2/50 border-b border-border">
-                <h3 className="font-serif font-bold text-lg text-text">Before & After Preview</h3>
-                <span className="text-[10px] uppercase font-bold tracking-widest text-occuorange border border-occuorange/30 bg-occuorange/5 px-3 py-1">
-                  Not applied yet
-                </span>
-              </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-px bg-border p-[1px]">
-                <div className="bg-surface p-6">
-                  <HeatmapGrid
-                    dates={heatmap.dates}
-                    rows={heatmap.rows}
-                    title="Current Topology"
-                    compact
-                    maxDays={20}
-                    hideLegend
-                    onCellClick={setSlotModal}
-                  />
-                </div>
-                <div className="bg-surface p-6">
-                  <HeatmapGrid
-                    dates={heatmap.dates}
-                    rows={simulated}
-                    title="Projected After Commit"
-                    compact
-                    maxDays={20}
-                  />
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="p-6">
-              <h3 className="font-serif font-bold text-lg text-text mb-6">Inventory Matrix</h3>
-              <HeatmapGrid dates={heatmap.dates} rows={heatmap.rows} maxDays={20} onCellClick={setSlotModal} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Gap plan summary (preview only) */}
-      {stage === "preview" && gaps.length > 0 && (
-        <div className="bg-surface border border-accent mt-8 p-6 shadow-subtle">
-          <div className="flex justify-between flex-wrap gap-4 mb-6">
-            <div>
-              <h3 className="font-serif font-bold text-xl text-text">Ready to apply</h3>
-              <div className="text-xs text-text-muted uppercase tracking-wider mt-1">
-                {gaps.length} gap{gaps.length !== 1 ? "s" : ""} found · {swapPlan.length} room move{swapPlan.length !== 1 ? "s" : ""} needed
-              </div>
-            </div>
-            <div className="text-right">
-              {(() => {
-                const gapDelta = projectedMetrics != null ? (currentMetrics?.orphanGaps ?? 0) - projectedMetrics.orphanGaps : null;
-                const nightsDelta =
-                  projectedMetrics != null ? (currentMetrics?.orphanNights ?? 0) - projectedMetrics.orphanNights : null;
-                const improved = gapDelta !== null && gapDelta > 0;
-                return (
-                  <>
-                    <div className="text-[10px] text-text-muted uppercase tracking-widest">
-                      {improved ? "Gaps Eliminated" : "Calendar Optimised"}
+          <div className="space-y-3">
+            {kWindowBars.ks.map((kk, idx) => {
+              const cur = kWindowBars.current[idx];
+              const proj = kWindowBars.projected ? kWindowBars.projected[idx] : null;
+              const pct = Math.max((cur / kWindowBars.maxVal) * 100, cur > 0 ? 5 : 0);
+              const pctProj = proj !== null ? Math.max((proj / kWindowBars.maxVal) * 100, proj > 0 ? 5 : 0) : 0;
+              return (
+                <div key={kk} className="grid grid-cols-[56px_1fr] gap-3 items-center">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted text-right">k={kk}</div>
+                  <div className="space-y-1.5">
+                    <div className="h-6 bg-surface-2 border border-border/50 relative overflow-hidden">
+                      <div className="h-full bg-text/20" style={{ width: `${pct}%` }} />
+                      <div className="absolute left-2 top-0 h-full flex items-center text-[10px] font-bold text-text">{cur}</div>
                     </div>
-                    <div className={`text-3xl font-serif font-bold ${improved ? "text-occugreen" : "text-accent"}`}>
-                      {gapDelta === null ? gaps.length : improved ? gapDelta : gaps.length}
-                    </div>
-                    {nightsDelta !== null && (
-                      <div className="text-xs text-text-muted mt-1">
-                        {nightsDelta > 0 ? `${nightsDelta} nights freed up` : nightsDelta < 0 ? "bookings consolidated across rooms" : "calendar rearranged"}
+                    {proj !== null && (
+                      <div className="h-6 bg-occugreen/5 border border-occugreen/20 relative overflow-hidden">
+                        <div className="h-full bg-occugreen/50" style={{ width: `${pctProj}%` }} />
+                        <div className="absolute left-2 top-0 h-full flex items-center text-[10px] font-bold text-occugreen">{proj}</div>
                       </div>
                     )}
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-
-          <div className="grid gap-2 mb-8 max-h-80 overflow-y-auto pr-2">
-            {gaps.map((gap, i) => (
-              <GapEntry key={i} gap={gap} />
-            ))}
-          </div>
-
-          <div className="flex flex-wrap gap-4">
-            <button
-              className="flex-1 bg-occugreen text-white font-bold hover:brightness-110 active:scale-95 uppercase tracking-widest text-xs px-6 py-4 shadow-sm"
-              onClick={handleCommit}
-              disabled={loadingCommit}
-            >
-              {loadingCommit ? "Applying changes..." : "Apply Changes"}
-            </button>
-            <button
-              className="bg-surface border border-border text-text uppercase tracking-widest font-bold text-xs px-8 py-4 hover:bg-surface-2"
-              onClick={() => {
-                setGaps([]);
-                setSwapPlan([]);
-                setStage("idle");
-              }}
-            >
-              Abort
-            </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Applied banner */}
-      {stage === "applied" && appliedGains && (
-        <div className="mt-8 bg-surface border border-border p-8 flex items-center justify-between shadow-subtle relative overflow-hidden">
-          <div className="absolute top-0 left-0 h-1 w-full bg-occugreen" />
-          <div>
-            <div className="text-[10px] font-bold text-text-muted uppercase tracking-[0.15em]">Done!</div>
-            <div className="text-4xl font-serif font-bold text-occugreen mt-1">{appliedGains.shuffleCount} room moves applied</div>
-            <div className="text-xs text-text-muted mt-2 font-medium">
-              Calendar optimised · {appliedGains.nightsFreed > 0 ? `${appliedGains.nightsFreed} nights freed` : "bookings consolidated"} · {appliedGains.shuffleCount} swap{appliedGains.shuffleCount !== 1 ? "s" : ""}
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-surface border border-border p-6">
+          <div className="flex items-start justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Playbooks</div>
+              <div className="font-serif font-bold text-lg text-text">Auto-recombine fragmented slots</div>
+            </div>
+            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-accent" /> Hackathon MVP
             </div>
           </div>
-          <TrendingUp className="w-12 h-12 text-occugreen opacity-80" />
-        </div>
-      )}
 
-      {/* Converged banner */}
-      {stage === "converged" && (
-        <div className="mt-8 bg-surface-2 border border-border p-8 flex items-center justify-between relative overflow-hidden">
-          <div className={`absolute top-0 left-0 h-1 w-full ${convergedState === "clean" ? "bg-occugreen" : "bg-text-muted"}`} />
-          <div>
-            <div className="text-[10px] font-bold text-text uppercase tracking-[0.15em]">Scan complete</div>
-            <div className="text-2xl font-serif font-bold text-text mt-1">
-              {convergedState === "clean" ? "Your calendar looks great!" : "Some gaps can't be fixed right now"}
+          <div className="space-y-4">
+            <div className="border border-border bg-surface-2/30 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Sandwich orphan nights</div>
+                  <div className="text-xs text-text-muted mt-1">
+                    Relaxes MinLOS to 1 and applies a <span className="font-bold text-text">50% offer</span> on trapped single nights (shows instantly in the grid).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => applySandwich()}
+                  disabled={sandwichLoading}
+                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60"
+                >
+                  {sandwichLoading ? "Applying…" : "Apply"}
+                </button>
+              </div>
             </div>
-            <div className="text-xs text-text-muted mt-2 max-w-md leading-relaxed">
-              {convergedState === "clean"
-                ? "No empty gaps between bookings. Your rooms are well-organised and ready to sell."
-                : "A few empty nights remain between bookings but moving them would disrupt current guests. Check back as new bookings come in."}
+
+            <div className="border border-border bg-surface-2/30 p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">k-night window optimiser</div>
+                  <div className="text-xs text-text-muted mt-1">
+                    Rearranges existing SOFT bookings to maximize the number of bookable <span className="font-bold text-text">k-night stays</span> in this slice.
+                  </div>
+                </div>
+                <div className="flex items-end gap-2 shrink-0">
+                  <div className="space-y-1">
+                    <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k</div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={14}
+                      value={k}
+                      onChange={e => setK(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                      className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => previewK()}
+                    disabled={kLoading}
+                    className="bg-surface border border-border text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all text-xs uppercase tracking-widest px-4 py-2.5 disabled:opacity-60"
+                  >
+                    {kLoading ? "Previewing…" : "Preview"}
+                  </button>
+                  {kSwapPlan && kSwapPlan.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => commitK()}
+                      disabled={kCommitLoading}
+                      className="bg-occugreen text-white font-semibold hover:bg-occugreen/90 active:scale-95 transition-all text-xs uppercase tracking-widest px-4 py-2.5 disabled:opacity-60 flex items-center gap-2"
+                    >
+                      {kCommitLoading ? "Committing…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Commit ({kSwapPlan.length})</>}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {kSwapPlan && (
+                <div className="mt-3 text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+                  <TrendingUp className="w-3.5 h-3.5 text-occugreen" />
+                  {kSwapPlan.length > 0 ? `${kSwapPlan.length} shuffle step(s) ready` : "No shuffle steps found"}
+                </div>
+              )}
             </div>
           </div>
-          <Lock className={`w-12 h-12 opacity-20 ${convergedState === "clean" ? "text-occugreen" : "text-text"}`} />
+        </div>
+
+        <div className="bg-surface border border-border p-6">
+          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Diagnostics</div>
+              <div className="font-serif font-bold text-lg text-text">Where fragmentation lives</div>
+            </div>
+            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-occuorange" /> Top offenders
+            </div>
+          </div>
+
+          {kpis && (
+            <div className="space-y-3">
+              <div className="text-xs text-text-muted">
+                Short gaps (1–3 nights) are the hardest to sell. These rooms have the most short gaps in the next {spanDays} nights.
+              </div>
+              <div className="space-y-2">
+                {kpis.topFrag.map(r => (
+                  <div key={r.roomId} className="flex items-center justify-between border border-border bg-surface-2/30 px-3 py-2 text-xs">
+                    <div className="font-mono font-bold text-text">Room {r.roomId}</div>
+                    <div className="text-text-muted">{r.category}</div>
+                    <div className="text-occuorange font-bold">{r.shortGaps} short gap(s)</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {heatmap && (
+        <div className="mt-6 bg-surface border border-border p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Inventory matrix</div>
+              <div className="font-serif font-bold text-lg text-text">Current vs projected</div>
+            </div>
+            {kSwapPlan && kSwapPlan.length > 0 && (
+              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                Showing projected using preview plan (not committed)
+              </div>
+            )}
+          </div>
+
+          {kSwapPlan && kSwapPlan.length > 0 && simulatedRows ? (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-px bg-border p-[1px]">
+              <div className="bg-surface p-4">
+                <HeatmapGrid dates={heatmap.dates} rows={heatmap.rows} title="Current" compact maxDays={spanDays} hideLegend />
+              </div>
+              <div className="bg-surface p-4">
+                <HeatmapGrid dates={heatmap.dates} rows={simulatedRows} title="Projected" compact maxDays={spanDays} />
+              </div>
+            </div>
+          ) : (
+            <HeatmapGrid dates={heatmap.dates} rows={heatmap.rows} maxDays={spanDays} />
+          )}
         </div>
       )}
     </div>
