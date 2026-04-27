@@ -30,11 +30,17 @@ class CapacityScore(BaseModel):
     - orphan_nights: stranded (unusable) gaps bounded by bookings on both sides
     - revenue_at_risk: expected lost revenue estimate tied to orphan gaps
     - k_windows: total number of k-night bookable windows across the slice (k→count)
+    - revenue_weighted_fill_pct: risk-weighted average implied fill probability (0–100)
+      across gap dollars that drive revenue_at_risk; aligns the $ line with the fill model.
     """
 
     orphan_nights: int
     revenue_at_risk: float
     k_windows: dict[int, int]
+    revenue_weighted_fill_pct: float | None = Field(
+        default=None,
+        description="0–100. Weighted by (1-fill_prob)*rate*length per gap.",
+    )
 
 
 class CapacityDelta(BaseModel):

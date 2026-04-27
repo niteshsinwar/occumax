@@ -6,6 +6,7 @@ import type {
   PricingAnalyseResponse,
   PricingCommitItem,
   PricingRecommendation,
+  PricingWhatIfScenario,
   RoomCategory,
 } from "../../types";
 import { useToast } from "../shared/Toast";
@@ -279,7 +280,8 @@ export function PricingOptimizationTab() {
           <Tags className="w-4 h-4 text-accent" />
           <div>
             <div className="text-sm font-bold text-text flex items-center gap-2">
-              Pricing Optimization <AiTag title="Gemini analyzes occupancy + stranded gaps to recommend rate actions (you approve before committing)." />
+              Pricing Optimization{" "}
+              <AiTag title="Gemini analyzes occupancy and stranded gaps for rate actions, and runs a predictive what-if discount ladder (demand, net price, revenue index) to contextualize discount depth." />
             </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
               Fragmentation-aware rate actions · tie discounts to stranded inventory
@@ -528,6 +530,70 @@ export function PricingOptimizationTab() {
               <span className="text-[10px] font-bold uppercase tracking-widest text-accent mr-2">AI Summary</span>
               {pricing.summary}
             </div>
+
+            {pricing.what_if && pricing.what_if.scenarios.length > 0 && (
+              <div className="px-6 py-5 border-b border-border bg-surface-2/30">
+                <div className="flex items-start gap-3 mb-4">
+                  <Wand2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-1">
+                      Predictive simulation · what-if discounts
+                    </div>
+                    <p className="text-sm text-text font-medium leading-snug">{pricing.what_if.headline}</p>
+                    <p className="text-xs text-text-muted mt-2 leading-relaxed">{pricing.what_if.methodology}</p>
+                  </div>
+                </div>
+                <div className="overflow-x-auto rounded border border-border/60 bg-surface">
+                  <table className="w-full text-sm min-w-[640px]">
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50 bg-surface-2/80">
+                        <th className="px-4 py-2.5 text-left">Discount</th>
+                        <th className="px-4 py-2.5 text-right">Demand lift</th>
+                        <th className="px-4 py-2.5 text-right" title="Net ADR vs baseline (100)">
+                          Net price idx
+                        </th>
+                        <th className="px-4 py-2.5 text-right" title="Expected room revenue vs baseline (100)">
+                          Revenue idx
+                        </th>
+                        <th className="px-4 py-2.5 text-left">Rationale</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pricing.what_if.scenarios.map((row: PricingWhatIfScenario, idx: number) => {
+                        const isRec = idx === pricing.what_if!.recommended_index;
+                        return (
+                          <tr
+                            key={`${row.discount_pct}-${idx}`}
+                            className={`border-b border-border/30 last:border-0 ${
+                              isRec ? "bg-accent/[0.08]" : "hover:bg-surface-2/50"
+                            }`}
+                          >
+                            <td className="px-4 py-3">
+                              <span className="font-mono font-bold text-text">{row.discount_pct}%</span>
+                              {isRec && (
+                                <span className="ml-2 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/40 px-1.5 py-0.5 rounded">
+                                  Suggested
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-xs">
+                              {row.demand_lift_pct > 0 ? "+" : ""}
+                              {row.demand_lift_pct}%
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">{row.net_price_index}</td>
+                            <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{row.revenue_index}</td>
+                            <td className="px-4 py-3 text-xs text-text-muted max-w-md leading-relaxed">{row.rationale}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-[10px] text-text-muted mt-3 leading-relaxed">
+                  Indices are illustrative vs a no-discount baseline (100). Use alongside per-date recommendations above — not a substitute for floor rates or channel rules.
+                </p>
+              </div>
+            )}
 
             {recsByCategory.length === 0 ? (
               <div className="py-16 text-center text-sm text-text-muted">

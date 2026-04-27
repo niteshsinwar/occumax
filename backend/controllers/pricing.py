@@ -26,8 +26,10 @@ from core.schemas.pricing import (
     PricingCommitResult,
     PricingAnalyseResponse,
     PricingRecommendation,
+    PricingWhatIfAnalysis,
 )
 from services.ai.pricing_agent import run_pricing_agent
+from services.ai.pricing_what_if_agent import run_pricing_what_if
 
 logger = logging.getLogger(__name__)
 
@@ -158,11 +160,15 @@ async def analyse(db: AsyncSession) -> PricingAnalyseResponse:
     )
 
     recs = [PricingRecommendation(**r) for r in result["recommendations"]]
+    what_if_payload = await run_pricing_what_if(snapshot, today)
+    what_if = PricingWhatIfAnalysis.model_validate(what_if_payload)
+
     return PricingAnalyseResponse(
         hotel_name=settings.HOTEL_NAME,
         analysis_date=today,
         recommendations=recs,
         summary=result["summary"],
+        what_if=what_if,
     )
 
 
