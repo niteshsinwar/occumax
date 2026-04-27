@@ -279,7 +279,7 @@ export function PricingOptimizationTab() {
           <Tags className="w-4 h-4 text-accent" />
           <div>
             <div className="text-sm font-bold text-text flex items-center gap-2">
-              Pricing Optimization <AiTag />
+              Pricing Optimization <AiTag title="Gemini analyzes occupancy + stranded gaps to recommend rate actions (you approve before committing)." />
             </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
               Fragmentation-aware rate actions · tie discounts to stranded inventory

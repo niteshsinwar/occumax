@@ -201,7 +201,7 @@ export function ChannelOptimizationTab() {
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
-                  Revenue Intelligence · Channel Optimisation <AiTag />
+                  Revenue Intelligence · Channel Optimisation <AiTag title="Gemini recommends channel allocations based on performance and gap patterns (you approve before committing)." />
                 </div>
                 <p className="text-sm text-text leading-relaxed mb-4">{channelData.recommendation}</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
@@ -239,7 +239,7 @@ export function ChannelOptimizationTab() {
                 </div>
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
-                    Gemini AI · Channel Allocation <AiTag />
+                    Gemini AI · Channel Allocation <AiTag title="Gemini recommends where to push inventory across partners to improve net yield." />
                   </div>
                   <div className="text-[10px] text-text-muted mt-0.5">Analyses 14-day gaps + partner history to recommend where to push inventory</div>
                 </div>

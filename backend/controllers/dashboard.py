@@ -55,14 +55,24 @@ def _apply_swap_plan_in_memory(
             d = date.fromisoformat(d_str)
 
             src = by_room_date.get((step.from_room, d))
-            if src:
-                src.block_type = BlockType.EMPTY
-                src.booking_id = None
-
             dst = by_room_date.get((step.to_room, d))
-            if dst:
-                dst.block_type = BlockType.SOFT
-                dst.booking_id = step.booking_id
+            if not src or not dst:
+                continue
+
+            # Mirror frontend `simulateRows` semantics:
+            # only move SOFT→EMPTY into EMPTY→SOFT.
+            if src.block_type != BlockType.SOFT:
+                continue
+            if dst.block_type != BlockType.EMPTY:
+                continue
+
+            # Keep booking_id alignment if present, but don't over-restrict
+            # (some steps may omit matching ids due to synthetic data).
+            src.block_type = BlockType.EMPTY
+            src.booking_id = None
+
+            dst.block_type = BlockType.SOFT
+            dst.booking_id = step.booking_id
 
     return list(by_room_date.values())
 
