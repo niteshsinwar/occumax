@@ -21,7 +21,7 @@ interface HeatmapGridProps {
   maxDays?: number;
   hideDateHeader?: boolean;
   hideLegend?: boolean;
-  /** When enabled, highlights 1-night EMPTY sandwich gaps between non-EMPTY cells. */
+  /** When enabled, highlights 1-night EMPTY orphan-night gaps between non-EMPTY cells. */
   highlightSandwichGaps?: boolean;
   onCellClick?: (cell: CellClickInfo) => void;
 }

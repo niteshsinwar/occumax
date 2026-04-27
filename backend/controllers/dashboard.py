@@ -22,6 +22,171 @@ from core.schemas.manager import SwapStep
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 from core.schemas.dashboard_k_optimise import DashboardKNightPreviewResponse
 from services.algorithm.k_night_optimiser import KNightWindowOptimiser
+from core.schemas.dashboard_scorecard import (
+    DashboardScorecardResponse,
+    CapacityScore,
+    CapacityDelta,
+)
+
+
+def _apply_swap_plan_in_memory(
+    slot_infos: list[SlotInfo],
+    swap_plan: list[SwapStep] | None,
+) -> list[SlotInfo]:
+    """
+    Apply swap steps to SlotInfo list in-memory (no DB writes).
+
+    SwapStep semantics:
+      - move one SOFT booking_id from from_room to to_room across `dates`
+      - vacate source dates (become EMPTY)
+      - fill destination dates (become SOFT)
+
+    This is intentionally minimal: it is used only for demo KPI deltas and should
+    match the dashboard's swap-plan commit semantics.
+    """
+    if not swap_plan:
+        return slot_infos
+
+    # Build a mutable map keyed by (room_id, date)
+    by_room_date: dict[tuple[str, date], SlotInfo] = {(s.room_id, s.date): s for s in slot_infos}
+
+    for step in swap_plan:
+        for d_str in step.dates:
+            d = date.fromisoformat(d_str)
+
+            src = by_room_date.get((step.from_room, d))
+            if src:
+                src.block_type = BlockType.EMPTY
+                src.booking_id = None
+
+            dst = by_room_date.get((step.to_room, d))
+            if dst:
+                dst.block_type = BlockType.SOFT
+                dst.booking_id = step.booking_id
+
+    return list(by_room_date.values())
+
+
+def _count_k_night_windows(slot_infos: list[SlotInfo], k: int) -> int:
+    """
+    Count bookable windows of length k across the slice.
+
+    Definition: for each room, if it has an EMPTY run of length L, it contributes
+    max(0, L - k + 1) windows.
+    """
+    if k <= 0:
+        return 0
+
+    by_room: dict[str, list[SlotInfo]] = {}
+    for s in slot_infos:
+        by_room.setdefault(s.room_id, []).append(s)
+
+    total = 0
+    for _, cells in by_room.items():
+        cells.sort(key=lambda x: x.date)
+        run = 0
+        for c in cells:
+            if c.block_type == BlockType.EMPTY:
+                run += 1
+            else:
+                if run >= k:
+                    total += run - k + 1
+                run = 0
+        if run >= k:
+            total += run - k + 1
+
+    return int(total)
+
+
+def _calc_revenue_at_risk(gaps: list) -> float:
+    return round(sum(
+        (1 - _fill_prob(g.gap_length)) * g.current_rate * g.gap_length
+        for g in gaps
+    ), 2)
+
+
+async def get_scorecard(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    categories: list[RoomCategory],
+    k_nights: list[int],
+    swap_plan: list[SwapStep] | None = None,
+) -> DashboardScorecardResponse:
+    """
+    Compute before/after capacity KPIs for the hackathon storyline.
+
+    - before: live DB state over the slice
+    - after: optional in-memory application of a swap plan (no DB writes)
+    """
+    today = date.today()
+    cats = list(dict.fromkeys(categories or []))
+    ks = [int(k) for k in (k_nights or [2, 3]) if 1 <= int(k) <= 14]
+    ks = list(dict.fromkeys(ks)) or [2, 3]
+
+    rooms_q = select(Room).where(Room.is_active == True)
+    if cats:
+        rooms_q = rooms_q.where(Room.category.in_(cats))
+    rooms_q = rooms_q.order_by(Room.category, Room.id)
+    rooms = (await db.execute(rooms_q)).scalars().all()
+    room_map = {r.id: r for r in rooms}
+
+    slots_q = (
+        select(Slot)
+        .where(
+            Slot.date >= start,
+            Slot.date < end,
+            Slot.room_id.in_(list(room_map.keys())) if room_map else False,
+        )
+    )
+    slots = (await db.execute(slots_q)).scalars().all()
+    slot_infos_before = _slots_to_slotinfo(slots, room_map)
+
+    det_before = GapDetector(slot_infos_before, today)
+    gaps_before = det_before.detect_gaps()
+    before_k = {k: _count_k_night_windows(slot_infos_before, k) for k in ks}
+    before = CapacityScore(
+        orphan_nights=sum(g.gap_length for g in gaps_before),
+        revenue_at_risk=_calc_revenue_at_risk(gaps_before),
+        k_windows=before_k,
+    )
+
+    if not swap_plan:
+        return DashboardScorecardResponse(
+            start=start,
+            end=end,
+            categories=cats,
+            k_nights=ks,
+            before=before,
+            after=None,
+            delta=None,
+        )
+
+    slot_infos_after = _apply_swap_plan_in_memory(list(slot_infos_before), swap_plan)
+    det_after = GapDetector(slot_infos_after, today)
+    gaps_after = det_after.detect_gaps()
+    after_k = {k: _count_k_night_windows(slot_infos_after, k) for k in ks}
+    after = CapacityScore(
+        orphan_nights=sum(g.gap_length for g in gaps_after),
+        revenue_at_risk=_calc_revenue_at_risk(gaps_after),
+        k_windows=after_k,
+    )
+
+    delta = CapacityDelta(
+        orphan_nights=after.orphan_nights - before.orphan_nights,
+        revenue_at_risk=round(after.revenue_at_risk - before.revenue_at_risk, 2),
+        k_windows={k: after.k_windows.get(k, 0) - before.k_windows.get(k, 0) for k in ks},
+    )
+
+    return DashboardScorecardResponse(
+        start=start,
+        end=end,
+        categories=cats,
+        k_nights=ks,
+        before=before,
+        after=after,
+        delta=delta,
+    )
 
 
 def _fill_prob(gap_length: int) -> float:

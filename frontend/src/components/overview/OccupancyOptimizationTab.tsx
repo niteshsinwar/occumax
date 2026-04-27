@@ -69,7 +69,7 @@ function computeKNightWindows(rows: HeatmapRow[], maxDays: number, k: number): n
   return total;
 }
 
-function computeMinLosSandwichBlocks(rows: HeatmapRow[], maxDays: number): number {
+function computeMinLosOrphanNightBlocks(rows: HeatmapRow[], maxDays: number): number {
   let blocked = 0;
   for (const row of rows) {
     const cells = row.cells.slice(0, maxDays);
@@ -86,7 +86,7 @@ function computeMinLosSandwichBlocks(rows: HeatmapRow[], maxDays: number): numbe
   return blocked;
 }
 
-function computeSandwichOfferCount(rows: HeatmapRow[], maxDays: number): number {
+function computeOrphanNightOfferCount(rows: HeatmapRow[], maxDays: number): number {
   let n = 0;
   for (const row of rows) {
     const cells = row.cells.slice(0, maxDays);
@@ -162,8 +162,8 @@ export function OccupancyOptimizationTab() {
     const tonightOccPct = totalRooms > 0 ? (tonightOccupied / totalRooms) * 100 : 0;
 
     const run = computeRunMetrics(heatmap.rows, spanDays);
-    const minlosBlocks = computeMinLosSandwichBlocks(heatmap.rows, spanDays);
-    const sandwichOffers = computeSandwichOfferCount(heatmap.rows, spanDays);
+    const minlosBlocks = computeMinLosOrphanNightBlocks(heatmap.rows, spanDays);
+    const orphanNightOffers = computeOrphanNightOfferCount(heatmap.rows, spanDays);
 
     const k2 = computeKNightWindows(heatmap.rows, spanDays, 2);
     const k3 = computeKNightWindows(heatmap.rows, spanDays, 3);
@@ -179,7 +179,7 @@ export function OccupancyOptimizationTab() {
       hardToFill: run.dist.n1 + run.dist.n2_3,
       easyToSell: run.dist.n4_7 + run.dist.n8p,
       minlosBlocks,
-      sandwichOffers,
+      orphanNightOffers,
       k2,
       k3,
       k2After,
@@ -256,12 +256,12 @@ export function OccupancyOptimizationTab() {
       const categories: RoomCategory[] = Array.from(new Set(heatmap.rows.map(r => r.category)));
       const res = await dashboardSandwichPlaybook({ start: startStr, end: endStr, categories });
       const body = res.data as { orphan_slots_found: number; slots_updated: number };
-      if (body.slots_updated > 0) show(`Applied sandwich strategy to ${body.slots_updated} slot(s)`, "success");
-      else if (body.orphan_slots_found > 0) show("Sandwich nights found, but no changes were needed.", "info");
-      else show("No sandwich orphan nights found in this slice.", "info");
+      if (body.slots_updated > 0) show(`Updated orphan-night offers on ${body.slots_updated} slot(s)`, "success");
+      else if (body.orphan_slots_found > 0) show("Orphan nights found, but no changes were needed.", "info");
+      else show("No orphan-night gaps found in this slice.", "info");
       await loadHeatmap();
     } catch {
-      show("Sandwich strategy failed", "error");
+      show("Orphan-night playbook failed", "error");
     } finally {
       setSandwichLoading(false);
     }
@@ -336,7 +336,7 @@ export function OccupancyOptimizationTab() {
           <div className="bg-surface border border-border p-4">
             <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">MinLOS blocks</div>
             <div className="text-2xl font-serif font-bold text-text tabular-nums">{kpis.minlosBlocks}</div>
-            <div className="text-[10px] text-text-muted">{kpis.sandwichOffers} sandwich offer(s)</div>
+            <div className="text-[10px] text-text-muted">{kpis.orphanNightOffers} orphan-night offer(s)</div>
           </div>
         </div>
       )}
@@ -399,7 +399,7 @@ export function OccupancyOptimizationTab() {
             <div className="border border-border bg-surface-2/30 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Sandwich orphan nights</div>
+                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-night offers</div>
                   <div className="text-xs text-text-muted mt-1">
                     Relaxes MinLOS to 1 and applies a <span className="font-bold text-text">50% offer</span> on trapped single nights (shows instantly in the grid).
                   </div>

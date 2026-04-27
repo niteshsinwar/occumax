@@ -53,6 +53,38 @@ export interface DashboardOptimisePreviewResponse {
   swap_plan: SwapStep[];
 }
 
+// ── Hackathon scorecard (before/after capacity recovery) ─────────────────────
+
+export interface DashboardScorecardRequest {
+  start: string;
+  end: string;
+  categories: RoomCategory[];
+  k_nights?: number[];
+  swap_plan?: SwapStep[] | null;
+}
+
+export interface CapacityScore {
+  orphan_nights: number;
+  revenue_at_risk: number;
+  k_windows: Record<number, number>;
+}
+
+export interface CapacityDelta {
+  orphan_nights: number;
+  revenue_at_risk: number;
+  k_windows: Record<number, number>;
+}
+
+export interface DashboardScorecardResponse {
+  start: string;
+  end: string;
+  categories: RoomCategory[];
+  k_nights: number[];
+  before: CapacityScore;
+  after?: CapacityScore | null;
+  delta?: CapacityDelta | null;
+}
+
 
 export interface ComparisonCell {
   date: string;
