@@ -13,6 +13,7 @@ import type {
   PartnerStat,
 } from "../../types";
 import { useToast } from "../shared/Toast";
+import { AiTag } from "../shared/AiTag";
 import {
   AlertTriangle,
   BarChart2,
@@ -199,7 +200,9 @@ export function ChannelOptimizationTab() {
                 <Sparkles className="w-4 h-4 text-accent" />
               </div>
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">Revenue Intelligence · Channel Optimisation</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
+                  Revenue Intelligence · Channel Optimisation <AiTag />
+                </div>
                 <p className="text-sm text-text leading-relaxed mb-4">{channelData.recommendation}</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
                   {channelData.channels.slice(0, 3).map((ch: ChannelStat) => {
@@ -235,7 +238,9 @@ export function ChannelOptimizationTab() {
                   <Sparkles className="w-4 h-4 text-accent" />
                 </div>
                 <div>
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-accent">Gemini AI · Channel Allocation</div>
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
+                    Gemini AI · Channel Allocation <AiTag />
+                  </div>
                   <div className="text-[10px] text-text-muted mt-0.5">Analyses 14-day gaps + partner history to recommend where to push inventory</div>
                 </div>
               </div>
