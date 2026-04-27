@@ -27,6 +27,7 @@ from core.schemas.dashboard_scorecard import (
     CapacityScore,
     CapacityDelta,
 )
+from services.ai.orphan_offer_agent import recommend_orphan_offer_strategy
 
 
 def _apply_swap_plan_in_memory(
@@ -398,6 +399,7 @@ async def apply_sandwich_playbook(
     start: date,
     end: date,
     categories: list[RoomCategory],
+    discount_pct: float | None = None,
 ) -> SandwichPlaybookResponse:
     """
     Apply the sandwich-night playbook for the given slice:
@@ -442,6 +444,10 @@ async def apply_sandwich_playbook(
         scan_dates.append(cur)
         cur += timedelta(days=1)
 
+    # Discount is usually AI-driven; default to 50% to match existing demo behavior.
+    discount_pct = float(discount_pct) if discount_pct is not None else 0.50
+    discount_pct = max(0.05, min(0.80, discount_pct))
+
     for room_id in room_map.keys():
         # Build per-date block_type for this room; missing slot = EMPTY
         room_cells: list[tuple[date, BlockType]] = []
@@ -467,7 +473,6 @@ async def apply_sandwich_playbook(
             if not slot:
                 room = room_map[room_id]
                 original_rate = float(room.base_rate)
-                discount_pct = 0.50
                 discounted_rate = round(original_rate * (1 - discount_pct), 2)
                 offer = Offer(
                     offer_type=OfferType.SANDWICH_ORPHAN,
@@ -510,7 +515,6 @@ async def apply_sandwich_playbook(
             if slot.block_type == BlockType.EMPTY:
                 # Treat base_rate as the pre-offer "rack" rate for this playbook.
                 original_rate = float(room_map[room_id].base_rate)
-                discount_pct = 0.50
                 discounted_rate = round(original_rate * (1 - discount_pct), 2)
 
                 if slot.offer_id:
@@ -568,6 +572,96 @@ async def apply_sandwich_playbook(
         orphan_slots_found=len(orphan_slot_ids),
         slots_updated=slots_updated,
     )
+
+
+async def get_recovery_estimate(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    categories: list[RoomCategory],
+    swap_plan: list[SwapStep] | None = None,
+):
+    """
+    Return a demo-friendly recovery estimate breakdown:
+    - deterministic shuffle recovery (scorecard delta)
+    - AI-assisted orphan-night offer discount + incremental recovery estimate
+    """
+    cats = list(dict.fromkeys(categories or []))
+
+    # Deterministic shuffle recovery (USD recovered = reduced revenue_at_risk)
+    score = await get_scorecard(
+        db=db,
+        start=start,
+        end=end,
+        categories=cats,
+        k_nights=[2, 3],
+        swap_plan=swap_plan,
+    )
+    shuffle_recovered = 0.0
+    if score.delta:
+        shuffle_recovered = max(0.0, round(-float(score.delta.revenue_at_risk), 2))
+
+    # Build SlotInfo for "after" (if swap_plan exists) to estimate remaining orphan single nights.
+    today = date.today()
+    rooms_q = select(Room).where(Room.is_active == True)
+    if cats:
+        rooms_q = rooms_q.where(Room.category.in_(cats))
+    rooms_q = rooms_q.order_by(Room.category, Room.id)
+    rooms = (await db.execute(rooms_q)).scalars().all()
+    room_map = {r.id: r for r in rooms}
+
+    slots_q = (
+        select(Slot)
+        .where(
+            Slot.date >= start,
+            Slot.date < end,
+            Slot.room_id.in_(list(room_map.keys())) if room_map else False,
+        )
+    )
+    slots = (await db.execute(slots_q)).scalars().all()
+    slot_infos = _slots_to_slotinfo(slots, room_map)
+    slot_infos_after = _apply_swap_plan_in_memory(list(slot_infos), swap_plan) if swap_plan else slot_infos
+
+    det_after = GapDetector(slot_infos_after, today)
+    gaps_after = det_after.detect_gaps()
+    single_orphans = [g for g in gaps_after if int(getattr(g, "gap_length", 0)) == 1]
+    orphan_single_nights = len(single_orphans)
+
+    # Estimate average base rate for these orphan nights (fallback to overall avg base rate in slice)
+    base_rates = [float(getattr(s, "base_rate", 0) or 0) for s in slot_infos_after]
+    avg_base_rate = (sum(base_rates) / len(base_rates)) if base_rates else 0.0
+
+    fill_prob_before = float(_fill_prob(1))
+    ai = await recommend_orphan_offer_strategy({
+        "slice": {"start": start.isoformat(), "end": end.isoformat(), "categories": [c.value for c in cats]},
+        "orphan_single_nights": orphan_single_nights,
+        "avg_base_rate": round(avg_base_rate, 2),
+        "fill_prob_before": fill_prob_before,
+        "currency": "USD",
+    })
+    offer_discount_pct = float(ai.get("discount_pct", 0.30))
+    offer_discount_pct = max(0.05, min(0.80, offer_discount_pct))
+    offer_fill_prob_before = max(0.0, min(1.0, float(ai.get("fill_prob_before", fill_prob_before))))
+    offer_fill_prob_after = max(offer_fill_prob_before, min(1.0, float(ai.get("fill_prob_after", offer_fill_prob_before))))
+
+    discounted_rate = round(avg_base_rate * (1 - offer_discount_pct), 2)
+    offer_recovered_estimated = max(
+        0.0,
+        round(orphan_single_nights * (offer_fill_prob_after - offer_fill_prob_before) * discounted_rate, 2),
+    )
+
+    return {
+        "start": start,
+        "end": end,
+        "categories": cats,
+        "shuffle_recovered": shuffle_recovered,
+        "offer_discount_pct": offer_discount_pct,
+        "offer_fill_prob_before": offer_fill_prob_before,
+        "offer_fill_prob_after": offer_fill_prob_after,
+        "offer_recovered_estimated": offer_recovered_estimated,
+        "total_recovered_projected": round(shuffle_recovered + offer_recovered_estimated, 2),
+        "notes": ai.get("notes"),
+    }
 
 
 async def commit_shuffle(body: CommitRequest, db: AsyncSession) -> CommitResult:

@@ -24,6 +24,7 @@ from core.schemas.dashboard_scorecard import (
     DashboardScorecardRequest,
     DashboardScorecardResponse,
 )
+from core.schemas.recovery_estimate import RecoveryEstimateRequest, RecoveryEstimateResponse
 
 __all__ = [
     "RoomOut", "RoomCreate", "RoomUpdate",
@@ -37,4 +38,5 @@ __all__ = [
     "SandwichPlaybookRequest", "SandwichPlaybookResponse",
     "DashboardKNightPreviewRequest", "DashboardKNightPreviewResponse",
     "DashboardScorecardRequest", "DashboardScorecardResponse",
+    "RecoveryEstimateRequest", "RecoveryEstimateResponse",
 ]
