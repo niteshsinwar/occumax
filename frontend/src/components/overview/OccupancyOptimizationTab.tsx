@@ -1,17 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { dashboardCommitShuffle, dashboardOptimiseKNightPreview, dashboardSandwichPlaybook, getHeatmap } from "../../api/client";
+import { useMemo, useState } from "react";
 import type { HeatmapResponse, HeatmapRow, RoomCategory, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
-import { useToast } from "../shared/Toast";
-import { simulateRows } from "../../utils/simulateRows";
 import {
   AlertTriangle,
   CheckCircle2,
   RefreshCw,
-  Sparkles,
-  TrendingUp,
 } from "lucide-react";
-import { addDays, formatISO, parseISO } from "date-fns";
+import { BirdseyeFilters, type BirdseyeWeekSpan } from "../BirdseyeFilters";
+import { Info } from "lucide-react";
 
 type RunMetrics = {
   orphanGaps: number;
@@ -117,56 +113,98 @@ function topFragmentedRooms(rows: HeatmapRow[], maxDays: number): Array<{ roomId
 /**
  * Occupancy tab (hackathon): usable capacity KPIs + before/after preview + playbooks.
  */
-export function OccupancyOptimizationTab() {
-  const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
-  const [k, setK] = useState<number>(2);
-  const [kSwapPlan, setKSwapPlan] = useState<SwapStep[] | null>(null);
-  const [kLoading, setKLoading] = useState(false);
-  const [kCommitLoading, setKCommitLoading] = useState(false);
-  const [sandwichLoading, setSandwichLoading] = useState(false);
+export type OccupancyOptimizationTabProps = {
+  heatmap: HeatmapResponse | null;
+  weekSpan: BirdseyeWeekSpan;
+  onWeekSpanChange: (v: BirdseyeWeekSpan) => void;
+  availableCategories: RoomCategory[];
+  selectedCategories: RoomCategory[];
+  onToggleCategory: (c: RoomCategory) => void;
 
-  const { show, Toasts } = useToast();
+  /** Days visible in the current slice (weekSpan * 7 bounded by heatmap length). */
+  spanDays: number;
+  /** Slice of rows limited to selected categories (and potentially other filters). */
+  filteredRows: HeatmapRow[];
+  /** Optional “projected” rows if a preview plan is active. */
+  simulatedRows: HeatmapRow[] | null;
 
-  const loadHeatmap = useCallback(async () => {
-    try {
-      const h = await getHeatmap();
-      setHeatmap(h.data);
-    } catch {
-      show("Failed to load heatmap", "error");
-    }
-  }, [show]);
+  /** Main preview shuffle plan + commit state. */
+  swapPlan: SwapStep[] | null;
+  swapCommitLoading: boolean;
 
-  useEffect(() => {
-    loadHeatmap();
-  }, [loadHeatmap]);
+  /** Actions are owned by the Dashboard (single source of truth). */
+  refreshAllData: () => void;
+  runOptimisePreview: () => Promise<void>;
+  clearOptimisePreview: () => void;
+  runSandwichPlaybook: () => Promise<void>;
+  commitSwapShuffle: () => Promise<void>;
 
-  const maxDays = 20;
+  /** Optional k-night optimizer controls (advanced). */
+  kNightNights: number;
+  onKNightNightsChange: (n: number) => void;
+  kNightLoading: boolean;
+  kNightCommitLoading: boolean;
+  kNightSwapPlan: SwapStep[] | null;
+  runKNightPreview: () => Promise<void>;
+  commitKNightShuffle: () => Promise<void>;
+};
 
-  const rowsInView = useMemo(() => (heatmap ? heatmap.rows : []), [heatmap]);
-  const spanDays = useMemo(() => Math.min(maxDays, heatmap?.dates.length ?? 0), [heatmap]);
+export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
+  const {
+    heatmap,
+    weekSpan,
+    onWeekSpanChange,
+    availableCategories,
+    selectedCategories,
+    onToggleCategory,
+    spanDays,
+    filteredRows,
+    simulatedRows,
+    swapPlan,
+    swapCommitLoading,
+    refreshAllData,
+    runOptimisePreview,
+    clearOptimisePreview,
+    runSandwichPlaybook,
+    commitSwapShuffle,
+    kNightNights,
+    onKNightNightsChange,
+    kNightLoading,
+    kNightCommitLoading,
+    kNightSwapPlan,
+    runKNightPreview,
+    commitKNightShuffle,
+  } = props;
 
-  const simulatedRows = useMemo(() => {
-    if (!heatmap || !kSwapPlan || kSwapPlan.length === 0) return null;
-    return simulateRows(heatmap.rows, kSwapPlan);
-  }, [heatmap, kSwapPlan]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  function KpiInfo({ label, text }: { label: string; text: string }) {
+    return (
+      <span className="inline-flex items-center" title={`${label}: ${text}`}>
+        <Info className="w-3 h-3 text-text-muted/70 hover:text-text-muted" />
+      </span>
+    );
+  }
+
+  const rowsInView = useMemo(() => filteredRows, [filteredRows]);
 
   const kpis = useMemo(() => {
     if (!heatmap || spanDays === 0) return null;
     const tonightIdx = 0;
-    const totalRooms = heatmap.rows.length;
+    const totalRooms = rowsInView.length;
     let tonightOccupied = 0;
-    for (const r of heatmap.rows) {
+    for (const r of rowsInView) {
       const c = r.cells[tonightIdx];
       if (c && c.block_type !== "EMPTY") tonightOccupied += 1;
     }
     const tonightOccPct = totalRooms > 0 ? (tonightOccupied / totalRooms) * 100 : 0;
 
-    const run = computeRunMetrics(heatmap.rows, spanDays);
-    const minlosBlocks = computeMinLosOrphanNightBlocks(heatmap.rows, spanDays);
-    const orphanNightOffers = computeOrphanNightOfferCount(heatmap.rows, spanDays);
+    const run = computeRunMetrics(rowsInView, spanDays);
+    const minlosBlocks = computeMinLosOrphanNightBlocks(rowsInView, spanDays);
+    const orphanNightOffers = computeOrphanNightOfferCount(rowsInView, spanDays);
 
-    const k2 = computeKNightWindows(heatmap.rows, spanDays, 2);
-    const k3 = computeKNightWindows(heatmap.rows, spanDays, 3);
+    const k2 = computeKNightWindows(rowsInView, spanDays, 2);
+    const k3 = computeKNightWindows(rowsInView, spanDays, 3);
     const k2After = simulatedRows ? computeKNightWindows(simulatedRows, spanDays, 2) : null;
     const k3After = simulatedRows ? computeKNightWindows(simulatedRows, spanDays, 3) : null;
 
@@ -184,10 +222,10 @@ export function OccupancyOptimizationTab() {
       k3,
       k2After,
       k3After,
-      topFrag: topFragmentedRooms(heatmap.rows, spanDays),
+      topFrag: topFragmentedRooms(rowsInView, spanDays),
       runDist: run.dist,
     };
-  }, [heatmap, spanDays, simulatedRows]);
+  }, [heatmap, rowsInView, spanDays, simulatedRows]);
 
   const kWindowBars = useMemo(() => {
     if (!heatmap || spanDays === 0) return null;
@@ -198,91 +236,140 @@ export function OccupancyOptimizationTab() {
     return { ks, current, projected, maxVal };
   }, [heatmap, rowsInView, simulatedRows, spanDays]);
 
-  const previewK = useCallback(async () => {
-    if (!heatmap) return;
-    setKLoading(true);
-    setKSwapPlan(null);
-    try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, spanDays);
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-      const targetNights = Math.max(1, Math.min(14, Math.floor(k || 1)));
-      const categories: RoomCategory[] = Array.from(new Set(heatmap.rows.map(r => r.category)));
-      const res = await dashboardOptimiseKNightPreview({
-        start: startStr,
-        end: endStr,
-        categories,
-        target_nights: targetNights,
-      });
-      const body = res.data as { shuffle_count: number; swap_plan: SwapStep[]; target_nights: number };
-      setKSwapPlan(body.swap_plan ?? []);
-      if ((body.swap_plan?.length ?? 0) === 0) show(`No k-night improvements found for k=${body.target_nights} in this slice.`, "info");
-      else show(`Preview ready (k=${body.target_nights}): ${body.shuffle_count} shuffle steps`, "success");
-    } catch (err: unknown) {
-      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
-      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
-      const status = e?.response?.status;
-      show(typeof detail === "string" ? `k-night preview failed (${status ?? "?"}): ${detail}` : `k-night preview failed (${status ?? "?"})`, "error");
-      setKSwapPlan(null);
-    } finally {
-      setKLoading(false);
-    }
-  }, [heatmap, k, show, spanDays]);
-
-  const commitK = useCallback(async () => {
-    if (!kSwapPlan || kSwapPlan.length === 0) return;
-    setKCommitLoading(true);
-    try {
-      await dashboardCommitShuffle(kSwapPlan);
-      show(`Committed ${kSwapPlan.length} shuffle step(s)`, "success");
-      setKSwapPlan(null);
-      await loadHeatmap();
-    } catch {
-      show("Commit failed", "error");
-    } finally {
-      setKCommitLoading(false);
-    }
-  }, [kSwapPlan, loadHeatmap, show]);
-
-  const applySandwich = useCallback(async () => {
-    if (!heatmap) return;
-    setSandwichLoading(true);
-    try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, spanDays);
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-      const categories: RoomCategory[] = Array.from(new Set(heatmap.rows.map(r => r.category)));
-      const res = await dashboardSandwichPlaybook({ start: startStr, end: endStr, categories });
-      const body = res.data as { orphan_slots_found: number; slots_updated: number };
-      if (body.slots_updated > 0) show(`Updated orphan-night offers on ${body.slots_updated} slot(s)`, "success");
-      else if (body.orphan_slots_found > 0) show("Orphan nights found, but no changes were needed.", "info");
-      else show("No orphan-night gaps found in this slice.", "info");
-      await loadHeatmap();
-    } catch {
-      show("Orphan-night playbook failed", "error");
-    } finally {
-      setSandwichLoading(false);
-    }
-  }, [heatmap, loadHeatmap, show, spanDays]);
-
   return (
     <div>
-      <Toasts />
-
-      <div className="flex items-center justify-between gap-3 mb-6">
-        <div>
-          <div className="text-xs tracking-widest text-text-muted uppercase font-bold">Occupancy</div>
-          <div className="font-serif font-bold text-2xl text-text">Usable capacity & fragmentation</div>
+      <div className="mb-6 space-y-4">
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-xs tracking-widest text-text-muted uppercase font-bold">Occupancy</div>
+            <div className="font-serif font-bold text-2xl text-text">Capacity recovery workspace</div>
+            <div className="text-[11px] text-text-muted mt-2 max-w-2xl leading-relaxed">
+              Slice first (dates + room types), then run recovery actions and validate the impact in the grid.
+            </div>
+          </div>
+          <button
+            type="button"
+            className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
+            onClick={() => refreshAllData()}
+            title="Refresh heatmap data from the API"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
-          onClick={() => loadHeatmap()}
-        >
-          <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
-        </button>
+
+        {/* Slice controls (match Dashboard flow) */}
+        {heatmap && (
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+            <BirdseyeFilters
+              weekSpan={weekSpan}
+              onWeekSpanChange={onWeekSpanChange}
+              availableCategories={availableCategories}
+              selectedCategories={selectedCategories}
+              onToggleCategory={onToggleCategory}
+            />
+          </div>
+        )}
+
+        {/* Primary actions (most used) */}
+        <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
+          <div className="flex flex-wrap gap-2 items-center">
+            <button
+              type="button"
+              className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={() => runOptimisePreview()}
+              disabled={!heatmap}
+              title="Generate a room-rearrangement preview plan and projected deltas"
+            >
+              Preview recovery shuffle
+            </button>
+            <button
+              type="button"
+              className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+              onClick={() => runSandwichPlaybook()}
+              disabled={!heatmap}
+              title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
+            >
+              Apply orphan-night offers
+            </button>
+            {swapPlan && swapPlan.length > 0 && (
+              <button
+                type="button"
+                className="bg-occugreen text-white font-semibold hover:bg-occugreen/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => commitSwapShuffle()}
+                disabled={swapCommitLoading}
+                title="Write the preview shuffle to the DB so the heatmap improves immediately"
+              >
+                {swapCommitLoading ? "Committing…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Commit shuffle ({swapPlan.length})</>}
+              </button>
+            )}
+            {swapPlan && (
+              <button
+                type="button"
+                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
+                onClick={() => clearOptimisePreview()}
+                title="Clear the current preview plan"
+              >
+                Clear preview
+              </button>
+            )}
+            <button
+              type="button"
+              className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
+              onClick={() => setShowAdvanced(v => !v)}
+              title="Show k-night optimisation tools"
+            >
+              Advanced {showAdvanced ? "▲" : "▼"}
+            </button>
+          </div>
+
+          {showAdvanced && heatmap && (
+            <div className="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-end gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                  k-night optimisation
+                </div>
+                <KpiInfo
+                  label="k-night optimisation"
+                  text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current slice."
+                />
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={14}
+                  value={kNightNights}
+                  onChange={e => onKNightNightsChange(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                  className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                  aria-label="k nights"
+                />
+                <button
+                  type="button"
+                  className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => runKNightPreview()}
+                  disabled={kNightLoading}
+                >
+                  {kNightLoading ? "Previewing…" : "Preview k-night shuffle"}
+                </button>
+                {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={() => commitKNightShuffle()}
+                    disabled={kNightCommitLoading}
+                  >
+                    {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
+                  </button>
+                )}
+                {kNightSwapPlan && (
+                  <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pb-0.5">
+                    {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {kpis && (
@@ -383,144 +470,134 @@ export function OccupancyOptimizationTab() {
         </div>
       )}
 
-      <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-surface border border-border p-6">
-          <div className="flex items-start justify-between gap-3 mb-4 pb-3 border-b border-border/60">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Playbooks</div>
-              <div className="font-serif font-bold text-lg text-text">Auto-recombine fragmented slots</div>
-            </div>
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-accent" /> Hackathon MVP
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div className="border border-border bg-surface-2/30 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-night offers</div>
-                  <div className="text-xs text-text-muted mt-1">
-                    Relaxes MinLOS to 1 and applies a <span className="font-bold text-text">50% offer</span> on trapped single nights (shows instantly in the grid).
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => applySandwich()}
-                  disabled={sandwichLoading}
-                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60"
-                >
-                  {sandwichLoading ? "Applying…" : "Apply"}
-                </button>
+      {/* Main workspace: heatmap + operational panel */}
+      {heatmap && (
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6 items-start">
+          <div className="bg-surface border border-border p-6">
+            <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+              <div>
+                <h3 className="font-serif font-bold text-lg text-text">Inventory Heatmap</h3>
+                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
+                  Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
+                </p>
+              </div>
+              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold">
+                Orphan-night gaps outlined
               </div>
             </div>
 
-            <div className="border border-border bg-surface-2/30 p-4">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0">
-                  <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">k-night window optimiser</div>
-                  <div className="text-xs text-text-muted mt-1">
-                    Rearranges existing SOFT bookings to maximize the number of bookable <span className="font-bold text-text">k-night stays</span> in this slice.
-                  </div>
-                </div>
-                <div className="flex items-end gap-2 shrink-0">
-                  <div className="space-y-1">
-                    <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k</div>
-                    <input
-                      type="number"
-                      min={1}
-                      max={14}
-                      value={k}
-                      onChange={e => setK(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                      className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+            <HeatmapGrid
+              dates={heatmap.dates}
+              rows={simulatedRows ?? rowsInView}
+              maxDays={spanDays}
+              highlightSandwichGaps
+            />
+          </div>
+
+          <div className="space-y-6">
+            {/* Operational run metrics */}
+            {kpis && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
+                    <span>Empty gaps</span>
+                    <KpiInfo
+                      label="Empty gaps"
+                      text="Number of short EMPTY runs (≤5 nights) bounded by non-EMPTY nights on both sides within the same room row."
                     />
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => previewK()}
-                    disabled={kLoading}
-                    className="bg-surface border border-border text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all text-xs uppercase tracking-widest px-4 py-2.5 disabled:opacity-60"
-                  >
-                    {kLoading ? "Previewing…" : "Preview"}
-                  </button>
-                  {kSwapPlan && kSwapPlan.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => commitK()}
-                      disabled={kCommitLoading}
-                      className="bg-occugreen text-white font-semibold hover:bg-occugreen/90 active:scale-95 transition-all text-xs uppercase tracking-widest px-4 py-2.5 disabled:opacity-60 flex items-center gap-2"
-                    >
-                      {kCommitLoading ? "Committing…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Commit ({kSwapPlan.length})</>}
-                    </button>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">{kpis.orphanGaps}</div>
+                  <div className="text-[10px] text-text-muted mt-1">{kpis.orphanNights} orphan night{kpis.orphanNights === 1 ? "" : "s"} (≤ 5)</div>
+                </div>
+                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
+                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
+                    <span>Hard to fill rooms</span>
+                    <KpiInfo
+                      label="Hard to fill rooms"
+                      text="Count of 1–3 night EMPTY gaps (runs) across the visible window — these have low conversion in practice."
+                    />
+                  </div>
+                  <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
+                    {(kpis.runDist.n1 + kpis.runDist.n2_3).toLocaleString("en-US")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1">1–3 night gaps</div>
+                </div>
+              </div>
+            )}
+
+            {/* Diagnostics */}
+            {kpis && (
+              <div className="bg-surface border border-border p-6">
+                <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Diagnostics</div>
+                    <div className="font-serif font-bold text-lg text-text">Where fragmentation lives</div>
+                  </div>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 text-occuorange" /> Top offenders
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="text-xs text-text-muted">
+                    Short gaps (1–3 nights) are the hardest to sell. These rooms have the most short gaps in the next {spanDays} nights.
+                  </div>
+                  <div className="space-y-2">
+                    {kpis.topFrag.map(r => (
+                      <div key={r.roomId} className="flex items-center justify-between border border-border bg-surface-2/30 px-3 py-2 text-xs">
+                        <div className="font-mono font-bold text-text">Room {r.roomId}</div>
+                        <div className="text-text-muted">{r.category}</div>
+                        <div className="text-occuorange font-bold">{r.shortGaps} short gap(s)</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Optional: k-night window bars (current vs projected) */}
+            {kWindowBars && (
+              <div className="bg-surface border border-border p-6">
+                <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Usable capacity</div>
+                    <div className="font-serif font-bold text-lg text-text">k-night windows (current vs projected)</div>
+                  </div>
+                  {simulatedRows && (
+                    <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-4">
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 border border-border/60 inline-block" /> Current</span>
+                      <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/50 border border-occugreen/30 inline-block" /> Projected</span>
+                    </div>
                   )}
                 </div>
-              </div>
-              {kSwapPlan && (
-                <div className="mt-3 text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
-                  <TrendingUp className="w-3.5 h-3.5 text-occugreen" />
-                  {kSwapPlan.length > 0 ? `${kSwapPlan.length} shuffle step(s) ready` : "No shuffle steps found"}
+                <div className="space-y-3">
+                  {kWindowBars.ks.map((kk, idx) => {
+                    const cur = kWindowBars.current[idx];
+                    const proj = kWindowBars.projected ? kWindowBars.projected[idx] : null;
+                    const pct = Math.max((cur / kWindowBars.maxVal) * 100, cur > 0 ? 5 : 0);
+                    const pctProj = proj !== null ? Math.max((proj / kWindowBars.maxVal) * 100, proj > 0 ? 5 : 0) : 0;
+                    return (
+                      <div key={kk} className="grid grid-cols-[56px_1fr] gap-3 items-center">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted text-right">k={kk}</div>
+                        <div className="space-y-1.5">
+                          <div className="h-6 bg-surface-2 border border-border/50 relative overflow-hidden">
+                            <div className="h-full bg-text/20" style={{ width: `${pct}%` }} />
+                            <div className="absolute left-2 top-0 h-full flex items-center text-[10px] font-bold text-text">{cur}</div>
+                          </div>
+                          {proj !== null && (
+                            <div className="h-6 bg-occugreen/5 border border-occugreen/20 relative overflow-hidden">
+                              <div className="h-full bg-occugreen/50" style={{ width: `${pctProj}%` }} />
+                              <div className="absolute left-2 top-0 h-full flex items-center text-[10px] font-bold text-occugreen">{proj}</div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-border p-6">
-          <div className="flex items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Diagnostics</div>
-              <div className="font-serif font-bold text-lg text-text">Where fragmentation lives</div>
-            </div>
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-occuorange" /> Top offenders
-            </div>
-          </div>
-
-          {kpis && (
-            <div className="space-y-3">
-              <div className="text-xs text-text-muted">
-                Short gaps (1–3 nights) are the hardest to sell. These rooms have the most short gaps in the next {spanDays} nights.
-              </div>
-              <div className="space-y-2">
-                {kpis.topFrag.map(r => (
-                  <div key={r.roomId} className="flex items-center justify-between border border-border bg-surface-2/30 px-3 py-2 text-xs">
-                    <div className="font-mono font-bold text-text">Room {r.roomId}</div>
-                    <div className="text-text-muted">{r.category}</div>
-                    <div className="text-occuorange font-bold">{r.shortGaps} short gap(s)</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {heatmap && (
-        <div className="mt-6 bg-surface border border-border p-6">
-          <div className="flex items-center justify-between gap-3 mb-4">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Inventory matrix</div>
-              <div className="font-serif font-bold text-lg text-text">Current vs projected</div>
-            </div>
-            {kSwapPlan && kSwapPlan.length > 0 && (
-              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                Showing projected using preview plan (not committed)
               </div>
             )}
           </div>
-
-          {kSwapPlan && kSwapPlan.length > 0 && simulatedRows ? (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-px bg-border p-[1px]">
-              <div className="bg-surface p-4">
-                <HeatmapGrid dates={heatmap.dates} rows={heatmap.rows} title="Current" compact maxDays={spanDays} hideLegend />
-              </div>
-              <div className="bg-surface p-4">
-                <HeatmapGrid dates={heatmap.dates} rows={simulatedRows} title="Projected" compact maxDays={spanDays} />
-              </div>
-            </div>
-          ) : (
-            <HeatmapGrid dates={heatmap.dates} rows={heatmap.rows} maxDays={spanDays} />
-          )}
         </div>
       )}
     </div>

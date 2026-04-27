@@ -26,7 +26,7 @@ import { calendarDayKey } from "../utils/calendarDayKey";
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, BedDouble, AlertTriangle, Zap, Sparkles, Info } from "lucide-react";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, AlertTriangle, Zap, Sparkles, Info } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 
 /**
@@ -576,7 +576,33 @@ export function Dashboard() {
         </div>
       </div>
 
-      {activeTab === "occupancy" && <OccupancyOptimizationTab />}
+      {activeTab === "occupancy" && (
+        <OccupancyOptimizationTab
+          heatmap={heatmap}
+          weekSpan={weekSpan}
+          onWeekSpanChange={setWeekSpan}
+          availableCategories={heatmapCategories}
+          selectedCategories={selectedCategories}
+          onToggleCategory={handleToggleCategory}
+          spanDays={spanDays}
+          filteredRows={filteredRows}
+          simulatedRows={simulatedRows}
+          swapPlan={swapPlan}
+          swapCommitLoading={swapCommitLoading}
+          refreshAllData={refreshAllData}
+          runOptimisePreview={runOptimisePreview}
+          clearOptimisePreview={clearOptimisePreview}
+          runSandwichPlaybook={runSandwichPlaybook}
+          commitSwapShuffle={commitSwapShuffle}
+          kNightNights={kNightNights}
+          onKNightNightsChange={setKNightNights}
+          kNightLoading={kNightLoading}
+          kNightCommitLoading={kNightCommitLoading}
+          kNightSwapPlan={kNightSwapPlan}
+          runKNightPreview={runKNightPreview}
+          commitKNightShuffle={commitKNightShuffle}
+        />
+      )}
       {activeTab === "pricing" && <PricingOptimizationTab />}
       {activeTab === "channels" && <ChannelOptimizationTab />}
 
@@ -685,6 +711,45 @@ export function Dashboard() {
           </div>
         </div>
 
+        {/* Insights (auto-generated) — top of the dashboard flow */}
+        {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
+          <div className="bg-accent/5 border border-accent/20 p-6">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                <Sparkles className="w-4 h-4 text-accent" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
+                  Insights (auto-generated)
+                </div>
+                <ul className="space-y-2">
+                  {dashboardInsights.map((t, i) => (
+                    <li key={i} className="text-sm text-text leading-relaxed">
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+                <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
+                  Based on the current filters and the visible heatmap window
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {heatmap && dashboardInsights.length > 0 && !demoMode && (
+          <div>
+            <button
+              type="button"
+              className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
+              onClick={() => setShowInsights(v => !v)}
+              title="Show or hide auto-generated summary insights"
+            >
+              {showInsights ? "Hide insights" : "Show insights"}
+            </button>
+          </div>
+        )}
+
         {/* Filters should lead the flow (slice definition) */}
         {heatmap && (
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
@@ -746,74 +811,6 @@ export function Dashboard() {
               >
                 Advanced {showAdvancedActions ? "▲" : "▼"}
               </button>
-          </div>
-
-          {/* Guided recovery steps (make the playbook explicit for the demo) */}
-          <div className="mt-3 pt-3 border-t border-border/60">
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-                Guided recovery steps
-              </div>
-              {guidedRecoveryDone ? (
-                <div className="text-[10px] uppercase tracking-widest font-bold text-occugreen">
-                  Completed
-                </div>
-              ) : guidedRecoveryStep ? (
-                <div className="text-[10px] uppercase tracking-widest font-bold text-accent">
-                  Running step {guidedRecoveryStep}/4
-                </div>
-              ) : (
-                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-                  4-step playbook
-                </div>
-              )}
-            </div>
-
-            <div className="mt-2 grid grid-cols-1 lg:grid-cols-4 gap-2">
-              {[
-                { n: 1, t: "Preview recovery shuffle", d: "Find a room-rearrangement plan and show predicted deltas." },
-                { n: 2, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
-                { n: 3, t: "Apply orphan-night offers", d: "Relax rules (MinLOS/offer) on stranded 1-night gaps." },
-                { n: 4, t: "Commit (optional)", d: "If the preview looks good, write the shuffle to the DB." },
-              ].map(s => {
-                const active = guidedRecoveryStep === s.n;
-                const done = guidedRecoveryDone ? s.n <= 4 : guidedRecoveryStep ? s.n < guidedRecoveryStep : false;
-                return (
-                  <div
-                    key={s.n}
-                    className={`border p-3 ${
-                      active
-                        ? "border-accent/40 bg-accent/5"
-                        : done
-                          ? "border-occugreen/30 bg-occugreen/5"
-                          : "border-border bg-surface"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 border ${
-                          active
-                            ? "border-accent/30 bg-accent/10 text-accent"
-                            : done
-                              ? "border-occugreen/30 bg-occugreen/10 text-occugreen"
-                              : "border-border bg-surface-2 text-text-muted"
-                        }`}
-                      >
-                        Step {s.n}
-                      </span>
-                      <div className="text-xs font-bold text-text">{s.t}</div>
-                    </div>
-                    <div className="mt-1 text-[11px] text-text-muted leading-relaxed">{s.d}</div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {guidedRecoveryStep === 4 && !(swapPlan && swapPlan.length > 0) && (
-              <div className="mt-2 text-[11px] text-text-muted">
-                No shuffle plan is available to commit for this slice. Try “Preview recovery shuffle” on a different date range or room types.
-              </div>
-            )}
           </div>
 
           {/* Advanced actions */}
@@ -900,51 +897,156 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Insights (auto-generated) — place above scorecard and auto-expand by default */}
-      {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
-        <div className="mt-4 mb-6 bg-accent/5 border border-accent/20 p-6">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-accent" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
-                Insights (auto-generated)
-              </div>
-              <ul className="space-y-2">
-                {dashboardInsights.map((t, i) => (
-                  <li key={i} className="text-sm text-text leading-relaxed">
-                    {t}
-                  </li>
-                ))}
-              </ul>
-              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
-                Based on the current filters and the visible heatmap window
-              </div>
-            </div>
+      {/* What’s broken / what to do / where to go (story spine) */}
+      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="bg-surface border border-border p-5">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
+          <div className="text-sm text-text leading-relaxed">
+            {scorecard?.before
+              ? (
+                <>
+                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
+                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
+                </>
+              )
+              : "Select a slice to see stranded capacity and revenue at risk."}
           </div>
-        </div>
-      )}
-
-      {heatmap && dashboardInsights.length > 0 && !demoMode && (
-        <div className="mb-6">
           <button
             type="button"
-            className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-            onClick={() => setShowInsights(v => !v)}
-            title="Show or hide auto-generated summary insights"
+            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+            onClick={() => setActiveTab("occupancy")}
           >
-            {showInsights ? "Hide insights" : "Show insights"}
+            View capacity details
           </button>
         </div>
-      )}
 
-      {/* Capacity Recovery Scorecard (hackathon spine KPI) */}
+        <div className="bg-surface border border-border p-5">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
+            <span
+              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
+              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
+            >
+              AI
+            </span>
+          </div>
+          <div className="text-sm text-text leading-relaxed">
+            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
+              onClick={() => runOptimisePreview()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Preview shuffle
+            </button>
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
+              onClick={() => runSandwichPlaybook()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Apply offers
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-border p-5">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Recovered revenue (projected)</div>
+          <div className="text-sm text-text leading-relaxed">
+            {scorecard?.after && scorecard?.delta
+              ? (
+                <>
+                  <span className="font-bold">
+                    ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
+                  </span>{" "}
+                  recovered by rescuing{" "}
+                  <span className="font-bold">
+                    {Math.max(0, -scorecard.delta.orphan_nights).toLocaleString("en-US")}
+                  </span>{" "}
+                  orphan night(s) in this slice.
+                </>
+              )
+              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
+          </div>
+        </div>
+      </div>
+
+      {/* Guided recovery steps (make the playbook explicit for the demo) */}
+      <div className="mb-6 bg-surface border border-border shadow-subtle p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+            Guided recovery steps
+          </div>
+          {guidedRecoveryDone ? (
+            <div className="text-[10px] uppercase tracking-widest font-bold text-occugreen">
+              Completed
+            </div>
+          ) : guidedRecoveryStep ? (
+            <div className="text-[10px] uppercase tracking-widest font-bold text-accent">
+              Running step {guidedRecoveryStep}/4
+            </div>
+          ) : (
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+              4-step playbook
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 lg:grid-cols-4 gap-2">
+          {[
+            { n: 1, t: "Preview recovery shuffle", d: "Find a room-rearrangement plan and show predicted deltas." },
+            { n: 2, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
+            { n: 3, t: "Apply orphan-night offers", d: "Relax rules (MinLOS/offer) on stranded 1-night gaps." },
+            { n: 4, t: "Commit (optional)", d: "If the preview looks good, write the shuffle to the DB." },
+          ].map(s => {
+            const active = guidedRecoveryStep === s.n;
+            const done = guidedRecoveryDone ? s.n <= 4 : guidedRecoveryStep ? s.n < guidedRecoveryStep : false;
+            return (
+              <div
+                key={s.n}
+                className={`border p-3 ${
+                  active
+                    ? "border-accent/40 bg-accent/5"
+                    : done
+                      ? "border-occugreen/30 bg-occugreen/5"
+                      : "border-border bg-surface"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 border ${
+                      active
+                        ? "border-accent/30 bg-accent/10 text-accent"
+                        : done
+                          ? "border-occugreen/30 bg-occugreen/10 text-occugreen"
+                          : "border-border bg-surface-2 text-text-muted"
+                    }`}
+                  >
+                    Step {s.n}
+                  </span>
+                  <div className="text-xs font-bold text-text">{s.t}</div>
+                </div>
+                <div className="mt-1 text-[11px] text-text-muted leading-relaxed">{s.d}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {guidedRecoveryStep === 4 && !(swapPlan && swapPlan.length > 0) && (
+          <div className="mt-3 text-[11px] text-text-muted">
+            No shuffle plan is available to commit for this slice. Try “Preview recovery shuffle” on a different date range or room types.
+          </div>
+        )}
+      </div>
+
+      {/* Capacity Recovery Scorecard */}
       <div className="mb-6">
         <div className={`border p-6 ${demoMode ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Hackathon outcome</div>
               <div className="font-serif font-bold text-xl text-text">Capacity Recovery Scorecard</div>
               <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
                 Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Preview recovery shuffle</span> to generate a plan and see predicted deltas.
@@ -1026,252 +1128,35 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* What’s broken / what to do / where to go (story spine) */}
-      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.before
-              ? (
-                <>
-                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
-                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
-                </>
-              )
-              : "Select a slice to see stranded capacity and revenue at risk."}
-          </div>
-          <button
-            type="button"
-            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-            onClick={() => setActiveTab("occupancy")}
-          >
-            View capacity details
-          </button>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
-            <span
-              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
-              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
-            >
-              AI
-            </span>
-          </div>
-          <div className="text-sm text-text leading-relaxed">
-            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
-              onClick={() => runOptimisePreview()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Preview shuffle
-            </button>
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
-              onClick={() => runSandwichPlaybook()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Apply offers
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Recovered revenue (projected)</div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.after && scorecard?.delta
-              ? (
-                <>
-                  <span className="font-bold">
-                    ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
-                  </span>{" "}
-                  recovered by rescuing{" "}
-                  <span className="font-bold">
-                    {Math.max(0, -scorecard.delta.orphan_nights).toLocaleString("en-US")}
-                  </span>{" "}
-                  orphan night(s) in this slice.
-                </>
-              )
-              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
-          </div>
-          <div className="mt-3 text-[10px] uppercase tracking-widest font-bold text-text-muted">
-            Jump to actions
-          </div>
-          <div className="mt-2 grid grid-cols-1 gap-2">
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-              onClick={() => setActiveTab("occupancy")}
-            >
-              Occupancy
-            </button>
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-              onClick={() => setActiveTab("pricing")}
-              title="AI-assisted pricing recommendations"
-            >
-              Pricing (AI)
-            </button>
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-              onClick={() => setActiveTab("channels")}
-              title="AI-assisted channel allocation recommendations"
-            >
-              Channels (AI)
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* 60/40 layout: Heatmap (60) + KPIs (40) */}
+      {/* Mini preview (full workspace lives in Occupancy) */}
       {heatmap && (
-        <div className="mt-6 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-6 items-start">
-          <div className="bg-surface border border-border p-6">
-            <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-              <div>
-                <h3 className="font-serif font-bold text-lg text-text">Inventory Heatmap</h3>
-                <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
-                  Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
-                </p>
-              </div>
-              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold">
-                Orphan-night gaps outlined
-              </div>
+        <div className="mt-6 bg-surface border border-border p-6">
+          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+            <div>
+              <h3 className="font-serif font-bold text-lg text-text">Inventory preview</h3>
+              <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
+                Mini view · open Occupancy for the full workspace
+              </p>
             </div>
-
-            <HeatmapGrid
-              dates={heatmap.dates}
-              rows={simulatedRows ?? filteredRows}
-              maxDays={spanDays}
-              highlightSandwichGaps
-              onCellClick={setSlotModal}
-            />
+            <button
+              type="button"
+              className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all text-xs uppercase tracking-widest px-5 py-2.5 border border-text"
+              onClick={() => setActiveTab("occupancy")}
+              title="Open the full Occupancy workspace"
+            >
+              Open Occupancy
+            </button>
           </div>
 
-          <div className="space-y-6">
-            {/* KPI strip */}
-            {dashboardKpis && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <BedDouble className="w-3 h-3 text-accent" /> Tonight{" "}
-                    <KpiInfo
-                      label="Tonight"
-                      text="Occupancy for the first night in the visible heatmap window (leftmost column), based on your selected room types."
-                    />
-                  </div>
-                  <div className="text-2xl font-bold font-serif text-text tabular-nums">
-                    {dashboardKpis.tonightInView
-                      ? (
-                        <>
-                          {dashboardKpis.tonightOccupancyPct.toFixed(0)}
-                          <span className="text-sm font-normal text-text-muted">%</span>
-                        </>
-                      )
-                      : "—"}
-                  </div>
-                  <div className="text-[10px] text-text-muted">
-                    {dashboardKpis.tonightInView
-                      ? `${dashboardKpis.tonightRoomsOccupied} of ${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}`
-                      : "No calendar loaded"}
-                  </div>
-                </div>
-
-                <div className="bg-surface border border-border p-4 flex flex-col gap-1 group hover:border-accent/40 transition-colors">
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <DollarSign className="w-3 h-3 text-accent" /> Average rate{" "}
-                    <KpiInfo
-                      label="Average rate"
-                      text="Mean nightly rate across all occupied (non-EMPTY) slots in the current filtered window."
-                    />
-                  </div>
-                  <div className="text-2xl font-bold font-serif text-text tabular-nums">
-                    ${Math.round(dashboardKpis.avgRateInView).toLocaleString("en-US")}
-                  </div>
-                  <div className="text-[10px] text-text-muted">
-                    {dashboardKpis.avgRateNightCount > 0
-                      ? `${dashboardKpis.avgRateNightCount} occupied night${dashboardKpis.avgRateNightCount === 1 ? "" : "s"} in range`
-                      : "No occupied nights in selected range"}
-                  </div>
-                </div>
-
-                <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.orphanNightsAtRisk > 0 ? "bg-occuorange/5 border-occuorange/30 hover:border-occuorange/50" : "bg-surface border-border hover:border-accent/40"}`}>
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk{" "}
-                    <KpiInfo
-                      label="Nights at risk"
-                      text="Count of single EMPTY nights trapped between non-EMPTY nights in the same room row (orphan-night gaps). These are hard to sell."
-                    />
-                  </div>
-                  <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
-                    {dashboardKpis.orphanNightsAtRisk}
-                  </div>
-                  <div className="text-[10px] text-text-muted">
-                    {dashboardKpis.orphanNightsAtRisk > 0
-                      ? `$${dashboardKpis.orphanRevenueAtRisk.toLocaleString("en-US")} at risk`
-                      : "No orphan gaps in selected range"}
-                  </div>
-                </div>
-
-                <div className={`border p-4 flex flex-col gap-1 group transition-colors ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "bg-text/3 border-text/20 hover:border-text/30" : "bg-surface border-border hover:border-accent/40"}`}>
-                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-muted font-bold">
-                    <AlertTriangle className={`w-3 h-3 ${dashboardKpis.sandwichMinlosBlockedNights > 0 ? "text-text" : "text-accent"}`} /> MinLOS blocks{" "}
-                    <KpiInfo
-                      label="MinLOS blocks"
-                      text="Sandwich-gap nights where MinLOS is active (Min stay > 1), making them effectively unbookable unless rules are relaxed."
-                    />
-                  </div>
-                  <div className="text-2xl font-bold font-serif tabular-nums text-text">
-                    {dashboardKpis.sandwichMinlosBlockedNights}
-                  </div>
-                  <div className="text-[10px] text-text-muted">
-                    {dashboardKpis.sandwichMinlosBlockedNights > 0
-                      ? "Orphan-night gaps blocked by MinLOS"
-                      : "No MinLOS blocks in this slice"}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Operational run metrics */}
-            {runMetrics && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
-                    <span>Empty gaps</span>
-                    <KpiInfo
-                      label="Empty gaps"
-                      text="Number of short EMPTY runs (≤5 nights) bounded by non-EMPTY nights on both sides within the same room row."
-                    />
-                  </div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">{runMetrics.orphanGaps}</div>
-                  <div className="text-[10px] text-text-muted mt-1">{runMetrics.orphanNights} orphan night{runMetrics.orphanNights === 1 ? "" : "s"} (≤ 5)</div>
-                </div>
-                <div className="bg-surface border border-border p-4 group hover:border-accent/40 transition-colors">
-                  <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-text-muted font-bold mb-1">
-                    <span>Hard to fill rooms</span>
-                    <KpiInfo
-                      label="Hard to fill rooms"
-                      text="Count of 1–3 night EMPTY gaps (runs) across the visible window — these have low conversion in practice."
-                    />
-                  </div>
-                  <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">
-                    {(runMetrics.dist.n1 + runMetrics.dist.n2_3).toLocaleString()}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1">1–3 night gaps</div>
-                </div>
-              </div>
-            )}
-
-          </div>
+          <HeatmapGrid
+            dates={heatmap.dates}
+            rows={simulatedRows ?? filteredRows}
+            maxDays={Math.min(14, spanDays)}
+            highlightSandwichGaps
+            compact
+            hideLegend
+            onCellClick={setSlotModal}
+          />
         </div>
       )}
 
