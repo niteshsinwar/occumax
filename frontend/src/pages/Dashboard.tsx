@@ -219,6 +219,8 @@ export function Dashboard() {
   const [scorecard, setScorecard] = useState<DashboardScorecardResponse | null>(null);
   const [scorecardLoading, setScorecardLoading] = useState(false);
   const [scorecardError, setScorecardError] = useState<string | null>(null);
+  const [showAdvancedActions, setShowAdvancedActions] = useState(false);
+  const [showInsights, setShowInsights] = useState(false);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -669,16 +671,82 @@ export function Dashboard() {
         </div>
       )}
 
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-6 border-b border-border/50 pb-6">
-        <div>
-          <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Occupancy Overview</h1>
-          <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
-            Your rooms, bookings, and availability at a glance
-          </p>
+      <div className="mb-6 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+          <div>
+            <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Recovery Dashboard</h1>
+            <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
+              Filter the slice, then recover sellable capacity
+            </p>
+          </div>
         </div>
-        <div className="shrink-0 w-full lg:w-auto">
-          <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
-            <div className="flex flex-wrap gap-2 items-center">
+
+        {/* Filters should lead the flow (slice definition) */}
+        {heatmap && (
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+            <BirdseyeFilters
+              weekSpan={weekSpan}
+              onWeekSpanChange={setWeekSpan}
+              availableCategories={heatmapCategories}
+              selectedCategories={selectedCategories}
+              onToggleCategory={handleToggleCategory}
+            />
+          </div>
+        )}
+
+        {/* Actions come after filters */}
+        <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
+          <div className="flex flex-wrap gap-2 items-center">
+              <button
+                type="button"
+                className="bg-occugreen text-white font-semibold hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runRecoveryPlan()}
+                disabled={!heatmap || isOptimiseLoading}
+                title="Runs preview shuffle + orphan-night offers for this slice"
+              >
+                Run guided recovery
+              </button>
+              <button
+                type="button"
+                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runOptimisePreview()}
+                disabled={!heatmap || isOptimiseLoading}
+              >
+                {isOptimiseLoading ? "Scanning…" : "Preview recovery shuffle"}
+              </button>
+              <button
+                type="button"
+                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runSandwichPlaybook()}
+                disabled={!heatmap || isOptimiseLoading}
+                title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
+              >
+                Apply orphan-night offers
+              </button>
+              {swapPlan && (swapPlan.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => commitSwapShuffle()}
+                  disabled={swapCommitLoading}
+                  title="Write the preview shuffle to the DB so the heatmap improves immediately"
+                >
+                  {swapCommitLoading ? "Committing…" : `Commit shuffle (${swapPlan.length})`}
+                </button>
+              )}
+              <button
+                type="button"
+                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
+                onClick={() => setShowAdvancedActions(v => !v)}
+                title="Show advanced actions and toggles"
+              >
+                Advanced {showAdvancedActions ? "▲" : "▼"}
+              </button>
+          </div>
+
+          {/* Advanced actions */}
+          {showAdvancedActions && (
+            <div className="mt-3 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 className={`text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border ${
@@ -697,32 +765,6 @@ export function Dashboard() {
               >
                 <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
               </button>
-              <button
-                type="button"
-                className="bg-occugreen text-white font-semibold hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runRecoveryPlan()}
-                disabled={!heatmap || isOptimiseLoading}
-                title="Runs preview shuffle + orphan-night offers for this slice"
-              >
-                Run recovery plan
-              </button>
-              <button
-                type="button"
-                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runOptimisePreview()}
-                disabled={!heatmap || isOptimiseLoading}
-              >
-                {isOptimiseLoading ? "Scanning…" : "Find empty gaps"}
-              </button>
-              <button
-                type="button"
-                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runSandwichPlaybook()}
-                disabled={!heatmap || isOptimiseLoading}
-                title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
-              >
-                Apply orphan-night offers
-              </button>
               {swapPlan && (
                 <button
                   type="button"
@@ -732,68 +774,57 @@ export function Dashboard() {
                   Clear preview
                 </button>
               )}
-              {swapPlan && (swapPlan.length ?? 0) > 0 && (
+            </div>
+          )}
+
+          {/* Secondary row: k-night optimiser (advanced) */}
+          {showAdvancedActions && heatmap && (
+            <div className="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-end gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                  k-night optimisation
+                </div>
+                <KpiInfo
+                  label="k-night optimisation"
+                  text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
+                />
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={14}
+                  value={kNightNights}
+                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
+                  className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
+                  aria-label="k nights"
+                />
                 <button
                   type="button"
-                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => commitSwapShuffle()}
-                  disabled={swapCommitLoading}
-                  title="Write the preview shuffle to the DB so the heatmap improves immediately"
+                  className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => runKNightPreview()}
+                  disabled={kNightLoading}
                 >
-                  {swapCommitLoading ? "Committing…" : `Commit shuffle (${swapPlan.length})`}
+                  {kNightLoading ? "Previewing…" : "Preview k-night shuffle"}
                 </button>
-              )}
-            </div>
-
-            {/* Secondary row: k-night optimiser */}
-            {heatmap && (
-              <div className="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-end gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                    k-night window optimisation
-                  </div>
-                  <KpiInfo
-                    label="k-night optimisation"
-                    text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
-                  />
-                </div>
-                <div className="flex flex-wrap items-end gap-2">
-                  <input
-                    type="number"
-                    min={1}
-                    max={14}
-                    value={kNightNights}
-                    onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                    className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                    aria-label="k nights"
-                  />
+                {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
                   <button
                     type="button"
-                    className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={() => runKNightPreview()}
-                    disabled={kNightLoading}
+                    className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                    onClick={() => commitKNightShuffle()}
+                    disabled={kNightCommitLoading}
                   >
-                    {kNightLoading ? "Previewing…" : "Preview shuffle"}
+                    {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
                   </button>
-                  {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
-                    <button
-                      type="button"
-                      className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                      onClick={() => commitKNightShuffle()}
-                      disabled={kNightCommitLoading}
-                    >
-                      {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
-                    </button>
-                  )}
-                  {kNightSwapPlan && (
-                    <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pb-0.5">
-                      {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
-                    </div>
-                  )}
-                </div>
+                )}
+                {kNightSwapPlan && (
+                  <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pb-0.5">
+                    {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -805,7 +836,7 @@ export function Dashboard() {
               <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Hackathon outcome</div>
               <div className="font-serif font-bold text-xl text-text">Capacity Recovery Scorecard</div>
               <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
-                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Find empty gaps</span> to generate a preview plan and see predicted impact.
+                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Preview recovery shuffle</span> to generate a plan and see predicted deltas.
               </div>
             </div>
             <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
@@ -884,19 +915,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      {heatmap && (
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-          <BirdseyeFilters
-            weekSpan={weekSpan}
-            onWeekSpanChange={setWeekSpan}
-            availableCategories={heatmapCategories}
-            selectedCategories={selectedCategories}
-            onToggleCategory={handleToggleCategory}
-          />
-        </div>
-      )}
-
-      {heatmap && dashboardInsights.length > 0 && (
+      {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
         <div className="mt-4 bg-accent/5 border border-accent/20 p-6">
           <div className="flex items-start gap-3">
             <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
@@ -918,6 +937,18 @@ export function Dashboard() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {heatmap && dashboardInsights.length > 0 && !demoMode && (
+        <div className="mt-4">
+          <button
+            type="button"
+            className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
+            onClick={() => setShowInsights(v => !v)}
+          >
+            {showInsights ? "Hide insights" : "Show insights"}
+          </button>
         </div>
       )}
 
