@@ -22,6 +22,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
+import { AiTag } from "../shared/AiTag";
 
 /**
  * Pricing Insights and Optimization tab.
@@ -277,7 +278,9 @@ export function PricingOptimizationTab() {
         <div className="flex items-center gap-3">
           <Tags className="w-4 h-4 text-accent" />
           <div>
-            <div className="text-sm font-bold text-text">Pricing Optimization</div>
+            <div className="text-sm font-bold text-text flex items-center gap-2">
+              Pricing Optimization <AiTag />
+            </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
               Fragmentation-aware rate actions · tie discounts to stranded inventory
             </div>
