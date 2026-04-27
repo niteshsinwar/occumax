@@ -492,12 +492,6 @@ export function Dashboard() {
     }
   }, [kNightSwapPlan, loadHeatmap, show, refreshScorecard]);
 
-  const runRecoveryPlan = useCallback(async () => {
-    // "Run all" demo-friendly action: preview shuffle + apply orphan-night offers (no auto-commit)
-    await runOptimisePreview();
-    await runSandwichPlaybook();
-  }, [runOptimisePreview, runSandwichPlaybook]);
-
   const runSandwichPlaybook = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
     try {
@@ -523,6 +517,12 @@ export function Dashboard() {
       show("Failed to apply orphan-night offers", "error");
     }
   }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan]);
+
+  const runRecoveryPlan = useCallback(async () => {
+    // "Run all" demo-friendly action: preview shuffle + apply orphan-night offers (no auto-commit)
+    await runOptimisePreview();
+    await runSandwichPlaybook();
+  }, [runOptimisePreview, runSandwichPlaybook]);
 
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
