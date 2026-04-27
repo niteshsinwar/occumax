@@ -78,7 +78,7 @@ export function PricingOptimizationTab() {
 
   const maxDays = useMemo(() => Math.max(1, Math.min(60, Math.floor(spanDays || 14))), [spanDays]);
 
-  function computeMinLosSandwichBlocks(rowsIn: HeatmapRow[], maxDaysIn: number): number {
+  function computeMinLosOrphanNightBlocks(rowsIn: HeatmapRow[], maxDaysIn: number): number {
     let blocked = 0;
     for (const row of rowsIn) {
       const cells = row.cells.slice(0, maxDaysIn);
@@ -95,7 +95,7 @@ export function PricingOptimizationTab() {
     return blocked;
   }
 
-  function computeSandwichOfferCount(rowsIn: HeatmapRow[], maxDaysIn: number): number {
+  function computeOrphanNightOfferCount(rowsIn: HeatmapRow[], maxDaysIn: number): number {
     let n = 0;
     for (const row of rowsIn) {
       for (const c of row.cells.slice(0, maxDaysIn)) {
@@ -130,7 +130,7 @@ export function PricingOptimizationTab() {
         }
       }
 
-      // additionally: count MinLOS-blocked sandwich single nights as “high urgency”
+      // additionally: count MinLOS-blocked orphan-night singles as “high urgency”
       for (let k = 1; k < cells.length - 1; k++) {
         const c = cells[k];
         if (!c || c.block_type !== "EMPTY") continue;
@@ -157,8 +157,8 @@ export function PricingOptimizationTab() {
     return entries;
   }, [strandedScores]);
 
-  const minLosBlocks = useMemo(() => computeMinLosSandwichBlocks(activeRows, maxDays), [activeRows, maxDays]);
-  const sandwichOffers = useMemo(() => computeSandwichOfferCount(activeRows, maxDays), [activeRows, maxDays]);
+  const minLosBlocks = useMemo(() => computeMinLosOrphanNightBlocks(activeRows, maxDays), [activeRows, maxDays]);
+  const sandwichOffers = useMemo(() => computeOrphanNightOfferCount(activeRows, maxDays), [activeRows, maxDays]);
 
   const runAnalysis = useCallback(async () => {
     setAnalysing(true);
@@ -265,7 +265,7 @@ export function PricingOptimizationTab() {
       show("Sandwich playbook applied (MinLOS relaxed + 50% offers refreshed)", "success");
       await refreshHeatmap();
     } catch {
-      show("Failed to apply sandwich playbook", "error");
+      show("Failed to apply orphan-night playbook", "error");
     }
   };
 
@@ -364,7 +364,7 @@ export function PricingOptimizationTab() {
             onClick={runSandwichRefresh}
           >
             <Wand2 className="w-3 h-3" />
-            Refresh Sandwich Offers
+            Refresh Orphan-night Offers
           </button>
           {suggestedDiscounts.length > 0 && (
             <button
@@ -381,12 +381,12 @@ export function PricingOptimizationTab() {
       {/* KPIs */}
       <div className="px-6 py-4 border-b border-border grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">MinLOS sandwich blocks</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">MinLOS orphan-night blocks</div>
           <div className="text-2xl font-serif font-bold text-text mt-1">{minLosBlocks}</div>
           <div className="text-[10px] text-text-muted mt-1">Blocked orphan nights in window</div>
         </div>
         <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active sandwich offers</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active orphan-night offers</div>
           <div className="text-2xl font-serif font-bold text-text mt-1">{sandwichOffers}</div>
           <div className="text-[10px] text-text-muted mt-1">Discount markers in heatmap</div>
         </div>
@@ -409,7 +409,7 @@ export function PricingOptimizationTab() {
             <DollarSign className="w-8 h-8 text-accent/30 mb-4 mx-auto" />
             <div className="font-serif font-bold text-xl text-text mb-2">Fragmentation-aware pricing</div>
             <div className="text-xs text-text-muted max-w-xl mx-auto leading-relaxed">
-              This tab links stranded inventory (short orphan gaps, MinLOS sandwich blocks, and sandwich offers)
+              This tab links stranded inventory (short orphan gaps, MinLOS orphan-night blocks, and orphan-night offers)
               to daily pricing actions so you can show “recovered usable capacity” + “pricing impact” in the demo.
             </div>
           </div>

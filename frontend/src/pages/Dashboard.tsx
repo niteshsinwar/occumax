@@ -5,10 +5,12 @@ import {
   getHeatmap,
   dashboardOptimisePreview,
   dashboardSandwichPlaybook,
+  dashboardScorecard,
   patchSlot,
 } from "../api/client";
 import type {
   DashboardOptimisePreviewResponse,
+  DashboardScorecardResponse,
   HeatmapResponse,
   HeatmapRow,
   RoomCategory,
@@ -202,6 +204,7 @@ export function Dashboard() {
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
   const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
+  const [swapCommitLoading, setSwapCommitLoading] = useState(false);
   const [kNightNights, setKNightNights] = useState<number>(2);
   const [kNightSwapPlan, setKNightSwapPlan] = useState<SwapStep[] | null>(null);
   const [kNightLoading, setKNightLoading] = useState(false);
@@ -210,6 +213,12 @@ export function Dashboard() {
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
   const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
+
+  // Hackathon scorecard (before/after + deltas)
+  const [scorecard, setScorecard] = useState<DashboardScorecardResponse | null>(null);
+  const [scorecardLoading, setScorecardLoading] = useState(false);
+  const [scorecardError, setScorecardError] = useState<string | null>(null);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -258,6 +267,37 @@ export function Dashboard() {
     return Math.min(weekSpan * 7, heatmap.dates.length);
   }, [heatmap, weekSpan]);
 
+  const scorecardSlice = useMemo(() => {
+    if (!heatmap || spanDays === 0) return null;
+    const start = parseISO(heatmap.dates[0]);
+    const end = addDays(start, spanDays);
+    return {
+      startStr: formatISO(start, { representation: "date" }),
+      endStr: formatISO(end, { representation: "date" }),
+    };
+  }, [heatmap, spanDays]);
+
+  const refreshScorecard = useCallback(async (plan?: SwapStep[] | null) => {
+    if (!scorecardSlice) return;
+    setScorecardLoading(true);
+    setScorecardError(null);
+    try {
+      const res = await dashboardScorecard({
+        start: scorecardSlice.startStr,
+        end: scorecardSlice.endStr,
+        categories: selectedCategories,
+        k_nights: [2, 3],
+        swap_plan: plan && plan.length > 0 ? plan : null,
+      });
+      setScorecard(res.data as DashboardScorecardResponse);
+    } catch {
+      setScorecard(null);
+      setScorecardError("Could not compute the capacity recovery scorecard for this slice.");
+    } finally {
+      setScorecardLoading(false);
+    }
+  }, [scorecardSlice, selectedCategories]);
+
   const dashboardKpis = useMemo((): BirdseyeDashboardKpis | null => {
     if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
     return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays);
@@ -288,6 +328,13 @@ export function Dashboard() {
     await loadHeatmap();
   }, [loadHeatmap]);
 
+  // Keep the baseline scorecard in sync with the current filters/slice.
+  useEffect(() => {
+    if (!scorecardSlice || selectedCategories.length === 0) return;
+    void refreshScorecard(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scorecardSlice?.startStr, scorecardSlice?.endStr, selectedCategories.join("|")]);
+
   const dashboardInsights = useMemo(() => {
     if (!snapshot || spanDays === 0) return [];
     const totals = snapshot.totalsByBucket;
@@ -311,7 +358,7 @@ export function Dashboard() {
       if (hard > 0) out.push(`${hard} short gaps (1–3 nights) are likely to go unsold without intervention.`);
     }
     if (dashboardKpis?.sandwichMinlosBlockedNights) {
-      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} sandwich night(s) are blocked by MinLOS rules — “Fix sandwich nights” can unlock them.`);
+      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} orphan-night gap(s) are blocked by MinLOS rules — “Apply orphan-night offers” can unlock them.`);
     }
     return out.slice(0, 4);
   }, [dashboardKpis?.sandwichMinlosBlockedNights, runMetrics, snapshot, spanDays]);
@@ -350,6 +397,7 @@ export function Dashboard() {
       });
       const body = res.data as DashboardOptimisePreviewResponse;
       setSwapPlan(body.swap_plan ?? []);
+      void refreshScorecard(body.swap_plan ?? null);
       if ((body.swap_plan?.length ?? 0) === 0) {
         if (body.fully_clean) show("No orphan gaps detected in the current slice.", "success");
         else show("No improvements found for the current slice (converged).", "info");
@@ -359,12 +407,33 @@ export function Dashboard() {
     } catch {
       show("Failed to run optimisation preview", "error");
       setSwapPlan(null);
+      void refreshScorecard(null);
     } finally {
       setIsOptimiseLoading(false);
     }
-  }, [heatmap, weekSpan, selectedCategories, show]);
+  }, [heatmap, weekSpan, selectedCategories, show, refreshScorecard]);
 
-  const clearOptimisePreview = useCallback(() => setSwapPlan(null), []);
+  const clearOptimisePreview = useCallback(() => {
+    setSwapPlan(null);
+    void refreshScorecard(null);
+  }, [refreshScorecard]);
+
+  const commitSwapShuffle = useCallback(async () => {
+    if (!swapPlan || swapPlan.length === 0) return;
+    setSwapCommitLoading(true);
+    try {
+      await dashboardCommitShuffle(swapPlan);
+      show(`Committed ${swapPlan.length} shuffle step(s)`, "success");
+      setSwapPlan(null);
+      await loadHeatmap();
+      // After commit, recompute baseline from live DB state
+      void refreshScorecard(null);
+    } catch {
+      show("Failed to commit shuffle", "error");
+    } finally {
+      setSwapCommitLoading(false);
+    }
+  }, [swapPlan, loadHeatmap, show, refreshScorecard]);
 
   const runKNightPreview = useCallback(async () => {
     if (!heatmap) return;
@@ -384,6 +453,7 @@ export function Dashboard() {
       });
       const body = res.data as { shuffle_count: number; swap_plan: SwapStep[]; target_nights: number };
       setKNightSwapPlan(body.swap_plan ?? []);
+      void refreshScorecard(body.swap_plan ?? null);
       if ((body.swap_plan?.length ?? 0) === 0) {
         show(`No k-night improvements found for k=${body.target_nights} in this slice.`, "info");
       } else {
@@ -400,10 +470,11 @@ export function Dashboard() {
           : `Failed to run k-night preview (${status ?? "?"})`;
       show(msg, "error");
       setKNightSwapPlan(null);
+      void refreshScorecard(null);
     } finally {
       setKNightLoading(false);
     }
-  }, [heatmap, kNightNights, selectedCategories, show, weekSpan]);
+  }, [heatmap, kNightNights, selectedCategories, show, weekSpan, refreshScorecard]);
 
   const commitKNightShuffle = useCallback(async () => {
     if (!kNightSwapPlan || kNightSwapPlan.length === 0) return;
@@ -413,12 +484,19 @@ export function Dashboard() {
       show(`Committed ${kNightSwapPlan.length} shuffle step(s)`, "success");
       setKNightSwapPlan(null);
       await loadHeatmap();
+      void refreshScorecard(null);
     } catch {
       show("Failed to commit shuffle", "error");
     } finally {
       setKNightCommitLoading(false);
     }
-  }, [kNightSwapPlan, loadHeatmap, show]);
+  }, [kNightSwapPlan, loadHeatmap, show, refreshScorecard]);
+
+  const runRecoveryPlan = useCallback(async () => {
+    // "Run all" demo-friendly action: preview shuffle + apply orphan-night offers (no auto-commit)
+    await runOptimisePreview();
+    await runSandwichPlaybook();
+  }, [runOptimisePreview, runSandwichPlaybook]);
 
   const runSandwichPlaybook = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
@@ -434,15 +512,15 @@ export function Dashboard() {
       });
       const body = res.data as { orphan_slots_found: number; slots_updated: number };
       if (body.slots_updated > 0) {
-        show(`Relaxed MinLOS on ${body.slots_updated} sandwich night(s)`, "success");
+        show(`Orphan-night offers updated on ${body.slots_updated} slot(s)`, "success");
       } else if (body.orphan_slots_found > 0) {
-        show("Sandwich nights found, but MinLOS was already relaxed in this slice.", "info");
+        show("Orphan nights found, but no rule/offer changes were needed in this slice.", "info");
       } else {
-        show("No sandwich orphan nights found in this slice.", "info");
+        show("No orphan-night gaps found in this slice.", "info");
       }
       await loadHeatmap();
     } catch {
-      show("Failed to apply sandwich-night playbook", "error");
+      show("Failed to apply orphan-night offers", "error");
     }
   }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan]);
 
@@ -603,10 +681,30 @@ export function Dashboard() {
             <div className="flex flex-wrap gap-2 items-center">
               <button
                 type="button"
+                className={`text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border ${
+                  demoMode ? "bg-accent/10 border-accent/30" : "bg-surface border-border"
+                }`}
+                onClick={() => setDemoMode(v => !v)}
+                title="Guided callouts for hackathon demo"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-accent" />
+                Demo mode {demoMode ? "On" : "Off"}
+              </button>
+              <button
+                type="button"
                 className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
                 onClick={() => refreshAllData()}
               >
                 <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
+              </button>
+              <button
+                type="button"
+                className="bg-occugreen text-white font-semibold hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runRecoveryPlan()}
+                disabled={!heatmap || isOptimiseLoading}
+                title="Runs preview shuffle + orphan-night offers for this slice"
+              >
+                Run recovery plan
               </button>
               <button
                 type="button"
@@ -621,9 +719,9 @@ export function Dashboard() {
                 className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => runSandwichPlaybook()}
                 disabled={!heatmap || isOptimiseLoading}
-                title="Relax MinLOS on single-night sandwich gaps in the current slice"
+                title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
               >
-                Fix sandwich nights
+                Apply orphan-night offers
               </button>
               {swapPlan && (
                 <button
@@ -632,6 +730,17 @@ export function Dashboard() {
                   onClick={() => clearOptimisePreview()}
                 >
                   Clear preview
+                </button>
+              )}
+              {swapPlan && (swapPlan.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                  onClick={() => commitSwapShuffle()}
+                  disabled={swapCommitLoading}
+                  title="Write the preview shuffle to the DB so the heatmap improves immediately"
+                >
+                  {swapCommitLoading ? "Committing…" : `Commit shuffle (${swapPlan.length})`}
                 </button>
               )}
             </div>
@@ -688,6 +797,93 @@ export function Dashboard() {
         </div>
       </div>
 
+      {/* Capacity Recovery Scorecard (hackathon spine KPI) */}
+      <div className="mb-6">
+        <div className={`border p-6 ${demoMode ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Hackathon outcome</div>
+              <div className="font-serif font-bold text-xl text-text">Capacity Recovery Scorecard</div>
+              <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
+                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Find empty gaps</span> to generate a preview plan and see predicted impact.
+              </div>
+            </div>
+            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-occuorange" />
+              Focus: orphan nights ↓ · k-night windows ↑ · revenue at risk ↓
+            </div>
+          </div>
+
+          {scorecardError && (
+            <div className="mt-4 text-xs text-occured border border-occured/30 bg-occured/5 px-4 py-3">
+              {scorecardError}
+            </div>
+          )}
+
+          <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="bg-surface border border-border p-4">
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan nights</div>
+              <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+                {scorecardLoading ? "…" : (scorecard?.before.orphan_nights ?? "—")}
+              </div>
+              {scorecard?.after && scorecard?.delta && (
+                <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
+                  <span className="text-text-muted">After {scorecard.after.orphan_nights}</span>
+                  <span className={(scorecard.delta.orphan_nights <= 0) ? "text-occugreen" : "text-occuorange"}>
+                    Δ {scorecard.delta.orphan_nights}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-surface border border-border p-4">
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Revenue at risk</div>
+              <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+                {scorecardLoading ? "…" : `₹${Math.round(scorecard?.before.revenue_at_risk ?? 0).toLocaleString()}`}
+              </div>
+              {scorecard?.after && scorecard?.delta && (
+                <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
+                  <span className="text-text-muted">After ₹{Math.round(scorecard.after.revenue_at_risk).toLocaleString()}</span>
+                  <span className={(scorecard.delta.revenue_at_risk <= 0) ? "text-occugreen" : "text-occuorange"}>
+                    Δ {Math.round(scorecard.delta.revenue_at_risk).toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-surface border border-border p-4">
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Usable windows</div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {[2, 3].map(k => {
+                  const before = scorecard?.before.k_windows?.[k] ?? 0;
+                  const after = scorecard?.after?.k_windows?.[k] ?? null;
+                  const delta = scorecard?.delta?.k_windows?.[k] ?? null;
+                  return (
+                    <div key={k} className="border border-border bg-surface-2/40 px-3 py-2">
+                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k={k}</div>
+                      <div className="text-xl font-serif font-bold text-text tabular-nums">
+                        {scorecardLoading ? "…" : before}
+                      </div>
+                      {after !== null && delta !== null && (
+                        <div className="text-[10px] font-bold tabular-nums mt-1">
+                          <span className="text-text-muted">After {after}</span>{" "}
+                          <span className={delta >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {delta >= 0 ? `+${delta}` : delta}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {demoMode && (
+                <div className="mt-3 text-[10px] text-text-muted uppercase tracking-widest font-bold">
+                  Demo cue: run preview → point at deltas → commit shuffle → refresh heatmap
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {heatmap && (
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
           <BirdseyeFilters
@@ -737,7 +933,7 @@ export function Dashboard() {
                 </p>
               </div>
               <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold">
-                Sandwich gaps outlined
+                Orphan-night gaps outlined
               </div>
             </div>
 
@@ -802,7 +998,7 @@ export function Dashboard() {
                     <AlertTriangle className={`w-3 h-3 ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-accent"}`} /> Nights at risk{" "}
                     <KpiInfo
                       label="Nights at risk"
-                      text="Count of single EMPTY nights trapped between non-EMPTY nights in the same room row (sandwich gaps). These are hard to sell."
+                      text="Count of single EMPTY nights trapped between non-EMPTY nights in the same room row (orphan-night gaps). These are hard to sell."
                     />
                   </div>
                   <div className={`text-2xl font-bold font-serif tabular-nums ${dashboardKpis.orphanNightsAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
@@ -828,7 +1024,7 @@ export function Dashboard() {
                   </div>
                   <div className="text-[10px] text-text-muted">
                     {dashboardKpis.sandwichMinlosBlockedNights > 0
-                      ? "1-night sandwich gaps blocked by MinLOS"
+                      ? "Orphan-night gaps blocked by MinLOS"
                       : "No MinLOS blocks in this slice"}
                   </div>
                 </div>

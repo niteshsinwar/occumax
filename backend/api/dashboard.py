@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.database import get_db
-from core.schemas import HeatmapResponse, SandwichPlaybookRequest, SandwichPlaybookResponse
+from core.schemas import (
+    HeatmapResponse,
+    SandwichPlaybookRequest,
+    SandwichPlaybookResponse,
+    DashboardScorecardRequest,
+    DashboardScorecardResponse,
+)
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewRequest, DashboardOptimisePreviewResponse
 from core.schemas.dashboard_k_optimise import DashboardKNightPreviewRequest, DashboardKNightPreviewResponse
 from core.schemas.manager import CommitRequest, CommitResult
@@ -61,3 +67,21 @@ async def commit_shuffle(body: CommitRequest, db: AsyncSession = Depends(get_db)
     more contiguous empty runs immediately.
     """
     return await ctrl.commit_shuffle(body=body, db=db)
+
+
+@router.post("/scorecard", response_model=DashboardScorecardResponse)
+async def scorecard(body: DashboardScorecardRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Compute a single KPI object for hackathon "before → after" storytelling.
+
+    If `swap_plan` is provided, computes an in-memory "after" state by applying the plan
+    to the slice (no DB writes) and returns deltas.
+    """
+    return await ctrl.get_scorecard(
+        db=db,
+        start=body.start,
+        end=body.end,
+        categories=body.categories,
+        k_nights=body.k_nights,
+        swap_plan=body.swap_plan,
+    )

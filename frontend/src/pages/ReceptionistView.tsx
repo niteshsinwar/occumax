@@ -312,12 +312,34 @@ export function ReceptionistView() {
             <div className={`p-3 border rounded-sm shrink-0 ${isAvailable ? 'border-occugreen/20 bg-occugreen/5' : 'border-occured/20 bg-occured/5'}`}>
               {result.state === "DIRECT_AVAILABLE" ? <CheckCircle2 className="w-6 h-6 text-occugreen" /> : result.state === "SHUFFLE_POSSIBLE" ? <ClipboardCheck className="w-6 h-6 text-occugreen" /> : <XCircle className="w-6 h-6 text-occured" />}
             </div>
-            <div>
+            <div className="min-w-0">
               <h3 className={`text-xl font-serif font-bold ${isAvailable ? 'text-text' : 'text-occured'}`}>
                 {result.state === "DIRECT_AVAILABLE" && "Room Available"}
-                {result.state === "SHUFFLE_POSSIBLE" && "Room Available via Swap"}
+                {result.state === "SHUFFLE_POSSIBLE" && "Room Available via Rearrangement"}
                 {result.state === "NOT_POSSIBLE" && "No Rooms Available"}
               </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {result.state === "DIRECT_AVAILABLE" && (
+                  <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-occugreen/30 bg-occugreen/5 text-occugreen">
+                    Converted (direct match)
+                  </span>
+                )}
+                {result.state === "SHUFFLE_POSSIBLE" && (
+                  <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-accent/30 bg-accent/5 text-accent">
+                    Rescued via room shuffle
+                  </span>
+                )}
+                {result.state === "NOT_POSSIBLE" && (
+                  <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-occured/30 bg-occured/5 text-occured">
+                    Needs alternatives
+                  </span>
+                )}
+                {result.state === "SHUFFLE_POSSIBLE" && result.swap_plan && result.swap_plan.length > 0 && (
+                  <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-border bg-surface-2 text-text-muted">
+                    {result.swap_plan.length} move{result.swap_plan.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
               <p className="text-xs tracking-wide uppercase font-bold text-text-muted mt-2">{result.message}</p>
             </div>
           </div>
