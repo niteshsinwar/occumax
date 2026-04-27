@@ -219,7 +219,9 @@ export function Dashboard() {
   const [scorecardLoading, setScorecardLoading] = useState(false);
   const [scorecardError, setScorecardError] = useState<string | null>(null);
   const [showAdvancedActions, setShowAdvancedActions] = useState(false);
-  const [showInsights, setShowInsights] = useState(false);
+  const [showInsights, setShowInsights] = useState(true);
+  const [guidedRecoveryStep, setGuidedRecoveryStep] = useState<number | null>(null);
+  const [guidedRecoveryDone, setGuidedRecoveryDone] = useState(false);
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -515,9 +517,17 @@ export function Dashboard() {
   }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan]);
 
   const runRecoveryPlan = useCallback(async () => {
-    // "Run all" demo-friendly action: preview shuffle + apply orphan-night offers (no auto-commit)
+    // Demo-friendly playbook (no auto-commit): make the steps visible for hackathon storytelling.
+    setGuidedRecoveryDone(false);
+    setGuidedRecoveryStep(1);
     await runOptimisePreview();
+
+    setGuidedRecoveryStep(3);
     await runSandwichPlaybook();
+
+    // Step 4 is intentionally "review + optionally commit" (commit is always user-controlled).
+    setGuidedRecoveryStep(4);
+    setGuidedRecoveryDone(true);
   }, [runOptimisePreview, runSandwichPlaybook]);
 
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
@@ -696,7 +706,7 @@ export function Dashboard() {
                 className="bg-occugreen text-white font-semibold hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => runRecoveryPlan()}
                 disabled={!heatmap || isOptimiseLoading}
-                title="Runs preview shuffle + orphan-night offers for this slice"
+                title="Runs the guided playbook steps for this slice (no auto-commit)"
               >
                 Run guided recovery
               </button>
@@ -736,6 +746,74 @@ export function Dashboard() {
               >
                 Advanced {showAdvancedActions ? "▲" : "▼"}
               </button>
+          </div>
+
+          {/* Guided recovery steps (make the playbook explicit for the demo) */}
+          <div className="mt-3 pt-3 border-t border-border/60">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+                Guided recovery steps
+              </div>
+              {guidedRecoveryDone ? (
+                <div className="text-[10px] uppercase tracking-widest font-bold text-occugreen">
+                  Completed
+                </div>
+              ) : guidedRecoveryStep ? (
+                <div className="text-[10px] uppercase tracking-widest font-bold text-accent">
+                  Running step {guidedRecoveryStep}/4
+                </div>
+              ) : (
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+                  4-step playbook
+                </div>
+              )}
+            </div>
+
+            <div className="mt-2 grid grid-cols-1 lg:grid-cols-4 gap-2">
+              {[
+                { n: 1, t: "Preview recovery shuffle", d: "Find a room-rearrangement plan and show predicted deltas." },
+                { n: 2, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
+                { n: 3, t: "Apply orphan-night offers", d: "Relax rules (MinLOS/offer) on stranded 1-night gaps." },
+                { n: 4, t: "Commit (optional)", d: "If the preview looks good, write the shuffle to the DB." },
+              ].map(s => {
+                const active = guidedRecoveryStep === s.n;
+                const done = guidedRecoveryDone ? s.n <= 4 : guidedRecoveryStep ? s.n < guidedRecoveryStep : false;
+                return (
+                  <div
+                    key={s.n}
+                    className={`border p-3 ${
+                      active
+                        ? "border-accent/40 bg-accent/5"
+                        : done
+                          ? "border-occugreen/30 bg-occugreen/5"
+                          : "border-border bg-surface"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 border ${
+                          active
+                            ? "border-accent/30 bg-accent/10 text-accent"
+                            : done
+                              ? "border-occugreen/30 bg-occugreen/10 text-occugreen"
+                              : "border-border bg-surface-2 text-text-muted"
+                        }`}
+                      >
+                        Step {s.n}
+                      </span>
+                      <div className="text-xs font-bold text-text">{s.t}</div>
+                    </div>
+                    <div className="mt-1 text-[11px] text-text-muted leading-relaxed">{s.d}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {guidedRecoveryStep === 4 && !(swapPlan && swapPlan.length > 0) && (
+              <div className="mt-2 text-[11px] text-text-muted">
+                No shuffle plan is available to commit for this slice. Try “Preview recovery shuffle” on a different date range or room types.
+              </div>
+            )}
           </div>
 
           {/* Advanced actions */}
@@ -821,6 +899,45 @@ export function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Insights (auto-generated) — place above scorecard and auto-expand by default */}
+      {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
+        <div className="mt-4 mb-6 bg-accent/5 border border-accent/20 p-6">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Sparkles className="w-4 h-4 text-accent" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
+                Insights (auto-generated)
+              </div>
+              <ul className="space-y-2">
+                {dashboardInsights.map((t, i) => (
+                  <li key={i} className="text-sm text-text leading-relaxed">
+                    {t}
+                  </li>
+                ))}
+              </ul>
+              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
+                Based on the current filters and the visible heatmap window
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {heatmap && dashboardInsights.length > 0 && !demoMode && (
+        <div className="mb-6">
+          <button
+            type="button"
+            className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
+            onClick={() => setShowInsights(v => !v)}
+            title="Show or hide auto-generated summary insights"
+          >
+            {showInsights ? "Hide insights" : "Show insights"}
+          </button>
+        </div>
+      )}
 
       {/* Capacity Recovery Scorecard (hackathon spine KPI) */}
       <div className="mb-6">
@@ -966,11 +1083,27 @@ export function Dashboard() {
         </div>
 
         <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Where do I go for details?</div>
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Recovered revenue (projected)</div>
           <div className="text-sm text-text leading-relaxed">
-            Deep dives are organized by workflow: capacity recovery, pricing decisions, and channel allocation.
+            {scorecard?.after && scorecard?.delta
+              ? (
+                <>
+                  <span className="font-bold">
+                    ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
+                  </span>{" "}
+                  recovered by rescuing{" "}
+                  <span className="font-bold">
+                    {Math.max(0, -scorecard.delta.orphan_nights).toLocaleString("en-US")}
+                  </span>{" "}
+                  orphan night(s) in this slice.
+                </>
+              )
+              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
           </div>
-          <div className="mt-4 grid grid-cols-1 gap-2">
+          <div className="mt-3 text-[10px] uppercase tracking-widest font-bold text-text-muted">
+            Jump to actions
+          </div>
+          <div className="mt-2 grid grid-cols-1 gap-2">
             <button
               type="button"
               className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
@@ -997,43 +1130,6 @@ export function Dashboard() {
           </div>
         </div>
       </div>
-
-      {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
-        <div className="mt-4 bg-accent/5 border border-accent/20 p-6">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-accent" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
-                Insights (auto-generated)
-              </div>
-              <ul className="space-y-2">
-                {dashboardInsights.map((t, i) => (
-                  <li key={i} className="text-sm text-text leading-relaxed">
-                    {t}
-                  </li>
-                ))}
-              </ul>
-              <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
-                Based on the current filters and the visible heatmap window
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {heatmap && dashboardInsights.length > 0 && !demoMode && (
-        <div className="mt-4">
-          <button
-            type="button"
-            className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-            onClick={() => setShowInsights(v => !v)}
-          >
-            {showInsights ? "Hide insights" : "Show insights"}
-          </button>
-        </div>
-      )}
 
       {/* 60/40 layout: Heatmap (60) + KPIs (40) */}
       {heatmap && (
