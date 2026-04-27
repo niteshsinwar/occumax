@@ -1,9 +1,8 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from "react-router-dom";
-import { ManagerDashboard } from "./pages/ManagerDashboard";
 import { Dashboard } from "./pages/Dashboard";
 import { ReceptionistView } from "./pages/ReceptionistView";
 import { AdminPanel } from "./pages/AdminPanel";
-import { LayoutDashboard, Users, Settings, Grid3x3 } from "lucide-react";
+import { Users, Settings, Grid3x3 } from "lucide-react";
 
 /** Top Level Application Shell */
 export default function App() {
@@ -31,12 +30,6 @@ function AppLayout() {
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
                   <Grid3x3 className="w-4 h-4" /> Overview
-                </NavLink>
-                <NavLink
-                  to="/manager"
-                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
-                >
-                  <LayoutDashboard className="w-4 h-4" /> Manager
                 </NavLink>
                 <NavLink
                   to="/receptionist"
@@ -67,7 +60,7 @@ function AppLayout() {
         <div className="bg-surface rounded-sm shadow-subtle border border-border/70 border-t-4 border-t-accent p-8 sm:p-10 min-h-[600px] relative">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/manager" element={<ManagerDashboard />} />
+            <Route path="/manager" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/receptionist" element={<ReceptionistView />} />
             <Route path="/admin" element={<AdminPanel />} />

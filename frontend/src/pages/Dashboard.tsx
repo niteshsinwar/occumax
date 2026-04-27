@@ -598,7 +598,7 @@ export function Dashboard() {
             <div className="px-6 py-4 space-y-2.5 border-b border-border">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-text-muted font-medium">Night rate</span>
-                <span className="font-mono font-bold text-text">₹{slotModal.rate.toLocaleString()}</span>
+                <span className="font-mono font-bold text-text">${slotModal.rate.toLocaleString("en-US")}</span>
               </div>
               {slotModal.block === "SOFT" && slotModal.channel && (
                 <div className="flex items-center justify-between text-xs">
@@ -839,13 +839,13 @@ export function Dashboard() {
             <div className="bg-surface border border-border p-4">
               <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Revenue at risk</div>
               <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-                {scorecardLoading ? "…" : `₹${Math.round(scorecard?.before.revenue_at_risk ?? 0).toLocaleString()}`}
+                {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.revenue_at_risk ?? 0).toLocaleString("en-US")}`}
               </div>
               {scorecard?.after && scorecard?.delta && (
                 <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
-                  <span className="text-text-muted">After ₹{Math.round(scorecard.after.revenue_at_risk).toLocaleString()}</span>
+                  <span className="text-text-muted">After ${Math.round(scorecard.after.revenue_at_risk).toLocaleString("en-US")}</span>
                   <span className={(scorecard.delta.revenue_at_risk <= 0) ? "text-occugreen" : "text-occuorange"}>
-                    Δ {Math.round(scorecard.delta.revenue_at_risk).toLocaleString()}
+                    Δ {Math.round(scorecard.delta.revenue_at_risk).toLocaleString("en-US")}
                   </span>
                 </div>
               )}
@@ -984,7 +984,7 @@ export function Dashboard() {
                     />
                   </div>
                   <div className="text-2xl font-bold font-serif text-text tabular-nums">
-                    ₹{Math.round(dashboardKpis.avgRateInView).toLocaleString()}
+                    ${Math.round(dashboardKpis.avgRateInView).toLocaleString("en-US")}
                   </div>
                   <div className="text-[10px] text-text-muted">
                     {dashboardKpis.avgRateNightCount > 0
@@ -1006,7 +1006,7 @@ export function Dashboard() {
                   </div>
                   <div className="text-[10px] text-text-muted">
                     {dashboardKpis.orphanNightsAtRisk > 0
-                      ? `₹${dashboardKpis.orphanRevenueAtRisk.toLocaleString()} at risk`
+                      ? `$${dashboardKpis.orphanRevenueAtRisk.toLocaleString("en-US")} at risk`
                       : "No orphan gaps in selected range"}
                   </div>
                 </div>

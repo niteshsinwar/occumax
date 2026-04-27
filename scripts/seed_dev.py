@@ -105,7 +105,7 @@ def seed_rooms():
             continue
         r = requests.post(f"{BASE}/admin/rooms", json=room, timeout=15)
         if r.status_code in (200, 201):
-            print(f"  + {room['id']}  {room['category']:<10}  ₹{room['base_rate']:,}")
+            print(f"  + {room['id']}  {room['category']:<10}  ${room['base_rate']:,}")
             created += 1
         else:
             print(f"  FAIL {room['id']}: {r.status_code} {r.text[:80]}")

@@ -768,13 +768,13 @@ async def get_channel_performance(
     if ota_share > 60:
         recommendation = (
             f"OTA dependency is high at {ota_share}% of bookings. "
-            f"₹{int(commission_leak):,} lost to commissions this period. "
+            f"${int(commission_leak):,} lost to commissions this period. "
             "Offer a 5% direct booking discount to shift guests off OTA — net revenue improves immediately."
         )
     elif direct_share > 50:
         recommendation = (
             f"Strong direct booking mix at {direct_share}%. "
-            f"Net revenue is ₹{int(total_net):,} vs gross ₹{int(total_gross):,} — minimal commission drain. "
+            f"Net revenue is ${int(total_net):,} vs gross ${int(total_gross):,} — minimal commission drain. "
             "Keep incentivising direct with loyalty perks or early-bird rates."
         )
     elif ota_stat and ota_stat.avg_rate < (total_gross / max(1, total_nights)) * 0.95:
@@ -785,7 +785,7 @@ async def get_channel_performance(
         )
     else:
         recommendation = (
-            f"Channel mix is balanced. Commission cost is ₹{int(commission_leak):,} this period. "
+            f"Channel mix is balanced. Commission cost is ${int(commission_leak):,} this period. "
             "Focus on pushing direct for high-value room categories (Deluxe/Suite) to maximise net yield."
         )
 

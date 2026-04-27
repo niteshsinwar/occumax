@@ -118,7 +118,7 @@ export function AdminPanel() {
     if (isNaN(rate) || rate <= 0) { show("Enter a valid rate", "error"); return; }
     try {
       await adminUpdateRoom(id, { base_rate: rate });
-      show(`Room ${id} base rate updated to ₹${rate.toLocaleString("en-IN")}`, "success");
+      show(`Room ${id} base rate updated to $${rate.toLocaleString("en-US")}`, "success");
       setEditingRoom(null);
       load();
     } catch { show("Failed to update rate", "error"); }
@@ -127,7 +127,7 @@ export function AdminPanel() {
   const handleSeedAnalytics = async () => {
     if (!seedStart || !seedEnd) { show("Select a start and end date", "error"); return; }
     if (seedEnd <= seedStart) { show("End date must be after start date", "error"); return; }
-    if (!confirm(`Generate demo historical bookings/slots for ${seedStart} → ${seedEnd} at ~${seedFillPct}% occupancy? This will DELETE bookings in that historical window and recreate them as DEMO_ANALYTICS.`)) return;
+    if (!confirm(`Generate demo bookings/slots for ${seedStart} → ${seedEnd} at ~${seedFillPct}% occupancy? This will DELETE bookings in that window and recreate them as DEMO_ANALYTICS.`)) return;
     setSeedLoading(true);
     try {
       const res = await adminSeedAnalyticsHistory({ start: seedStart, end: seedEnd, fill_pct: seedFillPct });
@@ -207,13 +207,13 @@ export function AdminPanel() {
           </div>
         </div>
         <p className="text-xs uppercase tracking-wider text-text-muted mt-1 font-medium">
-          Add rooms, set base rates, and load historical data for better forecasting
+          Add rooms, set base rates, and generate booking data for better forecasting
         </p>
 
         <div className="mt-4 flex flex-col sm:flex-row sm:items-end sm:justify-start gap-3">
           <div className="flex items-end gap-2 bg-surface border border-border px-3 py-2 shadow-subtle">
             <div className="space-y-1">
-              <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Historical data range</div>
+              <div className="text-[9px] font-bold text-text-muted uppercase tracking-widest">Data range</div>
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <input
                   type="date"
@@ -252,10 +252,10 @@ export function AdminPanel() {
             className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2"
             onClick={handleSeedAnalytics}
             disabled={seedLoading}
-            title="Load past booking history so the AI forecast and analytics have real data to work with"
+            title="Generate booking history so the AI forecast and analytics have data to work with"
           >
             <Sparkles className={`w-3.5 h-3.5 ${seedLoading ? "animate-pulse text-accent" : "text-accent"}`} />
-            Load History for AI
+            Generate Data for AI
           </button>
           <button className="bg-surface border border-accent/30 shadow-subtle text-text text-xs uppercase tracking-widest font-semibold hover:bg-surface-2 active:scale-95 transition-all px-6 py-3 rounded-sm flex items-center gap-2" onClick={load} disabled={loading}>
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-accent' : 'text-accent'}`} /> Refresh Data
@@ -273,7 +273,7 @@ export function AdminPanel() {
               {c.room_count} <span className="text-[10px] font-medium text-text-muted uppercase tracking-widest">rooms</span>
             </div>
             <div className="text-[10px] font-semibold text-text-muted mt-2 bg-surface-2 px-2 py-1 inline-block border border-border">
-              ₹{c.min_rate} – ₹{c.max_rate}
+              ${c.min_rate} – ${c.max_rate}
             </div>
           </div>
         ))}
@@ -311,7 +311,7 @@ export function AdminPanel() {
                 </select>
               </div>
               <div className="space-y-1.5">
-                <label>Base Rate (₹)</label>
+                <label>Base Rate ($)</label>
                 <input className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-2.5 focus:border-accent focus:ring-1 focus:ring-accent outline-none" type="number" value={newRoom.base_rate} onChange={(e) => setNewRoom({ ...newRoom, base_rate: Number(e.target.value) })} />
               </div>
               <div className="space-y-1.5">
@@ -369,7 +369,7 @@ export function AdminPanel() {
                             title="Click to edit base rate"
                             onClick={() => { setEditingRoom(r.id); setEditRate(String(r.base_rate)); }}
                           >
-                            ₹{r.base_rate.toLocaleString("en-IN")} <Edit2 className="w-3 h-3 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                            ${r.base_rate.toLocaleString("en-US")} <Edit2 className="w-3 h-3 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
                           </span>
                         )}
                       </td>

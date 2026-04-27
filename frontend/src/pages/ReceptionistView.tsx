@@ -856,7 +856,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
         <div className="flex items-center gap-2 px-3 py-2 bg-accent/10 border-b border-accent/20 text-xs font-bold uppercase tracking-wider text-accent">
           <Sparkles className="w-3.5 h-3.5 shrink-0" />
           Split Stay — {d.segments?.length} rooms · {d.discount_pct}% discount
-          <span className="ml-auto font-mono font-normal normal-case text-text">₹{d.total_rate?.toLocaleString()} total</span>
+          <span className="ml-auto font-mono font-normal normal-case text-text">${d.total_rate?.toLocaleString("en-US")} total</span>
         </div>
 
         {/* Segment timeline */}
@@ -870,7 +870,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
                 <span className="font-mono font-bold text-text">Room {seg.room_id}</span>
                 <span className="text-text-muted">Floor {seg.floor}</span>
                 <span className="text-text-muted">{seg.check_in} → {seg.check_out}</span>
-                <span className="text-text font-medium">₹{seg.discounted_rate?.toLocaleString()}/night</span>
+                <span className="text-text font-medium">${seg.discounted_rate?.toLocaleString("en-US")}/night</span>
               </div>
               <span className="text-text-muted shrink-0">{seg.nights}n</span>
             </div>
@@ -880,9 +880,9 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
         {/* Divider + savings callout */}
         {d.discount_pct > 0 && (
           <div className="px-3 py-2 border-t border-accent/20 text-[10px] text-accent font-medium">
-            {d.discount_pct}% consecutive-stay discount saves ₹{
+            {d.discount_pct}% consecutive-stay discount saves ${
               Math.round(d.segments?.reduce((acc, s) => acc + s.nights * (s.base_rate - s.discounted_rate), 0) ?? 0)
-                .toLocaleString()
+                .toLocaleString("en-US")
             } vs full rate
           </div>
         )}

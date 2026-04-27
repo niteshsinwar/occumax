@@ -135,7 +135,7 @@ Rules for recommendations:
   - Only recommend dates where action is warranted (occ < 50% or occ > 80%).
   - Omit 50–80% dates unless pickup pace is abnormally slow.
   - Max 30 recommendations total. Focus on the most impactful.
-  - suggested_rate must be rounded to nearest ₹100.
+  - suggested_rate must be rounded to nearest $100.
   - change_pct = round((suggested_rate - current_rate) / current_rate * 100, 1)
   - Confidence: HIGH if occ >85% or <30%, MEDIUM if 70–85% or 30–50%, LOW otherwise.
   - reason field: MUST be 15–30 words, market-aware, specific to the date/day-of-week
