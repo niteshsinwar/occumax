@@ -18,7 +18,6 @@ import type {
 } from "../types";
 import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
-import { BirdseyeInventoryHighlights } from "../components/BirdseyeInventoryHighlights";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
@@ -320,11 +319,6 @@ export function Dashboard() {
     if (!heatmap || !plan || plan.length === 0) return null;
     return simulateRows(filteredRows, plan);
   }, [heatmap, filteredRows, kNightSwapPlan, swapPlan]);
-
-  const projectedSnapshot = useMemo(() => {
-    if (!simulatedRows) return null;
-    return computeEmptyRunInventory(simulatedRows, spanDays);
-  }, [simulatedRows, spanDays]);
 
   const refreshAllData = useCallback(async () => {
     await loadHeatmap();
@@ -915,6 +909,95 @@ export function Dashboard() {
         </div>
       </div>
 
+      {/* What’s broken / what to do / where to go (story spine) */}
+      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="bg-surface border border-border p-5">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
+          <div className="text-sm text-text leading-relaxed">
+            {scorecard?.before
+              ? (
+                <>
+                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
+                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
+                </>
+              )
+              : "Select a slice to see stranded capacity and revenue at risk."}
+          </div>
+          <button
+            type="button"
+            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+            onClick={() => setActiveTab("occupancy")}
+          >
+            View capacity details
+          </button>
+        </div>
+
+        <div className="bg-surface border border-border p-5">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
+            <span
+              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
+              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
+            >
+              AI
+            </span>
+          </div>
+          <div className="text-sm text-text leading-relaxed">
+            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
+              onClick={() => runOptimisePreview()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Preview shuffle
+            </button>
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
+              onClick={() => runSandwichPlaybook()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Apply offers
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-border p-5">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Where do I go for details?</div>
+          <div className="text-sm text-text leading-relaxed">
+            Deep dives are organized by workflow: capacity recovery, pricing decisions, and channel allocation.
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-2">
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+              onClick={() => setActiveTab("occupancy")}
+            >
+              Occupancy
+            </button>
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+              onClick={() => setActiveTab("pricing")}
+              title="AI-assisted pricing recommendations"
+            >
+              Pricing (AI)
+            </button>
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+              onClick={() => setActiveTab("channels")}
+              title="AI-assisted channel allocation recommendations"
+            >
+              Channels (AI)
+            </button>
+          </div>
+        </div>
+      </div>
+
       {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
         <div className="mt-4 bg-accent/5 border border-accent/20 p-6">
           <div className="flex items-start gap-3">
@@ -1092,16 +1175,6 @@ export function Dashboard() {
               </div>
             )}
 
-            {/* Availability at a glance (numbers-only to save space) */}
-            {snapshot && (
-              <BirdseyeInventoryHighlights
-                snapshot={snapshot}
-                projectedSnapshot={projectedSnapshot}
-                maxDays={spanDays}
-                columns={1}
-                mode="numbers"
-              />
-            )}
           </div>
         </div>
       )}
