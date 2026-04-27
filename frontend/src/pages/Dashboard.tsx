@@ -697,17 +697,6 @@ export function Dashboard() {
             selectedCategories={selectedCategories}
             onToggleCategory={handleToggleCategory}
           />
-          {activeTab === "dashboard" && (
-            <button
-              type="button"
-              className="self-start bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-3 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-              onClick={() => refreshAllData()}
-              disabled={isHeatmapLoading}
-              title="Refresh all dashboard data for the current filters"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh
-            </button>
-          )}
         </div>
       )}
 
