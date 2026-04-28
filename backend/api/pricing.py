@@ -23,7 +23,7 @@ router = APIRouter(prefix="/manager/pricing", tags=["pricing"])
 
 
 @router.get("/analyse", response_model=PricingAnalyseResponse)
-async def analyse_pricing(db: AsyncSession = Depends(get_db)):
+async def analyse_pricing():
     """
     Run the pricing AI agent against live occupancy data.
 
@@ -32,7 +32,7 @@ async def analyse_pricing(db: AsyncSession = Depends(get_db)):
 
     Nothing is written to the database — call POST /commit to apply changes.
     """
-    return await ctrl.analyse(db)
+    return await ctrl.analyse()
 
 
 @router.post("/commit", response_model=PricingCommitResult)

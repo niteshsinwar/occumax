@@ -32,7 +32,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
 from core.models import Room, Booking
@@ -43,36 +43,52 @@ logger = logging.getLogger(__name__)
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM = """\
-You are the Revenue Management AI for {hotel_name}, a hotel in Pune, India.
+You are the Revenue Management AI (RateIQ) for {hotel_name}, a hotel in New Jersey, USA.
 Today is {today}.
 
 Your job: analyse hotel occupancy data and produce intelligent, market-aware
-pricing recommendations for each room category over the booking window.
+pricing recommendations for Standard, Deluxe, and Suite categories.
 
-Occupancy Tier-1 snapshot (next 14 days):
+Occupancy Tier-1 snapshot (next 14 days — Standard, Deluxe, Suite):
 {context}
 
-── Pune Hotel Market Context ─────────────────────────────────────────────────
+── New Jersey Hotel Market Context ───────────────────────────────────────────
 Use this context to make reason fields specific and insightful — not generic.
 
 Demand drivers:
-  • Weekdays (Mon–Thu): Corporate travellers from Hinjewadi, Magarpatta, Kharadi
-    IT corridors. Business demand is relatively rate-inelastic. Hold rates firm.
-  • Weekends (Fri–Sun): Leisure, family, couples from Mumbai and Nashik. Price-
-    sensitive. Discounts or packages work better than flat cuts.
-  • Peak seasons: Oct–Feb (pleasant weather, wedding season, conferences).
-    Mar–May: IT company offsites, but pre-summer heat slows leisure.
-    Jun–Sep monsoon: leisure drops significantly; corporate steady.
-    Dec: Christmas + New Year — Suites/Deluxe fill fast.
-  • Key events: Pune Festival (Oct), Ganesh Chaturthi (Aug/Sep — huge leisure
-    spike), IPL season (Apr–May — hotel bars/screens drive walk-in demand),
-    Lakshmipuja wedding season (Nov–Jan), major IT conferences (Mar, Sep).
+  • Weekdays (Mon–Thu): Corporate travelers — pharma (J&J, Novartis, Sanofi in
+    Titusville/East Hanover), finance (Goldman/Morgan Stanley NJ offices), and
+    tech (AT&T, Cognizant campuses). Business demand is rate-inelastic. Hold firm.
+  • Weekends (Fri–Sun): Drive-to leisure from NYC, Philadelphia, and Long Island.
+    Price-sensitive. Packages (parking, breakfast) outperform flat discounts.
+  • Peak seasons:
+    May–Jun: Graduation season (Princeton, Rutgers, Seton Hall, Montclair State)
+              — Suites and Deluxe fill weeks in advance; hold rates firm.
+    Jun–Aug: Shore drive market (Asbury Park, Long Beach Island, Cape May).
+              Weekend leisure peaks; weekday corporate continues.
+    Sep–Nov: Fall foliage, NFL season (Giants/Jets at MetLife Stadium in East
+              Rutherford), and conference season. Strong mixed demand.
+    Dec:     Holiday corporate parties + leisure — Short Hills Mall, NYC day trips.
+              Suites and Deluxe sell at a premium.
+    Mar–Apr: Spring shoulder — softer leisure; corporate steady.
+
+  • Key demand events (factor into rate reasoning when dates align):
+    -- MetLife Stadium (East Rutherford): concerts and NFL games → +25–40% Deluxe/Suite
+       uplift within 2 nights of event; bookings arrive 7–10 days out.
+    -- Atlantic City casino conventions → mid-week Standard/Deluxe bump.
+    -- NJ Convention & Expo Center (Edison): pharma summits, NJEA, trade shows
+       fill Standard 3–6 weeks out.
+    -- Princeton/Rutgers graduation weekends (mid-May) → 95%+ Suite occupancy.
+    -- Asbury Park summer concert series (Jun–Aug weekends) → leisure spike.
+    -- NYC overflow: when NYC hotel rates spike above $400/night, NJ captures
+       overflow guests booking 1–3 days out — watch for late-arrival pickup surges.
 
 OTA dynamics:
-  • MakeMyTrip, Goibibo, Agoda dominate Pune OTA bookings.
-  • Economy and Standard rooms face highest OTA price competition.
-  • Suites and Premium rooms have fewer direct OTA competitors — hold rates.
-  • Last-minute OTA discounts (2–3 days out) typically drive Economy/Standard fill.
+  • Expedia, Booking.com, Hotels.com, and Priceline dominate NJ OTA bookings.
+  • Standard rooms face highest OTA price competition — Priceline flash deals.
+  • Suites and Deluxe have fewer OTA competitors — hold rates and push direct.
+  • Last-minute OTA deals (1–2 days out) drive Standard/Deluxe fill during NYC
+    overflow nights.
 
 ── Pricing Rules ─────────────────────────────────────────────────────────────
 Occupancy thresholds (adjust for lead time, pickup pace, and day-of-week):
@@ -84,9 +100,9 @@ Occupancy thresholds (adjust for lead time, pickup pace, and day-of-week):
 
 Day-of-week adjustment:
   Weekday low occ (<40%): standard discount — corporate bookings are rate-sticky
-  Weekend low occ (<40%): leisure package angle, mention F&B/spa bundle potential
-  Weekday high occ (>80%): increase confidently — corporate guests book on company
-  Weekend high occ (>80%): increase but not excessively — leisure guests are elastic
+  Weekend low occ (<40%): leisure package angle, mention parking/breakfast bundle
+  Weekday high occ (>80%): increase confidently — corporate guests book on company card
+  Weekend high occ (>80%): increase moderately — leisure guests are elastic
 
 Lead-time rule:
   Check-in within 3 days  → tighten discounts (urgency pricing, OTA visibility)
@@ -101,7 +117,8 @@ Floor-rate constraint (HARD): NEVER suggest a rate below floor_rate for any date
 
 ── Tools ─────────────────────────────────────────────────────────────────────
 get_pricing_context(category, start_date, end_date)
-  → Per-date occupancy + rate detail for a specific range (up to 30 days).
+  → Per-date occupancy + rate detail for a range (up to 30 days).
+  → Focus on STANDARD, DELUXE, SUITE.
 
 get_low_occupancy_dates(category, threshold_pct=50.0)
   → Dates in next 30 days where category occupancy is below threshold_pct.
@@ -116,34 +133,34 @@ After calling the tools you need, output a JSON object (no markdown fence) with:
     "recommendations": [
       {{
         "category": "DELUXE",
-        "date": "2026-04-18",
-        "current_rate": 5000,
-        "suggested_rate": 5500,
-        "change_pct": 10.0,
+        "date": "2026-05-16",
+        "current_rate": 249,
+        "suggested_rate": 329,
+        "change_pct": 32.1,
         "confidence": "HIGH",
-        "reason": "Friday night in Pune — weekend leisure demand peaks; Deluxe at 90% OTB with strong pickup. Capture the last rooms at a premium.",
-        "occupancy_pct": 82.0,
-        "otb": 5,
-        "floor_rate": 3500
+        "reason": "Friday before Rutgers graduation weekend — Deluxe at 92% OTB; families book 10+ days ahead and are rate-inelastic. Capture last rooms at peak.",
+        "occupancy_pct": 92.0,
+        "otb": 9,
+        "floor_rate": 149
       }},
       ...
     ],
-    "summary": "Concise 2–3 sentence summary referencing Pune market conditions, which categories need action, and one actionable management insight."
+    "summary": "Concise 2–3 sentence summary referencing NJ market conditions, which categories need action, and one actionable management insight."
   }}
 
 Rules for recommendations:
+  - Focus on STANDARD, DELUXE, and SUITE. Include other categories only if clearly impactful.
   - Only recommend dates where action is warranted (occ < 50% or occ > 80%).
   - Omit 50–80% dates unless pickup pace is abnormally slow.
   - Max 30 recommendations total. Focus on the most impactful.
-  - suggested_rate must be rounded to nearest $100.
+  - All rates in USD. suggested_rate must be rounded to nearest $5.
   - change_pct = round((suggested_rate - current_rate) / current_rate * 100, 1)
   - Confidence: HIGH if occ >85% or <30%, MEDIUM if 70–85% or 30–50%, LOW otherwise.
   - reason field: MUST be 15–30 words, market-aware, specific to the date/day-of-week
-    and Pune demand context. NEVER write just "X% occupancy, aggressive discount."
-    Always explain WHY in the context of the Pune hotel market.
-  - summary: Reference actual Pune conditions, not just numbers. Mention the
-    highest-priority action (e.g., "Weekend Deluxe is nearly sold out — hold rates
-    firm. Economy midweek gap needs OTA visibility boost before Thursday.")
+    and NJ demand context. Reference events (MetLife, graduation, shore season, NYC overflow)
+    when relevant. NEVER write just "X% occupancy, aggressive discount."
+  - summary: Reference NJ conditions — events, seasons, channel pressure. Mention the
+    highest-priority action and any event-driven opportunity.
 
 Output ONLY the JSON object. No explanation text before or after.
 """
@@ -151,7 +168,7 @@ Output ONLY the JSON object. No explanation text before or after.
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
-def _make_tools(snapshot: dict, db: AsyncSession, today: date):
+def _make_tools(snapshot: dict, session_factory: async_sessionmaker, today: date):
     """Create tool callables bound to the current request's data."""
 
     @tool
@@ -221,15 +238,16 @@ def _make_tools(snapshot: dict, db: AsyncSession, today: date):
         """
         cutoff = today - timedelta(days=max(1, min(days_back, 30)))
         try:
-            res = await db.execute(
-                select(Booking.id, Booking.check_in, Booking.created_at)
-                .join(Room, Booking.assigned_room_id == Room.id)
-                .where(
-                    Room.category == category.upper(),
-                    Booking.created_at >= cutoff,
+            async with session_factory() as db:
+                res = await db.execute(
+                    select(Booking.id, Booking.check_in, Booking.created_at)
+                    .join(Room, Booking.assigned_room_id == Room.id)
+                    .where(
+                        Room.category == category.upper(),
+                        Booking.created_at >= cutoff,
+                    )
                 )
-            )
-            rows = res.all()
+                rows = res.all()
         except Exception as e:
             logger.warning("get_pickup_pace query error: %s", e)
             rows = []
@@ -323,13 +341,13 @@ async def run_pricing_agent(
     snapshot: dict,
     context_text: str,
     today: date,
-    db: AsyncSession,
+    session_factory: async_sessionmaker,
 ) -> dict:
     """
     Run one pricing analysis turn.
     Returns dict: { recommendations: [...], summary: str }
     """
-    tools = _make_tools(snapshot, db, today)
+    tools = _make_tools(snapshot, session_factory, today)
     graph = _build_graph(tools)
 
     system_prompt = _SYSTEM.format(
@@ -357,6 +375,13 @@ async def run_pricing_agent(
     except asyncio.TimeoutError:
         logger.error("Pricing agent timed out after 290s")
         return {"recommendations": [], "summary": "Analysis timed out — try again or reduce the booking window."}
+    except Exception as exc:
+        msg = str(exc)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "spending cap" in msg:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=503, detail="Gemini API spending cap reached. Go to ai.studio/spend to increase your limit.")
+        logger.error("Pricing agent error: %s", msg)
+        raise
     messages = result["messages"]
 
     # Last AIMessage without tool_calls = final answer

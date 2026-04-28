@@ -164,7 +164,7 @@ export function PricingPanel() {
           <div>
             <div className="text-sm font-bold text-text">Dynamic Pricing AI</div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-              Gemini analyses occupancy + pickup to recommend per-category daily rates
+              RateIQ analyses occupancy + pickup to recommend per-category daily rates
             </div>
           </div>
         </div>
@@ -227,7 +227,7 @@ export function PricingPanel() {
               <div className="w-8 h-8 border-2 border-border border-t-accent rounded-full animate-spin shrink-0" />
               <div>
                 <div className="text-sm font-bold text-text font-serif">AI Pricing Analysis</div>
-                <div className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Powered by Gemini</div>
+                <div className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Powered by RateIQ</div>
               </div>
             </div>
             <div className="space-y-3">

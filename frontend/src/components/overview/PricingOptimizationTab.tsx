@@ -175,8 +175,9 @@ export function PricingOptimizationTab() {
           { decision: null, overrideValue: String(r.suggested_rate) },
         ])
       ));
-    } catch {
-      show("Pricing analysis failed", "error");
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      show(detail ?? "Pricing analysis failed", "error");
     } finally {
       setAnalysing(false);
     }
@@ -184,8 +185,8 @@ export function PricingOptimizationTab() {
 
   const activeRecs = useMemo(() => {
     if (!pricing) return [] as PricingRecommendation[];
-    const cats = new Set(selectedCategories);
-    return pricing.recommendations.filter(r => cats.has(r.category as RoomCategory));
+    const cats = new Set(selectedCategories.map(c => c.toUpperCase()));
+    return pricing.recommendations.filter(r => cats.has(r.category.toUpperCase()));
   }, [pricing, selectedCategories]);
 
   const recsByCategory = useMemo(() => {
@@ -281,7 +282,7 @@ export function PricingOptimizationTab() {
           <div>
             <div className="text-sm font-bold text-text flex items-center gap-2">
               Pricing Optimization{" "}
-              <AiTag title="Gemini analyzes occupancy and stranded gaps for rate actions, and runs a predictive what-if discount ladder (demand, net price, revenue index) to contextualize discount depth." />
+              <AiTag title="RateIQ analyzes occupancy and stranded gaps for rate actions, and runs a predictive what-if discount ladder (demand, net price, revenue index) to contextualize discount depth." />
             </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
               Fragmentation-aware rate actions · tie discounts to stranded inventory
@@ -443,7 +444,7 @@ export function PricingOptimizationTab() {
         {analysing && (
           <div className="py-24 text-center text-text-muted text-sm">
             <Loader2 className="w-5 h-5 animate-spin inline-block mr-2" />
-            Running Gemini pricing analysis…
+            Running RateIQ pricing analysis…
           </div>
         )}
 
