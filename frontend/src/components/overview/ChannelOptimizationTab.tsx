@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   channelAllocate,
   getChannelPartners,
@@ -128,8 +128,9 @@ export function ChannelOptimizationTab() {
     try {
       const res = await getChannelRecommendations();
       setAiRecs(res.data as ChannelRecommendResponse);
-    } catch {
-      show("AI channel analysis failed", "error");
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      show(detail ?? "AI channel analysis failed", "error");
     } finally {
       setAiRecsLoading(false);
     }
@@ -495,8 +496,8 @@ export function ChannelOptimizationTab() {
                               : "bg-surface-2 text-text-muted border-border"
                     }`;
                     return (
-                      <>
-                        <tr key={ch.channel} className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
+                      <Fragment key={ch.channel}>
+                        <tr className="border-b border-border/30 bg-surface hover:bg-surface-2/30 transition-colors">
                           <td className="px-6 py-3">
                             <span className={channelBadge}>{ch.channel}</span>
                           </td>
@@ -525,7 +526,7 @@ export function ChannelOptimizationTab() {
                           </td>
                         </tr>
                         {ch.partners.map((pt: PartnerStat) => (
-                          <tr key={`${ch.channel}-${pt.partner}`} className="border-b border-border/10 bg-surface-2/20">
+                          <tr key={pt.partner} className="border-b border-border/10 bg-surface-2/20">
                             <td className="px-6 py-1.5 pl-10">
                               <span className="text-[10px] text-text-muted font-medium">↳ {pt.partner}</span>
                             </td>
@@ -538,7 +539,7 @@ export function ChannelOptimizationTab() {
                             <td className="px-6 py-1.5" />
                           </tr>
                         ))}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>

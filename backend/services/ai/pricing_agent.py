@@ -32,7 +32,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
 from core.models import Room, Booking
@@ -168,7 +168,7 @@ Output ONLY the JSON object. No explanation text before or after.
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
-def _make_tools(snapshot: dict, db: AsyncSession, today: date):
+def _make_tools(snapshot: dict, session_factory: async_sessionmaker, today: date):
     """Create tool callables bound to the current request's data."""
 
     @tool
@@ -238,15 +238,16 @@ def _make_tools(snapshot: dict, db: AsyncSession, today: date):
         """
         cutoff = today - timedelta(days=max(1, min(days_back, 30)))
         try:
-            res = await db.execute(
-                select(Booking.id, Booking.check_in, Booking.created_at)
-                .join(Room, Booking.assigned_room_id == Room.id)
-                .where(
-                    Room.category == category.upper(),
-                    Booking.created_at >= cutoff,
+            async with session_factory() as db:
+                res = await db.execute(
+                    select(Booking.id, Booking.check_in, Booking.created_at)
+                    .join(Room, Booking.assigned_room_id == Room.id)
+                    .where(
+                        Room.category == category.upper(),
+                        Booking.created_at >= cutoff,
+                    )
                 )
-            )
-            rows = res.all()
+                rows = res.all()
         except Exception as e:
             logger.warning("get_pickup_pace query error: %s", e)
             rows = []
@@ -340,13 +341,13 @@ async def run_pricing_agent(
     snapshot: dict,
     context_text: str,
     today: date,
-    db: AsyncSession,
+    session_factory: async_sessionmaker,
 ) -> dict:
     """
     Run one pricing analysis turn.
     Returns dict: { recommendations: [...], summary: str }
     """
-    tools = _make_tools(snapshot, db, today)
+    tools = _make_tools(snapshot, session_factory, today)
     graph = _build_graph(tools)
 
     system_prompt = _SYSTEM.format(
@@ -374,6 +375,13 @@ async def run_pricing_agent(
     except asyncio.TimeoutError:
         logger.error("Pricing agent timed out after 290s")
         return {"recommendations": [], "summary": "Analysis timed out — try again or reduce the booking window."}
+    except Exception as exc:
+        msg = str(exc)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "spending cap" in msg:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=503, detail="Gemini API spending cap reached. Go to ai.studio/spend to increase your limit.")
+        logger.error("Pricing agent error: %s", msg)
+        raise
     messages = result["messages"]
 
     # Last AIMessage without tool_calls = final answer

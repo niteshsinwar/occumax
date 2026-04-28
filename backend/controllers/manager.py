@@ -22,6 +22,7 @@ from core.schemas.analytics import ChannelRecommendResponse, ChannelRecommendati
 from core.channel_config import OTA_PARTNER_NAMES, GDS_PARTNER_NAMES
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 from services.ai.channel_agent import run_channel_agent
+from services.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ def _iter_nights(start: date, end: date):
         cur += timedelta(days=1)
 
 
-async def get_channel_recommendations(db: AsyncSession) -> ChannelRecommendResponse:
+async def get_channel_recommendations() -> ChannelRecommendResponse:
     """
     Build occupancy context snapshot and invoke the Gemini channel agent.
     Returns AI-generated channel allocation recommendations.
@@ -331,16 +332,18 @@ async def get_channel_recommendations(db: AsyncSession) -> ChannelRecommendRespo
     today = date.today()
     look_end = today + timedelta(days=14)
 
-    rows = (await db.execute(
-        select(Room.category, Slot.date, Slot.block_type)
-        .join(Room, Room.id == Slot.room_id)
-        .where(
-            Room.is_active == True,
-            Slot.date >= today,
-            Slot.date < look_end,
-        )
-        .order_by(Slot.date)
-    )).all()
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(Room.category, Slot.date, Slot.block_type)
+            .join(Room, Room.id == Slot.room_id)
+            .where(
+                Room.is_active == True,
+                Slot.date >= today,
+                Slot.date < look_end,
+            )
+            .order_by(Slot.date)
+        )).all()
+    # session closed — AI agent runs below without holding a connection
 
     # Build per-category daily occupancy summary
     from collections import defaultdict
@@ -363,10 +366,10 @@ async def get_channel_recommendations(db: AsyncSession) -> ChannelRecommendRespo
 
     context_text = "\n".join(lines) if lines else "No inventory data available."
 
-    raw = await run_channel_agent(context_text, today, db)
+    raw = await run_channel_agent(context_text, today, AsyncSessionLocal)
 
     recs = [
-        ChannelRecommendation(**r)
+        ChannelRecommendation(**{**r, "category": str(r.get("category", "")).upper()})
         for r in raw.get("recommendations", [])
     ]
     return ChannelRecommendResponse(

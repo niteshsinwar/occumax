@@ -29,6 +29,7 @@ from core.schemas.pricing import (
     PricingWhatIfAnalysis,
 )
 from services.ai.pricing_agent import run_pricing_agent
+from services.database import AsyncSessionLocal
 from services.ai.pricing_what_if_agent import run_pricing_what_if
 
 logger = logging.getLogger(__name__)
@@ -151,19 +152,24 @@ def _build_context_text(snapshot: dict, today: date) -> str:
 
 # ── public API ────────────────────────────────────────────────────────────────
 
-async def analyse(db: AsyncSession) -> PricingAnalyseResponse:
+async def analyse() -> PricingAnalyseResponse:
     today = date.today()
-    snapshot = await _build_pricing_context(db, today)
+    async with AsyncSessionLocal() as db:
+        snapshot = await _build_pricing_context(db, today)
+    # session closed — AI agent runs below without holding a connection
     context_text = _build_context_text(snapshot, today)
 
     result = await run_pricing_agent(
         snapshot=snapshot,
         context_text=context_text,
         today=today,
-        db=db,
+        session_factory=AsyncSessionLocal,
     )
 
-    recs = [PricingRecommendation(**r) for r in result["recommendations"]]
+    recs = [
+        PricingRecommendation(**{**r, "category": str(r.get("category", "")).upper()})
+        for r in result["recommendations"]
+    ]
     what_if_payload = await run_pricing_what_if(snapshot, today)
     what_if = PricingWhatIfAnalysis.model_validate(what_if_payload)
 

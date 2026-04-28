@@ -29,7 +29,7 @@ from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
 from core.models import Room, Slot, BlockType
@@ -135,7 +135,7 @@ Rules:
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
-def _make_tools(db: AsyncSession, today: date):
+def _make_tools(session_factory: async_sessionmaker, today: date):
 
     @tool
     async def get_occupancy_gaps(category: str, look_ahead_days: int = 14) -> str:
@@ -145,17 +145,18 @@ def _make_tools(db: AsyncSession, today: date):
         """
         look_end = today + timedelta(days=min(look_ahead_days, 21))
         try:
-            rows = (await db.execute(
-                select(Room.category, Room.base_rate, Slot.date, Slot.block_type)
-                .join(Room, Room.id == Slot.room_id)
-                .where(
-                    Room.is_active == True,
-                    Room.category == category.upper(),
-                    Slot.date >= today,
-                    Slot.date < look_end,
-                )
-                .order_by(Slot.date)
-            )).all()
+            async with session_factory() as db:
+                rows = (await db.execute(
+                    select(Room.category, Room.base_rate, Slot.date, Slot.block_type)
+                    .join(Room, Room.id == Slot.room_id)
+                    .where(
+                        Room.is_active == True,
+                        Room.category == category.upper(),
+                        Slot.date >= today,
+                        Slot.date < look_end,
+                    )
+                    .order_by(Slot.date)
+                )).all()
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -206,17 +207,18 @@ def _make_tools(db: AsyncSession, today: date):
         """
         hist_start = today - timedelta(days=min(days_back, 120))
         try:
-            rows = (await db.execute(
-                select(Slot.channel, Slot.channel_partner, Slot.current_rate)
-                .join(Room, Room.id == Slot.room_id)
-                .where(
-                    Room.is_active == True,
-                    Room.category == category.upper(),
-                    Slot.date >= hist_start,
-                    Slot.date < today,
-                    Slot.block_type != BlockType.EMPTY,
-                )
-            )).all()
+            async with session_factory() as db:
+                rows = (await db.execute(
+                    select(Slot.channel, Slot.channel_partner, Slot.current_rate)
+                    .join(Room, Room.id == Slot.room_id)
+                    .where(
+                        Room.is_active == True,
+                        Room.category == category.upper(),
+                        Slot.date >= hist_start,
+                        Slot.date < today,
+                        Slot.block_type != BlockType.EMPTY,
+                    )
+                )).all()
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -255,17 +257,18 @@ def _make_tools(db: AsyncSession, today: date):
         """
         hist_start = today - timedelta(days=60)
         try:
-            rows = (await db.execute(
-                select(Slot.date)
-                .join(Room, Room.id == Slot.room_id)
-                .where(
-                    Room.is_active == True,
-                    Room.category == category.upper(),
-                    Slot.date >= hist_start,
-                    Slot.date < today,
-                    Slot.block_type != BlockType.EMPTY,
-                )
-            )).scalars().all()
+            async with session_factory() as db:
+                rows = (await db.execute(
+                    select(Slot.date)
+                    .join(Room, Room.id == Slot.room_id)
+                    .where(
+                        Room.is_active == True,
+                        Room.category == category.upper(),
+                        Slot.date >= hist_start,
+                        Slot.date < today,
+                        Slot.block_type != BlockType.EMPTY,
+                    )
+                )).scalars().all()
         except Exception as e:
             return json.dumps({"error": str(e)})
 
@@ -396,13 +399,13 @@ def _parse(text: str) -> dict:
 async def run_channel_agent(
     context_text: str,
     today: date,
-    db: AsyncSession,
+    session_factory: async_sessionmaker,
 ) -> dict:
     """
     Run one channel allocation analysis turn.
     Returns dict: { recommendations: [...], summary: str }
     """
-    tools = _make_tools(db, today)
+    tools = _make_tools(session_factory, today)
     graph = _build_graph(tools)
 
     system_prompt = _SYSTEM.format(
@@ -417,12 +420,20 @@ async def run_channel_agent(
         "Then output the final JSON recommendations object."
     )
 
-    result = await graph.ainvoke({
-        "messages": [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=prompt),
-        ]
-    })
+    try:
+        result = await graph.ainvoke({
+            "messages": [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=prompt),
+            ]
+        })
+    except Exception as exc:
+        msg = str(exc)
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "spending cap" in msg:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=503, detail="Gemini API spending cap reached. Go to ai.studio/spend to increase your limit.")
+        logger.error("Channel agent error: %s", msg)
+        raise
 
     final_text = ""
     for msg in reversed(result["messages"]):

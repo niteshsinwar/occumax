@@ -175,8 +175,9 @@ export function PricingOptimizationTab() {
           { decision: null, overrideValue: String(r.suggested_rate) },
         ])
       ));
-    } catch {
-      show("Pricing analysis failed", "error");
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      show(detail ?? "Pricing analysis failed", "error");
     } finally {
       setAnalysing(false);
     }
@@ -184,8 +185,8 @@ export function PricingOptimizationTab() {
 
   const activeRecs = useMemo(() => {
     if (!pricing) return [] as PricingRecommendation[];
-    const cats = new Set(selectedCategories);
-    return pricing.recommendations.filter(r => cats.has(r.category as RoomCategory));
+    const cats = new Set(selectedCategories.map(c => c.toUpperCase()));
+    return pricing.recommendations.filter(r => cats.has(r.category.toUpperCase()));
   }, [pricing, selectedCategories]);
 
   const recsByCategory = useMemo(() => {
