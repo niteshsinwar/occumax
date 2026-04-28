@@ -604,13 +604,16 @@ export function Dashboard() {
     setGuidedRecoveryStep(1);
     await runOptimisePreview();
 
-    setGuidedRecoveryStep(3);
-    await runSandwichPlaybook();
+    setGuidedRecoveryStep(2);
+    await runOfferPreview();
 
-    // Step 4 is intentionally "review + optionally commit" (commit is always user-controlled).
+    // Step 3 is intentionally "review" (no automatic writes).
+    setGuidedRecoveryStep(3);
+
+    // Step 4 is intentionally "optionally commit" (commit is always user-controlled).
     setGuidedRecoveryStep(4);
     setGuidedRecoveryDone(true);
-  }, [runOptimisePreview, runSandwichPlaybook]);
+  }, [runOptimisePreview, runOfferPreview]);
 
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
@@ -1018,8 +1021,8 @@ export function Dashboard() {
         <div className="mt-3 grid grid-cols-1 lg:grid-cols-4 gap-2">
           {[
             { n: 1, t: "Preview recovery shuffle", d: "Find a room-rearrangement plan and show predicted deltas." },
-            { n: 2, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
-            { n: 3, t: "Apply orphan-night offers", d: "Relax rules (MinLOS/offer) on stranded 1-night gaps." },
+            { n: 2, t: "Preview orphan-night offer", d: "Ask AI for the best discount + uplift estimate (no DB writes)." },
+            { n: 3, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
             { n: 4, t: "Commit (optional)", d: "If the preview looks good, write the shuffle to the DB." },
           ].map(s => {
             const active = guidedRecoveryStep === s.n;
