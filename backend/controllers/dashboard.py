@@ -176,6 +176,26 @@ async def get_scorecard(
     slots = (await db.execute(slots_q)).scalars().all()
     slot_infos_before = _slots_to_slotinfo(slots, room_map)
 
+    # Orphan-night offer realization (live DB state only).
+    offer_ids = sorted({s.offer_id for s in slots if getattr(s, "offer_id", None)})
+    offer_map: dict[str, Offer] = {}
+    if offer_ids:
+        offer_rows = (await db.execute(select(Offer).where(Offer.id.in_(offer_ids)))).scalars().all()
+        offer_map = {o.id: o for o in offer_rows}
+
+    orphan_offer_nights_booked = 0
+    orphan_offer_revenue_booked = 0.0
+    for s in slots:
+        if s.block_type != BlockType.SOFT:
+            continue
+        if not s.offer_id:
+            continue
+        offer = offer_map.get(s.offer_id)
+        if not offer or offer.offer_type != OfferType.SANDWICH_ORPHAN:
+            continue
+        orphan_offer_nights_booked += 1
+        orphan_offer_revenue_booked += float(s.current_rate or 0.0)
+
     det_before = GapDetector(slot_infos_before, today)
     gaps_before = det_before.detect_gaps()
     before_k = {k: _count_k_night_windows(slot_infos_before, k) for k in ks}
@@ -184,6 +204,8 @@ async def get_scorecard(
         revenue_at_risk=_calc_revenue_at_risk(gaps_before),
         k_windows=before_k,
         revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_before),
+        orphan_offer_nights_booked=int(orphan_offer_nights_booked),
+        orphan_offer_revenue_booked=round(orphan_offer_revenue_booked, 2),
     )
 
     if not swap_plan:
@@ -206,6 +228,8 @@ async def get_scorecard(
         revenue_at_risk=_calc_revenue_at_risk(gaps_after),
         k_windows=after_k,
         revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_after),
+        orphan_offer_nights_booked=int(orphan_offer_nights_booked),
+        orphan_offer_revenue_booked=round(orphan_offer_revenue_booked, 2),
     )
 
     delta = CapacityDelta(

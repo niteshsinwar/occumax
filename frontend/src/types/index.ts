@@ -69,6 +69,10 @@ export interface CapacityScore {
   k_windows: Record<number, number>;
   /** 0–100: risk-weighted implied fill % for gaps that drive revenue_at_risk */
   revenue_weighted_fill_pct?: number | null;
+  /** Nights booked on slots tagged as orphan-night offers (OfferType.SANDWICH_ORPHAN) in this slice. */
+  orphan_offer_nights_booked?: number;
+  /** Sum of slot.current_rate for those booked orphan-offer nights (USD). */
+  orphan_offer_revenue_booked?: number;
 }
 
 export interface CapacityDelta {

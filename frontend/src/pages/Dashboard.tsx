@@ -930,103 +930,6 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* What’s broken / what to do / where to go (story spine) */}
-      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.before
-              ? (
-                <>
-                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
-                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
-                </>
-              )
-              : "Select a slice to see stranded capacity and revenue at risk."}
-          </div>
-          <button
-            type="button"
-            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-            onClick={() => setActiveTab("occupancy")}
-          >
-            View capacity details
-          </button>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
-            <span
-              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
-              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
-            >
-              AI
-            </span>
-          </div>
-          <div className="text-sm text-text leading-relaxed">
-            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
-              onClick={() => runOptimisePreview()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Preview shuffle
-            </button>
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
-              onClick={() => runSandwichPlaybook()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Apply offers
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">Recovered revenue (projected)</div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.after && scorecard?.delta
-              ? (
-                <>
-                  <div className="space-y-1">
-                    <div>
-                      <span className="font-bold">
-                        ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
-                      </span>{" "}
-                      recovered via shuffle (deterministic)
-                    </div>
-                    <div className="text-text-muted">
-                      {offerEstimate
-                        ? (
-                          <>
-                            Est{" "}
-                            <span className="font-bold text-text">
-                              +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
-                            </span>{" "}
-                            via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
-                          </>
-                        )
-                        : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
-                    </div>
-                    {offerEstimate && (
-                      <div className="text-[10px] text-text-muted">
-                        Fill prob {Math.round(offerEstimate.offer_fill_prob_before * 100)}% →{" "}
-                        {Math.round(offerEstimate.offer_fill_prob_after * 100)}%{" "}
-                        {offerEstimate.notes ? `· ${offerEstimate.notes}` : ""}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )
-              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
-          </div>
-        </div>
-      </div>
-
       {/* Guided recovery steps (make the playbook explicit for the demo) */}
       <div className="mb-6 bg-surface border border-border shadow-subtle p-5">
         <div className="flex items-center justify-between gap-3">
@@ -1093,6 +996,113 @@ export function Dashboard() {
             No shuffle plan is available to commit for this slice. Try “Preview recovery shuffle” on a different date range or room types.
           </div>
         )}
+      </div>
+
+      {/* What’s broken / what to do / where to go (story spine) */}
+      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <div className="bg-surface border border-border p-5">
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
+          <div className="text-sm text-text leading-relaxed">
+            {scorecard?.before
+              ? (
+                <>
+                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
+                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
+                </>
+              )
+              : "Select a slice to see stranded capacity and revenue at risk."}
+          </div>
+          <button
+            type="button"
+            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
+            onClick={() => setActiveTab("occupancy")}
+          >
+            View capacity details
+          </button>
+        </div>
+
+        <div className="bg-surface border border-border p-5">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
+            <span
+              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
+              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
+            >
+              AI
+            </span>
+          </div>
+          <div className="text-sm text-text leading-relaxed">
+            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
+              onClick={() => runOptimisePreview()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Preview shuffle
+            </button>
+            <button
+              type="button"
+              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
+              onClick={() => runSandwichPlaybook()}
+              disabled={!heatmap || isOptimiseLoading}
+            >
+              Apply offers
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-surface border border-border p-5">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+              Recovered revenue (projected)
+            </div>
+            <span
+              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
+              title="AI estimates orphan-night offer recovery; shuffle recovery is deterministic."
+            >
+              AI
+            </span>
+          </div>
+          <div className="text-sm text-text leading-relaxed">
+            {scorecard?.after && scorecard?.delta
+              ? (
+                <>
+                  <div className="space-y-1">
+                    <div>
+                      <span className="font-bold">
+                        ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
+                      </span>{" "}
+                      recovered via shuffle (deterministic)
+                    </div>
+                    <div className="text-text-muted">
+                      {offerEstimate
+                        ? (
+                          <>
+                            Est{" "}
+                            <span className="font-bold text-text">
+                              +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
+                            </span>{" "}
+                            via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
+                          </>
+                        )
+                        : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
+                    </div>
+                    {offerEstimate && (
+                      <div className="text-[10px] text-text-muted">
+                        Fill prob {Math.round(offerEstimate.offer_fill_prob_before * 100)}% →{" "}
+                        {Math.round(offerEstimate.offer_fill_prob_after * 100)}%{" "}
+                        {offerEstimate.notes ? `· ${offerEstimate.notes}` : ""}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )
+              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
+          </div>
+        </div>
       </div>
 
       {/* Capacity Recovery Scorecard */}
@@ -1199,6 +1209,53 @@ export function Dashboard() {
               )}
             </div>
           </div>
+
+          {/* Reconcile projected orphan-offer recovery with scorecard */}
+          {(offerEstimate || (scorecard?.before && ((scorecard.before.orphan_offer_nights_booked ?? 0) > 0 || (scorecard.before.orphan_offer_revenue_booked ?? 0) > 0))) && (
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-4 gap-3">
+              <div className="bg-surface border border-border p-4">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Nights recovered (shuffle)</div>
+                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
+                  {scorecard?.after ? Math.max(0, (scorecard.before.orphan_nights ?? 0) - (scorecard.after.orphan_nights ?? 0)) : "—"}
+                </div>
+                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
+                  Deterministic: orphan nights reduced by preview plan.
+                </div>
+              </div>
+
+              <div className="bg-surface border border-border p-4">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer nights (actual)</div>
+                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
+                  {scorecardLoading ? "…" : (scorecard?.before.orphan_offer_nights_booked ?? 0)}
+                </div>
+                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
+                  Booked nights where an orphan-night offer was applied.
+                </div>
+              </div>
+
+              <div className="bg-surface border border-border p-4">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer revenue (predicted)</div>
+                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
+                  {offerEstimate ? `+$${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}` : "—"}
+                </div>
+                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
+                  {offerEstimate
+                    ? `AI · ${Math.round(offerEstimate.offer_discount_pct * 100)}% off · incremental estimate`
+                    : "Run “Apply orphan-night offers” to estimate uplift."}
+                </div>
+              </div>
+
+              <div className="bg-surface border border-border p-4">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer revenue (actual)</div>
+                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
+                  {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.orphan_offer_revenue_booked ?? 0).toLocaleString("en-US")}`}
+                </div>
+                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
+                  Sum of rates on booked orphan-offer nights in this slice.
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

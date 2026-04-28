@@ -42,6 +42,18 @@ class CapacityScore(BaseModel):
         description="0–100. Weighted by (1-fill_prob)*rate*length per gap.",
     )
 
+    # Orphan-night offer realization (measured from live DB state for the slice)
+    orphan_offer_nights_booked: int = Field(
+        default=0,
+        ge=0,
+        description="Count of nights booked on slots tagged with OfferType.SANDWICH_ORPHAN in this slice.",
+    )
+    orphan_offer_revenue_booked: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Sum of slot.current_rate for booked orphan-offer nights in this slice (USD).",
+    )
+
 
 class CapacityDelta(BaseModel):
     orphan_nights: int
