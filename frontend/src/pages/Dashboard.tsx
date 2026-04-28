@@ -437,15 +437,12 @@ export function Dashboard() {
     ];
     const best = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
     const out: string[] = [];
-    // 1) Booking patterns (real, from the current slice)
-    out.push(
-      best.n > 0
-        ? `Most bookable placement windows in this slice are ${best.k} night${best.k === "1" ? "" : "s"} (${best.n} total).`
-        : "No bookable placement windows detected in this slice.",
-    );
-
+    // 1) Booking pattern prediction (AI summary from bookings, when available)
     if (eventInsights?.booking_pattern?.most_common_los != null) {
-      out.push(`Most common booking pattern: ${eventInsights.booking_pattern.most_common_los} night stays (AI summary from bookings).`);
+      out.push(`Most likely duration of stay: ${eventInsights.booking_pattern.most_common_los} night stays.`);
+    } else if (best.n > 0) {
+      // Fallback when analytics endpoint is unavailable.
+      out.push("Most likely duration of stay: unavailable — analytics not loaded for this slice.");
     }
 
     // 2) Partner/channel insight (prefer analytics endpoint; fallback to slice)
@@ -485,12 +482,6 @@ export function Dashboard() {
         ? `Estimated cancellation rate (modelled): ~${cancelRatePct}% for this slice (based on channel mix).`
         : "Estimated cancellation rate (modelled): unavailable — no booked nights in this slice.",
     );
-
-    // Helpful gap callout (real)
-    if (runMetrics) {
-      const short = runMetrics.dist.n1 + runMetrics.dist.n2_3;
-      if (short > 0) out.push(`${short} short gaps (1–3 nights) are likely to go unsold without intervention.`);
-    }
 
     // Helpful rules callout (real)
     if (dashboardKpis?.sandwichMinlosBlockedNights) {
