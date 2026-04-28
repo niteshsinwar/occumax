@@ -8,6 +8,9 @@ import {
   dashboardRecoveryEstimate,
   dashboardScorecard,
   patchSlot,
+  getEventInsights,
+  getPace,
+  getChannelPerformance,
 } from "../api/client";
 import type {
   DashboardOptimisePreviewResponse,
@@ -16,6 +19,8 @@ import type {
   HeatmapRow,
   RoomCategory,
   SwapStep,
+  ChannelPerformanceResponse,
+  PaceResponse,
 } from "../types";
 import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
@@ -28,6 +33,7 @@ import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimi
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
 import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, AlertTriangle, Zap, Sparkles, Info } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
+import { AiTag } from "../components/shared/AiTag";
 
 /**
  * Distinct room categories in heatmap row order (SQL `ORDER BY category, id`), for filters aligned with inventory in the database.
@@ -64,6 +70,46 @@ type RunMetrics = {
   orphanNights: number;
   dist: { n1: number; n2_3: number; n4_7: number; n8p: number };
 };
+
+type ChannelMix = Record<string, number>;
+
+function computeChannelMix(rows: HeatmapRow[], maxDays: number): ChannelMix {
+  const mix: ChannelMix = {};
+  for (const r of rows) {
+    for (const c of r.cells.slice(0, maxDays)) {
+      if (!c || c.block_type !== "SOFT") continue;
+      const ch = c.channel ?? "UNKNOWN";
+      mix[ch] = (mix[ch] ?? 0) + 1;
+    }
+  }
+  return mix;
+}
+
+function topChannelInsight(mix: ChannelMix): { channel: string; sharePct: number; total: number } | null {
+  const entries = Object.entries(mix);
+  const total = entries.reduce((s, [, n]) => s + n, 0);
+  if (total <= 0) return null;
+  const [channel, nights] = entries.sort((a, b) => b[1] - a[1])[0]!;
+  return { channel, sharePct: Math.round((nights / total) * 100), total };
+}
+
+function estimatedCancellationRate(mix: ChannelMix): number | null {
+  // Heuristic only (no historical cancellations in current API payload).
+  // Rates chosen to be directionally correct for demo UX.
+  const rates: Record<string, number> = {
+    OTA: 0.18,
+    DIRECT: 0.08,
+    GDS: 0.12,
+    WALKIN: 0.03,
+    CLOSED: 0.0,
+    UNKNOWN: 0.1,
+  };
+  const entries = Object.entries(mix);
+  const total = entries.reduce((s, [, n]) => s + n, 0);
+  if (total <= 0) return null;
+  const weighted = entries.reduce((s, [ch, n]) => s + (rates[ch] ?? 0.1) * n, 0);
+  return Math.round((weighted / total) * 100);
+}
 
 /**
  * Scan heatmap rows and classify consecutive EMPTY runs by length.
@@ -220,8 +266,6 @@ export function Dashboard() {
   const [scorecardError, setScorecardError] = useState<string | null>(null);
   const [showAdvancedActions, setShowAdvancedActions] = useState(false);
   const [showInsights, setShowInsights] = useState(true);
-  const [guidedRecoveryStep, setGuidedRecoveryStep] = useState<number | null>(null);
-  const [guidedRecoveryDone, setGuidedRecoveryDone] = useState(false);
   const [offerEstimate, setOfferEstimate] = useState<{
     offer_discount_pct: number;
     offer_recovered_estimated: number;
@@ -240,6 +284,11 @@ export function Dashboard() {
     message?: string;
   }>({ state: "idle" });
   const { show, Toasts } = useToast();
+
+  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+  const [eventInsights, setEventInsights] = useState<any | null>(null);
+  const [pace, setPace] = useState<PaceResponse | null>(null);
+  const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
     setIsHeatmapLoading(true);
@@ -297,6 +346,24 @@ export function Dashboard() {
     };
   }, [heatmap, spanDays]);
 
+  // Lightweight analytics backing the AI insights panel (when available).
+  useEffect(() => {
+    if (!scorecardSlice) return;
+    const { startStr, endStr } = scorecardSlice;
+
+    getEventInsights({ start: startStr, end: endStr, as_of: todayStr })
+      .then(res => setEventInsights(res.data))
+      .catch(() => setEventInsights(null));
+
+    getPace({ start: startStr, end: endStr, as_of: todayStr })
+      .then(res => setPace(res.data as PaceResponse))
+      .catch(() => setPace(null));
+
+    getChannelPerformance({ start: startStr, end: endStr, categories: selectedCategories })
+      .then(res => setChannelPerf(res.data as ChannelPerformanceResponse))
+      .catch(() => setChannelPerf(null));
+  }, [scorecardSlice?.endStr, scorecardSlice?.startStr, selectedCategories, todayStr]);
+
   const refreshScorecard = useCallback(async (plan?: SwapStep[] | null) => {
     if (!scorecardSlice) return;
     setScorecardLoading(true);
@@ -333,6 +400,14 @@ export function Dashboard() {
     return computeRunMetrics(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
+  const channelMix = useMemo(() => {
+    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
+    return computeChannelMix(filteredRows, spanDays);
+  }, [heatmap, filteredRows, spanDays]);
+
+  const topChannel = useMemo(() => (channelMix ? topChannelInsight(channelMix) : null), [channelMix]);
+  const cancelRatePct = useMemo(() => (channelMix ? estimatedCancellationRate(channelMix) : null), [channelMix]);
+
   const simulatedRows = useMemo(() => {
     const plan = (kNightSwapPlan && kNightSwapPlan.length > 0) ? kNightSwapPlan : swapPlan;
     if (!heatmap || !plan || plan.length === 0) return null;
@@ -362,21 +437,78 @@ export function Dashboard() {
     ];
     const best = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
     const out: string[] = [];
+    // 1) Booking patterns (real, from the current slice)
     out.push(
       best.n > 0
         ? `Most bookable placement windows in this slice are ${best.k} night${best.k === "1" ? "" : "s"} (${best.n} total).`
         : "No bookable placement windows detected in this slice.",
     );
-    out.push("For this window, the most common booking pattern is 3 days.");
+
+    if (eventInsights?.booking_pattern?.most_common_los != null) {
+      out.push(`Most common booking pattern: ${eventInsights.booking_pattern.most_common_los} night stays (AI summary from bookings).`);
+    }
+
+    // 2) Partner/channel insight (prefer analytics endpoint; fallback to slice)
+    if (channelPerf?.channels && channelPerf.channels.length > 0) {
+      const top = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
+      const topPartner = top.partners && top.partners.length > 0
+        ? [...top.partners].sort((a, b) => b.room_nights - a.room_nights)[0]!
+        : null;
+      if (topPartner) {
+        out.push(`Partner channel: ${top.channel} leads. Top partner: ${topPartner.partner} (${topPartner.share_of_channel_pct}% of ${top.channel}).`);
+      } else {
+        out.push(`Partner channel: ${top.channel} leads with ${top.share_pct}% share in this slice.`);
+      }
+    } else if (topChannel) {
+      out.push(`Channel mix: ${topChannel.channel} leads with ~${topChannel.sharePct}% of booked nights (${topChannel.total} nights in this slice).`);
+    } else {
+      out.push("Channel mix: not enough booked nights in this slice to summarize channel performance.");
+    }
+
+    // 3) Booking trend vs last 2 years (pace endpoint uses historical baseline)
+    if (pace?.series && pace.series.length > 0) {
+      const pts = pace.series[0]?.points ?? [];
+      if (pts.length > 0) {
+        const avgDelta = pts.reduce((s, p) => s + (p.on_books_occ_pct - p.expected_on_books_occ_pct), 0) / pts.length;
+        const dir = avgDelta >= 0 ? "ahead" : "behind";
+        out.push(`Booking trend vs last 2 years: ${dir} baseline pace by ~${Math.abs(Math.round(avgDelta))} occ-pts (model baseline).`);
+      } else {
+        out.push("Booking trend vs last 2 years: pace data unavailable for this slice.");
+      }
+    } else {
+      out.push("Booking trend vs last 2 years: pace data unavailable for this slice.");
+    }
+
+    // 4) Estimated cancellation rate (heuristic, clearly labeled as modelled)
+    out.push(
+      cancelRatePct != null
+        ? `Estimated cancellation rate (modelled): ~${cancelRatePct}% for this slice (based on channel mix).`
+        : "Estimated cancellation rate (modelled): unavailable — no booked nights in this slice.",
+    );
+
+    // Helpful gap callout (real)
     if (runMetrics) {
-      const hard = runMetrics.dist.n1 + runMetrics.dist.n2_3;
-      if (hard > 0) out.push(`${hard} short gaps (1–3 nights) are likely to go unsold without intervention.`);
+      const short = runMetrics.dist.n1 + runMetrics.dist.n2_3;
+      if (short > 0) out.push(`${short} short gaps (1–3 nights) are likely to go unsold without intervention.`);
     }
+
+    // Helpful rules callout (real)
     if (dashboardKpis?.sandwichMinlosBlockedNights) {
-      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} orphan-night gap(s) are blocked by MinLOS rules — “Apply orphan-night offers” can unlock them.`);
+      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} orphan-night gap(s) are blocked by MinLOS rules — “Apply Orphan Night Offers” can unlock them.`);
     }
-    return out.slice(0, 4);
-  }, [dashboardKpis?.sandwichMinlosBlockedNights, runMetrics, snapshot, spanDays]);
+
+    return out.slice(0, 6);
+  }, [
+    cancelRatePct,
+    channelPerf,
+    dashboardKpis?.sandwichMinlosBlockedNights,
+    eventInsights,
+    pace,
+    runMetrics,
+    snapshot,
+    spanDays,
+    topChannel,
+  ]);
 
   /**
    * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
@@ -598,23 +730,6 @@ export function Dashboard() {
     }
   }, [heatmap, spanDays, weekSpan, selectedCategories, swapPlan, show]);
 
-  const runRecoveryPlan = useCallback(async () => {
-    // Demo-friendly playbook (no auto-commit): make the steps visible for hackathon storytelling.
-    setGuidedRecoveryDone(false);
-    setGuidedRecoveryStep(1);
-    await runOptimisePreview();
-
-    setGuidedRecoveryStep(2);
-    await runOfferPreview();
-
-    // Step 3 is intentionally "review" (no automatic writes).
-    setGuidedRecoveryStep(3);
-
-    // Step 4 is intentionally "optionally commit" (commit is always user-controlled).
-    setGuidedRecoveryStep(4);
-    setGuidedRecoveryDone(true);
-  }, [runOptimisePreview, runOfferPreview]);
-
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
@@ -789,9 +904,9 @@ export function Dashboard() {
       <div className="mb-6 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Recovery Dashboard</h1>
+            <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Hotel at a Glance</h1>
             <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
-              Filter the slice, then recover sellable capacity
+              Occupancy health, gap risk, and the fastest levers to improve revenue
             </p>
           </div>
         </div>
@@ -804,8 +919,9 @@ export function Dashboard() {
                 <Sparkles className="w-4 h-4 text-accent" />
               </div>
               <div className="min-w-0">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2">
-                  Insights (auto-generated)
+                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
+                  AI-generated insights
+                  <AiTag title="AI-generated insights combine real slice metrics with clearly-labeled estimates/placeholders when required data is not yet available." />
                 </div>
                 <ul className="space-y-2">
                   {dashboardInsights.map((t, i) => (
@@ -853,20 +969,20 @@ export function Dashboard() {
           <div className="flex flex-wrap gap-2 items-center">
               <button
                 type="button"
-                className="bg-occugreen text-white font-semibold hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runRecoveryPlan()}
-                disabled={!heatmap || isOptimiseLoading}
-                title="Runs the guided playbook steps for this slice (no auto-commit)"
-              >
-                Run guided recovery
-              </button>
-              <button
-                type="button"
                 className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => runOptimisePreview()}
                 disabled={!heatmap || isOptimiseLoading}
               >
-                {isOptimiseLoading ? "Scanning…" : "Preview recovery shuffle"}
+                {isOptimiseLoading ? "Scanning…" : "Preview Recovery Shuffle"}
+              </button>
+              <button
+                type="button"
+                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => commitSwapShuffle()}
+                disabled={swapCommitLoading || !swapPlan || (swapPlan.length ?? 0) === 0}
+                title={!swapPlan || (swapPlan.length ?? 0) === 0 ? "Preview a shuffle first, then apply it" : "Apply the preview shuffle to the DB for this slice"}
+              >
+                {swapCommitLoading ? "Applying…" : `Apply Recovery Shuffle${swapPlan && swapPlan.length > 0 ? ` (${swapPlan.length})` : ""}`}
               </button>
               <button
                 type="button"
@@ -875,7 +991,7 @@ export function Dashboard() {
                 disabled={!heatmap || isOptimiseLoading || offerEstimateStatus.state === "loading"}
                 title="Preview AI discount + uplift estimate (no DB writes)"
               >
-                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Preview orphan-night offer"}
+                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Preview Orphan Night Offers"}
               </button>
               <button
                 type="button"
@@ -890,19 +1006,8 @@ export function Dashboard() {
                 }
                 title={!offerEstimate ? "Preview the offer first, then apply" : "Apply orphan-night offers to the DB for this slice"}
               >
-                {offerApplyStatus.state === "loading" ? "Applying offers…" : "Apply orphan-night offers"}
+                {offerApplyStatus.state === "loading" ? "Applying offers…" : "Apply Orphan Night Offers"}
               </button>
-              {swapPlan && (swapPlan.length ?? 0) > 0 && (
-                <button
-                  type="button"
-                  className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => commitSwapShuffle()}
-                  disabled={swapCommitLoading}
-                  title="Write the preview shuffle to the DB so the heatmap improves immediately"
-                >
-                  {swapCommitLoading ? "Committing…" : `Commit shuffle (${swapPlan.length})`}
-                </button>
-              )}
               <button
                 type="button"
                 className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
@@ -997,87 +1102,38 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Guided recovery steps (make the playbook explicit for the demo) */}
-      <div className="mb-6 bg-surface border border-border shadow-subtle p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-            Guided recovery steps
-          </div>
-          {guidedRecoveryDone ? (
-            <div className="text-[10px] uppercase tracking-widest font-bold text-occugreen">
-              Completed
-            </div>
-          ) : guidedRecoveryStep ? (
-            <div className="text-[10px] uppercase tracking-widest font-bold text-accent">
-              Running step {guidedRecoveryStep}/4
-            </div>
-          ) : (
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-              4-step playbook
-            </div>
-          )}
-        </div>
-
-        <div className="mt-3 grid grid-cols-1 lg:grid-cols-4 gap-2">
-          {[
-            { n: 1, t: "Preview recovery shuffle", d: "Find a room-rearrangement plan and show predicted deltas." },
-            { n: 2, t: "Preview orphan-night offer", d: "Ask AI for the best discount + uplift estimate (no DB writes)." },
-            { n: 3, t: "Review scorecard impact", d: "Confirm orphan nights + revenue-at-risk improve for this slice." },
-            { n: 4, t: "Commit (optional)", d: "If the preview looks good, write the shuffle to the DB." },
-          ].map(s => {
-            const active = guidedRecoveryStep === s.n;
-            const done = guidedRecoveryDone ? s.n <= 4 : guidedRecoveryStep ? s.n < guidedRecoveryStep : false;
-            return (
-              <div
-                key={s.n}
-                className={`border p-3 ${
-                  active
-                    ? "border-accent/40 bg-accent/5"
-                    : done
-                      ? "border-occugreen/30 bg-occugreen/5"
-                      : "border-border bg-surface"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 border ${
-                      active
-                        ? "border-accent/30 bg-accent/10 text-accent"
-                        : done
-                          ? "border-occugreen/30 bg-occugreen/10 text-occugreen"
-                          : "border-border bg-surface-2 text-text-muted"
-                    }`}
-                  >
-                    Step {s.n}
-                  </span>
-                  <div className="text-xs font-bold text-text">{s.t}</div>
-                </div>
-                <div className="mt-1 text-[11px] text-text-muted leading-relaxed">{s.d}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        {guidedRecoveryStep === 4 && !(swapPlan && swapPlan.length > 0) && (
-          <div className="mt-3 text-[11px] text-text-muted">
-            No shuffle plan is available to commit for this slice. Try “Preview recovery shuffle” on a different date range or room types.
-          </div>
-        )}
-      </div>
-
-      {/* What’s broken / what to do / where to go (story spine) */}
+      {/* Insights / action plan / revenue recovery (3 focus areas) */}
       <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
         <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-2">What’s broken</div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.before
-              ? (
-                <>
-                  <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded in this slice, putting about{" "}
-                  <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
-                </>
-              )
-              : "Select a slice to see stranded capacity and revenue at risk."}
+          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-3">Insights</div>
+          <div className="space-y-3 text-sm text-text leading-relaxed">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
+              <div>
+                {scorecard?.before
+                  ? (
+                    <>
+                      <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded, putting{" "}
+                      <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
+                    </>
+                  )
+                  : "Select a slice to quantify orphan nights and revenue at risk."}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
+              <div className="text-text-muted">
+                Use Pricing to run RateIQ and choose discount depth where gaps are stranded. (Pricing impact is computed in the Pricing tab.)
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
+              <div className="text-text-muted">
+                {topChannel
+                  ? `Current slice leans ${topChannel.channel} (~${topChannel.sharePct}%). Use Channels to shift incremental demand to higher-net partners.`
+                  : "Use Channels to shift incremental demand to higher-net partners (partner logic placeholder)."}
+              </div>
+            </div>
           </div>
           <button
             type="button"
@@ -1089,17 +1145,23 @@ export function Dashboard() {
         </div>
 
         <div className="bg-surface border border-border p-5">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">What should I do?</div>
-            <span
-              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
-              title="AI helps recommend pricing and channel actions. Capacity recovery here is deterministic optimization."
-            >
-              AI
-            </span>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Action plan</div>
+            <AiTag title="AI assists pricing and channel actions; shuffle is deterministic capacity optimization." />
           </div>
-          <div className="text-sm text-text leading-relaxed">
-            Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
+          <div className="space-y-3 text-sm text-text leading-relaxed">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
+              <div className="text-text-muted">Run <span className="font-bold text-text">Preview Recovery Shuffle</span>, then <span className="font-bold text-text">Apply Recovery Shuffle</span> if the deltas look good.</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
+              <div className="text-text-muted">Go to Pricing and run RateIQ to monetize recovered capacity with targeted discounts.</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
+              <div className="text-text-muted">Go to Channels and review YieldIQ recommendations (placeholder panel is present).</div>
+            </div>
           </div>
           <button
             type="button"
@@ -1113,59 +1175,54 @@ export function Dashboard() {
 
         <div className="bg-surface border border-border p-5">
           <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-              Recovered revenue (projected)
-            </div>
-            <span
-              className="inline-flex items-center text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border border-accent/30 bg-accent/10 text-accent"
-              title="AI estimates orphan-night offer recovery; shuffle recovery is deterministic."
-            >
-              AI
-            </span>
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Revenue recovery</div>
+            <AiTag title="Offer uplift is AI-estimated; shuffle impact is deterministic from the preview plan. Pricing/channel monetization is calculated in their tabs." />
           </div>
-          <div className="text-sm text-text leading-relaxed">
-            {scorecard?.after && scorecard?.delta
-              ? (
-                <>
-                  <div className="space-y-1">
-                    <div>
+          <div className="space-y-3 text-sm text-text leading-relaxed">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
+              <div>
+                {scorecard?.after && scorecard?.delta
+                  ? (
+                    <>
                       <span className="font-bold">
                         ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
                       </span>{" "}
                       recovered via shuffle (deterministic)
-                    </div>
-                    <div className="text-text-muted">
-                      {offerEstimateStatus.state === "loading"
-                        ? "Calculating AI orphan-night offer uplift for this slice…"
-                        : offerEstimateStatus.state === "error"
-                          ? (
-                            <span className="text-occured">
-                              {offerEstimateStatus.message ?? "AI prediction is currently unavailable."}
-                            </span>
-                          )
-                          : offerEstimate
-                            ? (
-                              <>
-                                Est{" "}
-                                <span className="font-bold text-text">
-                                  +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
-                                </span>{" "}
-                                via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
-                              </>
-                            )
-                            : "Run “Preview orphan-night offer” to estimate offer recovery (AI) and choose the best discount."}
-                    </div>
-                    {offerEstimate && (
-                      <div className="text-[10px] text-text-muted">
-                        Fill prob {Math.round(offerEstimate.offer_fill_prob_before * 100)}% →{" "}
-                        {Math.round(offerEstimate.offer_fill_prob_after * 100)}%{" "}
-                        {offerEstimate.notes ? `· ${offerEstimate.notes}` : ""}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )
-              : "Run “Preview recovery shuffle” to see the projected recovery impact, then use AI to monetize it via pricing and channels."}
+                    </>
+                  )
+                  : "Run Preview Recovery Shuffle to see projected recovery impact."}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
+              <div className="text-text-muted">Calculated in Pricing (RateIQ). Placeholder here until pricing outputs are surfaced into this dashboard.</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
+              <div className="text-text-muted">Calculated in Channels (YieldIQ). Placeholder here until partner optimization is finalized.</div>
+            </div>
+            <div className="text-text-muted">
+              {offerEstimateStatus.state === "loading"
+                ? "Calculating AI orphan-night offer uplift for this slice…"
+                : offerEstimateStatus.state === "error"
+                  ? (
+                    <span className="text-occured">
+                      {offerEstimateStatus.message ?? "AI prediction is currently unavailable."}
+                    </span>
+                  )
+                  : offerEstimate
+                    ? (
+                      <>
+                        Orphan Night Offers (AI): est{" "}
+                        <span className="font-bold text-text">
+                          +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
+                        </span>{" "}
+                        at {Math.round(offerEstimate.offer_discount_pct * 100)}% off
+                      </>
+                    )
+                    : "Run Preview Orphan Night Offers to estimate uplift and pick a discount."}
+            </div>
           </div>
         </div>
       </div>
@@ -1177,7 +1234,7 @@ export function Dashboard() {
             <div>
               <div className="font-serif font-bold text-xl text-text">Capacity Recovery Scorecard</div>
               <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
-                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Preview recovery shuffle</span> to generate a plan and see predicted deltas.
+                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Preview Recovery Shuffle</span> to generate a plan and see predicted deltas.
               </div>
             </div>
             <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
@@ -1215,10 +1272,8 @@ export function Dashboard() {
               </div>
               {scorecard?.before.revenue_weighted_fill_pct != null && scorecard.before.revenue_weighted_fill_pct > 0 && (
                 <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  Risk-weighted implied fill{" "}
-                  <span className="font-bold tabular-nums text-text">
-                    {Math.round(scorecard.before.revenue_weighted_fill_pct)}%
-                  </span>
+                  Calculated as <span className="font-bold text-text">orphan-night room rate × (1 − implied fill %)</span>. Implied fill{" "}
+                  <span className="font-bold tabular-nums text-text">{Math.round(scorecard.before.revenue_weighted_fill_pct)}%</span>
                   {scorecard?.after?.revenue_weighted_fill_pct != null && scorecard.after.revenue_weighted_fill_pct > 0 && (
                     <>
                       {" → "}
@@ -1230,7 +1285,7 @@ export function Dashboard() {
                     </>
                   )}
                   <span className="block mt-0.5 text-[9px] uppercase tracking-widest font-bold text-text-muted">
-                    Same gap fill model as the $ at-risk line
+                    Uses the same implied gap-fill model across the slice
                   </span>
                 </div>
               )}
@@ -1243,41 +1298,26 @@ export function Dashboard() {
                 </div>
               )}
             </div>
-
             <div className="bg-surface border border-border p-4">
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Usable windows</div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {[2, 3].map(k => {
-                  const before = scorecard?.before.k_windows?.[k] ?? 0;
-                  const after = scorecard?.after?.k_windows?.[k] ?? null;
-                  const delta = scorecard?.delta?.k_windows?.[k] ?? null;
-                  return (
-                    <div key={k} className="border border-border bg-surface-2/40 px-3 py-2">
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k={k}</div>
-                      <div className="text-xl font-serif font-bold text-text tabular-nums">
-                        {scorecardLoading ? "…" : before}
+              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Next best action</div>
+              <div className="mt-2 text-sm text-text leading-relaxed">
+                {swapPlan && swapPlan.length > 0
+                  ? (
+                    <>
+                      A shuffle plan is ready. Apply it to reduce orphan nights and revenue at risk.
+                      <div className="mt-3 text-[10px] text-text-muted uppercase tracking-widest font-bold">
+                        Then run Preview Orphan Night Offers for uplift.
                       </div>
-                      {after !== null && delta !== null && (
-                        <div className="text-[10px] font-bold tabular-nums mt-1">
-                          <span className="text-text-muted">After {after}</span>{" "}
-                          <span className={delta >= 0 ? "text-occugreen" : "text-occuorange"}>Δ {delta >= 0 ? `+${delta}` : delta}</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                    </>
+                  )
+                  : "Run Preview Recovery Shuffle to generate a deterministic plan for this slice."}
               </div>
-              {demoMode && (
-                <div className="mt-3 text-[10px] text-text-muted uppercase tracking-widest font-bold">
-                  Demo cue: run preview → point at deltas → commit shuffle → refresh heatmap
-                </div>
-              )}
             </div>
           </div>
 
           {/* Reconcile projected orphan-offer recovery with scorecard */}
           {(offerEstimate || (scorecard?.before && ((scorecard.before.orphan_offer_nights_booked ?? 0) > 0 || (scorecard.before.orphan_offer_revenue_booked ?? 0) > 0))) && (
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-4 gap-3">
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3">
               <div className="bg-surface border border-border p-4">
                 <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Nights recovered (shuffle)</div>
                 <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
@@ -1299,18 +1339,6 @@ export function Dashboard() {
               </div>
 
               <div className="bg-surface border border-border p-4">
-                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer revenue (predicted)</div>
-                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
-                  {offerEstimate ? `+$${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}` : "—"}
-                </div>
-                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  {offerEstimate
-                    ? `AI · ${Math.round(offerEstimate.offer_discount_pct * 100)}% off · incremental estimate`
-                    : "Run “Preview orphan-night offer” to estimate uplift."}
-                </div>
-              </div>
-
-              <div className="bg-surface border border-border p-4">
                 <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer revenue (actual)</div>
                 <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
                   {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.orphan_offer_revenue_booked ?? 0).toLocaleString("en-US")}`}
@@ -1321,6 +1349,99 @@ export function Dashboard() {
               </div>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Property at a Glance (KPIs) */}
+      <div className="mb-6 bg-surface border border-border shadow-subtle p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <div className="font-serif font-bold text-xl text-text">Property at a Glance</div>
+            <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
+              Quick KPIs for the current slice. (More KPIs will be added here over time.)
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+              Tonight occupancy {dashboardKpis?.tonightInView ? "" : "(out of view)"}
+            </div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+              {dashboardKpis ? `${Math.round(dashboardKpis.tonightOccupancyPct)}%` : "—"}
+            </div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              {dashboardKpis ? `${dashboardKpis.tonightRoomsOccupied}/${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}` : "—"}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Avg booked rate (in view)</div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+              {dashboardKpis ? `$${Math.round(dashboardKpis.avgRateInView).toLocaleString("en-US")}` : "—"}
+            </div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              {dashboardKpis ? `${dashboardKpis.avgRateNightCount} booked nights` : "—"}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan nights at risk</div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+              {dashboardKpis ? dashboardKpis.orphanNightsAtRisk : "—"}
+            </div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              {dashboardKpis ? `${dashboardKpis.sandwichMinlosBlockedNights} blocked by MinLOS` : "—"}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Usable windows (k-night)</div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {[2, 3].map(k => {
+                const before = scorecard?.before.k_windows?.[k] ?? 0;
+                return (
+                  <div key={k} className="border border-border bg-surface-2/40 px-3 py-2">
+                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k={k}</div>
+                    <div className="text-xl font-serif font-bold text-text tabular-nums">{scorecardLoading ? "…" : before}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Top channel (booked nights)</div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+              {topChannel ? `${topChannel.channel}` : "—"}
+            </div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              {topChannel ? `~${topChannel.sharePct}% share in slice` : "Not enough booked nights to compute"}
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+              Estimated cancellation rate <AiTag title="Modelled estimate based on channel mix; replace with real cancellations when backend data exists." />
+            </div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
+              {cancelRatePct != null ? `${cancelRatePct}%` : "—"}
+            </div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              Heuristic estimate (placeholder until cancellation data is available)
+            </div>
+          </div>
+
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
+              Booking trend (2-year) <AiTag title="Placeholder until historical pace/comps endpoint exists." />
+            </div>
+            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">—</div>
+            <div className="mt-1 text-[10px] text-text-muted">
+              Coming soon: YoY pace vs last 2 years
+            </div>
+          </div>
         </div>
       </div>
 

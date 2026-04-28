@@ -280,7 +280,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
               disabled={!heatmap}
               title="Generate a room-rearrangement preview plan and projected deltas"
             >
-              Preview recovery shuffle
+              Preview Recovery Shuffle
             </button>
             <button
               type="button"
@@ -289,7 +289,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
               disabled={!heatmap}
               title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
             >
-              Apply orphan-night offers
+              Apply Orphan Night Offers
             </button>
             {swapPlan && swapPlan.length > 0 && (
               <button
@@ -299,7 +299,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 disabled={swapCommitLoading}
                 title="Write the preview shuffle to the DB so the heatmap improves immediately"
               >
-                {swapCommitLoading ? "Committing…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Commit shuffle ({swapPlan.length})</>}
+                {swapCommitLoading ? "Applying…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Apply Recovery Shuffle ({swapPlan.length})</>}
               </button>
             )}
             {swapPlan && (
