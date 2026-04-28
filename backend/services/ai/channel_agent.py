@@ -4,13 +4,15 @@ Channel Allocation AI Agent — LangGraph + Gemini 2.5 Flash
 Single-shot agent:
   1. Manager clicks "Run AI Analysis" in the Channels tab
   2. Agent receives occupancy snapshot + channel performance history
-  3. Agent calls tools to inspect gaps and historical patterns
+  3. Agent calls tools to inspect gaps, historical patterns, and partner sentiment
   4. Returns structured channel allocation recommendations
 
 Tools:
   get_occupancy_gaps(category, look_ahead_days)  — empty nights per category
   get_channel_history(category, days_back)        — OTA/GDS share and ADR history
   get_weekly_pattern(category)                    — DOW booking distribution
+  get_channel_sentiment(partner_name)             — live sentiment: news, data breaches,
+                                                    review trends → PREFER/NEUTRAL/PENALIZE
 
 Output: JSON array of recommendations with reasoning.
 """
@@ -22,16 +24,16 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, Booking, BlockType
+from core.models import Room, Slot, BlockType
+from services.ai.channel_sentiment import get_sentiment
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM = """\
-You are the Channel Strategy AI for {hotel_name}, a hotel in Pune, India.
+You are the Channel Strategy AI (YieldIQ) for {hotel_name}, a hotel in New Jersey, USA.
 Today is {today}.
 
 Your job: analyse inventory gaps and historical booking channel data to recommend
@@ -49,26 +51,28 @@ for specific upcoming dates and room categories.
 Current inventory snapshot (next 14 days):
 {context}
 
-── Pune Channel Market Context ───────────────────────────────────────────────
+── New Jersey Channel Market Context ─────────────────────────────────────────
 Two routes for every booking: either via a Channel (OTA/GDS partner) or Direct.
 
-OTA partners (with standard Pune commission rates):
-  MakeMyTrip & Goibibo  — 18% commission, highest volume in Pune market
-  Agoda                 — 18% commission, strong for international guests
-  Booking.com           — 18% commission, good for Suite/Deluxe upgrades
-  Expedia               — 18% commission, corporate + international mix
-  Amadeus/Sabre/Travelport — 10% commission (GDS), mostly corporate accounts
+OTA partners (with standard US commission rates):
+  Expedia & Hotels.com  — 18% commission, highest volume in NJ/NYC-metro market
+  Booking.com           — 18% commission, strong for Deluxe/Suite upgrades and
+                          international guests transiting NYC
+  Priceline             — 18% commission, opaque/flash deals dominate Standard
+  Agoda                 — 15% commission, Asia-Pacific business + international
+  Amadeus/Sabre         — 10% commission (GDS), corporate travel management firms
 
-Direct booking — 0% commission, but requires demand already exists.
+Direct booking — 0% commission; works best when demand already exists or for
+  high-value Suite/Deluxe with a negotiated corporate rate offer.
 
 Business logic:
   • PUSH to OTA when occupancy < 50% for weekday, < 65% for weekend — fill the gap.
   • HOLD for Direct when occupancy > 70% — retain full margin on high-demand nights.
-  • Weekend gaps (Fri/Sat) → MakeMyTrip/Goibibo first (highest leisure volume in Pune).
-  • Weekday gaps → Amadeus/Sabre if corporate; else Goibibo for budget business travel.
+  • Weekend gaps (Fri/Sat) → Expedia/Booking.com first (highest leisure volume in NJ).
+  • Weekday gaps → Amadeus/Sabre for pharma/finance corporate; else Expedia.
   • Never allocate OTA for a date that is already > 80% occupied — diminishing returns.
-  • Suite/Premium gaps with < 30 days lead: consider Direct + corporate rate offer first.
-  • Economy/Standard gaps: OTA almost always better — high volume, price-sensitive segment.
+  • Suite/Deluxe gaps with < 30 days lead: consider Direct + NYC overflow rate offer.
+  • Standard gaps: OTA almost always better — high volume, price-sensitive segment.
 
 ── Tools ─────────────────────────────────────────────────────────────────────
 get_occupancy_gaps(category, look_ahead_days)
@@ -81,25 +85,36 @@ get_channel_history(category, days_back)
 get_weekly_pattern(category)
   → DOW distribution of past bookings. Use to judge weekend vs weekday demand.
 
+get_channel_sentiment(partner_name)
+  → Returns live sentiment for a partner: news events (data breaches, campaigns,
+    outages), review trend (improving/stable/declining), avg user rating, and a
+    signal: PREFER / NEUTRAL / PENALIZE / AVOID.
+  → ALWAYS call this for the top 2–3 partners you are about to recommend.
+  → PENALIZE: lower confidence to LOW or MEDIUM, flag the risk in reasoning,
+    route volume to a safer alternative instead.
+  → PREFER: raise confidence, mention the positive signal in reasoning.
+  → AVOID: do not recommend that partner at all this cycle.
+  → Reasoning MUST mention any CRITICAL or HIGH-impact sentiment event by name.
+
 ── Output format ─────────────────────────────────────────────────────────────
 After calling the tools, output a JSON object (no markdown fence, no extra text):
 {{
   "recommendations": [
     {{
-      "booking_source": "MakeMyTrip",
+      "booking_source": "Booking.com",
       "channel_type": "OTA",
       "category": "DELUXE",
-      "check_in": "2026-04-25",
-      "check_out": "2026-04-28",
+      "check_in": "2026-05-02",
+      "check_out": "2026-05-05",
       "room_count": 1,
-      "expected_gross": 15000.0,
-      "commission_cost": 2700.0,
-      "expected_net": 12300.0,
+      "expected_gross": 750.0,
+      "commission_cost": 135.0,
+      "expected_net": 615.0,
       "confidence": "HIGH",
-      "reasoning": "15-25 words: WHY this partner for this category on these dates, using Pune market context."
+      "reasoning": "15-25 words: WHY this partner for this category on these dates, using NJ market context."
     }}
   ],
-  "summary": "2-3 sentences: overall channel strategy for the week, referencing occupancy levels and Pune demand signals."
+  "summary": "2-3 sentences: overall channel strategy for the week, referencing NJ demand signals and any partner sentiment events."
 }}
 
 Rules:
@@ -108,10 +123,13 @@ Rules:
   - Only recommend dates with ≥1 empty night for the category.
   - room_count = 1 unless you have strong evidence for more (e.g., very low occ + long gap).
   - Confidence: HIGH if strong OTA history + low occ, MEDIUM if moderate gap, LOW if uncertain.
-  - reasoning MUST mention the specific Pune demand context (weekday corporate, weekend leisure,
-    IPL season, monsoon, IT corridor, etc.) — never just "low occupancy."
-  - commission_cost = expected_gross × commission_rate (OTA=0.18, GDS=0.10, Direct=0.0).
+  - reasoning MUST mention the specific NJ demand context (weekday pharma/finance corporate,
+    weekend NYC-drive leisure, MetLife event, graduation season, shore season, NYC overflow,
+    etc.) — never just "low occupancy."
+  - commission_cost = expected_gross × commission_rate (OTA=0.18, GDS=0.10, Agoda=0.15, Direct=0.0).
   - Output ONLY the JSON object. No preamble, no trailing text.
+  - If a partner has signal=PENALIZE or AVOID, do NOT recommend them — substitute
+    the next best alternative and explain the switch in the reasoning field.
 """
 
 
@@ -264,7 +282,34 @@ def _make_tools(db: AsyncSession, today: date):
             "weekday_total": sum(dow_count[:4]),
         })
 
-    return [get_occupancy_gaps, get_channel_history, get_weekly_pattern]
+    @tool
+    async def get_channel_sentiment(partner_name: str) -> str:
+        """
+        Return sentiment intelligence for a channel partner.
+
+        Simulates data pulled from OTA review portals, news aggregators,
+        and social listening tools.
+
+        Returns:
+          sentiment_score   : float -1.0 (very negative) to +1.0 (very positive)
+          sentiment_label   : POSITIVE / NEUTRAL / NEGATIVE / CRITICAL
+          signal            : PREFER / NEUTRAL / PENALIZE / AVOID
+          review_trend      : improving / stable / declining
+          avg_user_rating   : float out of 5.0
+          negative_review_pct : % of reviews rated ≤2 stars in last 30 days
+          recent_events     : list of news items (data breaches, campaigns, outages)
+          signal_reason     : plain-English allocation guidance for this partner
+
+        Call this for every partner you are about to recommend before finalising
+        the output. If signal is PENALIZE or AVOID, route volume elsewhere.
+
+        partner_name: e.g. "Booking.com", "Expedia", "Hotels.com", "Priceline",
+                      "Agoda", "Amadeus", "Sabre", "Direct"
+        """
+        data = get_sentiment(partner_name)
+        return json.dumps(data)
+
+    return [get_occupancy_gaps, get_channel_history, get_weekly_pattern, get_channel_sentiment]
 
 
 # ── Agent state ────────────────────────────────────────────────────────────────
@@ -280,12 +325,33 @@ def _build_graph(tools: list):
         model="gemini-2.5-flash",
         google_api_key=settings.GEMINI_API_KEY,
         temperature=0.3,
+        convert_system_message_to_human=True,  # Gemini doesn't natively support system role
     )
     llm_with_tools = llm.bind_tools(tools)
-    tool_node = ToolNode(tools)
+    tool_map = {t.name: t for t in tools}
 
-    def agent_node(state: _AgentState):
-        return {"messages": [llm_with_tools.invoke(state["messages"])]}
+    async def agent_node(state: _AgentState):
+        return {"messages": [await llm_with_tools.ainvoke(state["messages"])]}
+
+    # Sequential executor — tools share one AsyncSession; asyncio.gather causes
+    # SQLAlchemy "concurrent operations are not permitted" errors.
+    async def tool_node(state: _AgentState) -> dict:
+        last = state["messages"][-1]
+        results: list[BaseMessage] = []
+        for tc in last.tool_calls:
+            fn = tool_map.get(tc["name"])
+            if fn is None:
+                results.append(ToolMessage(
+                    content=json.dumps({"error": f"Unknown tool: {tc['name']}"}),
+                    tool_call_id=tc["id"],
+                ))
+                continue
+            try:
+                out = await fn.ainvoke(tc["args"])
+            except Exception as exc:
+                out = json.dumps({"error": str(exc)})
+            results.append(ToolMessage(content=out, tool_call_id=tc["id"]))
+        return {"messages": results}
 
     def should_continue(state: _AgentState):
         last = state["messages"][-1]

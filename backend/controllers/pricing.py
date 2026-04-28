@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 CATEGORY_ORDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
 
+# Categories shown in the AI Tier-1 context (token-saving — agent tools cover rest)
+CONTEXT_CATEGORIES = ["STANDARD", "DELUXE", "SUITE"]
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -114,14 +117,15 @@ async def _build_pricing_context(db: AsyncSession, today: date) -> dict:
 
 
 def _build_context_text(snapshot: dict, today: date) -> str:
-    """Convert snapshot dict → readable text for AI system prompt Tier-1."""
+    """Convert snapshot dict → readable text for AI system prompt Tier-1.
+    Only emits CONTEXT_CATEGORIES to keep token count low; agent tools cover the rest."""
     lines = [
         f"Date: {today}  |  Pricing window: {today} – "
         f"{today + timedelta(days=settings.BOOKING_WINDOW_DAYS)}",
         "",
-        "Per-category occupancy snapshot (next 14 days):",
+        "Per-category occupancy snapshot (next 14 days) — Standard, Deluxe, Suite only:",
     ]
-    for cat in CATEGORY_ORDER:
+    for cat in CONTEXT_CATEGORIES:
         if cat not in snapshot:
             continue
         # Show next 14 days inline
