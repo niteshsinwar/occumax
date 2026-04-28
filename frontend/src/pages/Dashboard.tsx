@@ -18,7 +18,6 @@ import type {
   SwapStep,
 } from "../types";
 import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
-import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
@@ -1258,44 +1257,6 @@ export function Dashboard() {
           )}
         </div>
       </div>
-
-      {/* Mini preview (full workspace lives in Occupancy) */}
-      {heatmap && (
-        <div className="mt-6 bg-surface border border-border p-6">
-          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-            <div>
-              <h3 className="font-serif font-bold text-lg text-text">Inventory preview</h3>
-              <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
-                Mini view · open Occupancy for the full workspace
-              </p>
-            </div>
-            <button
-              type="button"
-              className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all text-xs uppercase tracking-widest px-5 py-2.5 border border-text"
-              onClick={() => setActiveTab("occupancy")}
-              title="Open the full Occupancy workspace"
-            >
-              Open Occupancy
-            </button>
-          </div>
-
-          <HeatmapGrid
-            dates={heatmap.dates}
-            rows={simulatedRows ?? filteredRows}
-            maxDays={Math.min(14, spanDays)}
-            highlightSandwichGaps
-            compact
-            hideLegend
-            onCellClick={setSlotModal}
-          />
-        </div>
-      )}
-
-      {heatmap && snapshot && filteredRows.length === 0 && (
-        <div className="bg-surface border border-border py-12 px-6 text-center text-sm text-text-muted mt-6">
-          No rooms match the selected types for this hotel.
-        </div>
-      )}
 
       {!heatmap && (
         <div className="bg-surface border border-border py-16 px-6 text-center">
