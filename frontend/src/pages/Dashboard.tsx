@@ -85,6 +85,39 @@ function computeChannelMix(rows: HeatmapRow[], maxDays: number): ChannelMix {
   return mix;
 }
 
+function computeMostCommonLosFromSlice(rows: HeatmapRow[], maxDays: number): number | null {
+  // Extract LOS from SOFT booking runs within each room row (by booking_id).
+  // This is a fallback when /analytics/event-insights is unavailable.
+  const counts = new Map<number, number>();
+  for (const r of rows) {
+    const cells = r.cells.slice(0, maxDays);
+    let i = 0;
+    while (i < cells.length) {
+      const c = cells[i];
+      if (!c || c.block_type !== "SOFT" || !c.booking_id) { i++; continue; }
+      const bid = c.booking_id;
+      const start = i;
+      while (i < cells.length) {
+        const cc = cells[i];
+        if (!cc || cc.block_type !== "SOFT" || cc.booking_id !== bid) break;
+        i++;
+      }
+      const len = i - start;
+      if (len > 0 && len <= 30) counts.set(len, (counts.get(len) ?? 0) + 1);
+    }
+  }
+  if (counts.size === 0) return null;
+  let bestLos: number | null = null;
+  let bestCount = -1;
+  for (const [los, n] of counts.entries()) {
+    if (n > bestCount || (n === bestCount && (bestLos == null || los < bestLos))) {
+      bestLos = los;
+      bestCount = n;
+    }
+  }
+  return bestLos;
+}
+
 function topChannelInsight(mix: ChannelMix): { channel: string; sharePct: number; total: number } | null {
   const entries = Object.entries(mix);
   const total = entries.reduce((s, [, n]) => s + n, 0);
@@ -405,6 +438,11 @@ export function Dashboard() {
     return computeChannelMix(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
+  const mostCommonLosFallback = useMemo(() => {
+    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
+    return computeMostCommonLosFromSlice(filteredRows, spanDays);
+  }, [heatmap, filteredRows, spanDays]);
+
   const topChannel = useMemo(() => (channelMix ? topChannelInsight(channelMix) : null), [channelMix]);
   const cancelRatePct = useMemo(() => (channelMix ? estimatedCancellationRate(channelMix) : null), [channelMix]);
 
@@ -440,9 +478,11 @@ export function Dashboard() {
     // 1) Booking pattern prediction (AI summary from bookings, when available)
     if (eventInsights?.booking_pattern?.most_common_los != null) {
       out.push(`Most likely duration of stay: ${eventInsights.booking_pattern.most_common_los} night stays.`);
+    } else if (mostCommonLosFallback != null) {
+      out.push(`Most likely duration of stay: ${mostCommonLosFallback} night stays (from current bookings in this slice).`);
     } else if (best.n > 0) {
       // Fallback when analytics endpoint is unavailable.
-      out.push("Most likely duration of stay: unavailable — analytics not loaded for this slice.");
+      out.push("Most likely duration of stay: unavailable — not enough booked nights in this slice.");
     }
 
     // 2) Partner/channel insight (prefer analytics endpoint; fallback to slice)
@@ -494,6 +534,7 @@ export function Dashboard() {
     channelPerf,
     dashboardKpis?.sandwichMinlosBlockedNights,
     eventInsights,
+    mostCommonLosFallback,
     pace,
     runMetrics,
     snapshot,
