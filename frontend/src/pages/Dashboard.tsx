@@ -18,7 +18,6 @@ import type {
   SwapStep,
 } from "../types";
 import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
-import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
@@ -232,6 +231,10 @@ export function Dashboard() {
     offer_fill_prob_after: number;
     notes?: string | null;
   } | null>(null);
+  const [offerEstimateStatus, setOfferEstimateStatus] = useState<{
+    state: "idle" | "loading" | "error";
+    message?: string;
+  }>({ state: "idle" });
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -502,6 +505,7 @@ export function Dashboard() {
 
   const runSandwichPlaybook = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
+    setOfferEstimateStatus({ state: "loading" });
     try {
       const start = parseISO(heatmap.dates[0]);
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
@@ -525,6 +529,7 @@ export function Dashboard() {
         notes?: string | null;
       };
       setOfferEstimate(estBody);
+      setOfferEstimateStatus({ state: "idle" });
 
       const res = await dashboardSandwichPlaybook({
         start: startStr,
@@ -544,7 +549,14 @@ export function Dashboard() {
         show("No orphan-night gaps found in this slice.", "info");
       }
       await loadHeatmap();
-    } catch {
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
+      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : "AI prediction is currently unavailable. Please try again (and verify `GEMINI_API_KEY` is configured on the server).";
+      setOfferEstimateStatus({ state: "error", message: msg });
       show("Failed to apply orphan-night offers", "error");
     }
   }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan, swapPlan]);
@@ -820,10 +832,10 @@ export function Dashboard() {
                 type="button"
                 className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={() => runSandwichPlaybook()}
-                disabled={!heatmap || isOptimiseLoading}
+                disabled={!heatmap || isOptimiseLoading || offerEstimateStatus.state === "loading"}
                 title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
               >
-                Apply orphan-night offers
+                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Apply orphan-night offers"}
               </button>
               {swapPlan && (swapPlan.length ?? 0) > 0 && (
                 <button
@@ -1034,24 +1046,14 @@ export function Dashboard() {
           <div className="text-sm text-text leading-relaxed">
             Preview a recovery shuffle to recombine gaps, then apply orphan-night offers. For monetization, use AI-assisted pricing and channel allocation.
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors disabled:opacity-60"
-              onClick={() => runOptimisePreview()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Preview shuffle
-            </button>
-            <button
-              type="button"
-              className="bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors disabled:opacity-60"
-              onClick={() => runSandwichPlaybook()}
-              disabled={!heatmap || isOptimiseLoading}
-            >
-              Apply offers
-            </button>
-          </div>
+          <button
+            type="button"
+            className="mt-4 w-full bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors"
+            onClick={() => setActiveTab("pricing")}
+            title="Open Pricing to run AI what-if discount simulation and rate recommendations"
+          >
+            Go to Pricing
+          </button>
         </div>
 
         <div className="bg-surface border border-border p-5">
@@ -1078,17 +1080,25 @@ export function Dashboard() {
                       recovered via shuffle (deterministic)
                     </div>
                     <div className="text-text-muted">
-                      {offerEstimate
-                        ? (
-                          <>
-                            Est{" "}
-                            <span className="font-bold text-text">
-                              +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
-                            </span>{" "}
-                            via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
-                          </>
-                        )
-                        : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
+                      {offerEstimateStatus.state === "loading"
+                        ? "Calculating AI orphan-night offer uplift for this slice…"
+                        : offerEstimateStatus.state === "error"
+                          ? (
+                            <span className="text-occured">
+                              {offerEstimateStatus.message ?? "AI prediction is currently unavailable."}
+                            </span>
+                          )
+                          : offerEstimate
+                            ? (
+                              <>
+                                Est{" "}
+                                <span className="font-bold text-text">
+                                  +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
+                                </span>{" "}
+                                via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
+                              </>
+                            )
+                            : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
                     </div>
                     {offerEstimate && (
                       <div className="text-[10px] text-text-muted">
@@ -1258,44 +1268,6 @@ export function Dashboard() {
           )}
         </div>
       </div>
-
-      {/* Mini preview (full workspace lives in Occupancy) */}
-      {heatmap && (
-        <div className="mt-6 bg-surface border border-border p-6">
-          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
-            <div>
-              <h3 className="font-serif font-bold text-lg text-text">Inventory preview</h3>
-              <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
-                Mini view · open Occupancy for the full workspace
-              </p>
-            </div>
-            <button
-              type="button"
-              className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all text-xs uppercase tracking-widest px-5 py-2.5 border border-text"
-              onClick={() => setActiveTab("occupancy")}
-              title="Open the full Occupancy workspace"
-            >
-              Open Occupancy
-            </button>
-          </div>
-
-          <HeatmapGrid
-            dates={heatmap.dates}
-            rows={simulatedRows ?? filteredRows}
-            maxDays={Math.min(14, spanDays)}
-            highlightSandwichGaps
-            compact
-            hideLegend
-            onCellClick={setSlotModal}
-          />
-        </div>
-      )}
-
-      {heatmap && snapshot && filteredRows.length === 0 && (
-        <div className="bg-surface border border-border py-12 px-6 text-center text-sm text-text-muted mt-6">
-          No rooms match the selected types for this hotel.
-        </div>
-      )}
 
       {!heatmap && (
         <div className="bg-surface border border-border py-16 px-6 text-center">
