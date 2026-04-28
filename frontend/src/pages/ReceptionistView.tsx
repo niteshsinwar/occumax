@@ -527,7 +527,7 @@ export function ReceptionistView() {
                 <h3 className="font-serif font-bold text-lg text-text">AI Revenue Assistant</h3>
               </div>
               <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest">
-                Gemini 2.5 · Live hotel intelligence
+                Concierge AI · Live hotel intelligence
               </p>
             </div>
             {chatMessages.length > 0 && (

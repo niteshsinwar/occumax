@@ -201,7 +201,7 @@ export function ChannelOptimizationTab() {
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
-                  Revenue Intelligence · Channel Optimisation <AiTag title="Gemini recommends channel allocations based on performance and gap patterns (you approve before committing)." />
+                  Revenue Intelligence · Channel Optimisation <AiTag title="YieldIQ recommends channel allocations based on performance and gap patterns (you approve before committing)." />
                 </div>
                 <p className="text-sm text-text leading-relaxed mb-4">{channelData.recommendation}</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
@@ -239,7 +239,7 @@ export function ChannelOptimizationTab() {
                 </div>
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
-                    Gemini AI · Channel Allocation <AiTag title="Gemini recommends where to push inventory across partners to improve net yield." />
+                    YieldIQ · Channel Allocation <AiTag title="YieldIQ recommends where to push inventory across partners to improve net yield." />
                   </div>
                   <div className="text-[10px] text-text-muted mt-0.5">Analyses 14-day gaps + partner history to recommend where to push inventory</div>
                 </div>
@@ -264,7 +264,7 @@ export function ChannelOptimizationTab() {
             {aiRecsLoading && (
               <div className="py-10 text-center">
                 <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin mx-auto mb-3" />
-                <p className="text-xs text-text-muted">Gemini is analysing your inventory gaps and channel history…</p>
+                <p className="text-xs text-text-muted">YieldIQ is analysing your inventory gaps and channel history…</p>
               </div>
             )}
 
@@ -354,7 +354,7 @@ export function ChannelOptimizationTab() {
 
             {!aiRecs && !aiRecsLoading && (
               <div className="py-8 text-center text-xs text-text-muted border border-dashed border-accent/20">
-                Press "Run AI Analysis" — Gemini will check your gaps and recommend channel allocations.
+                Press "Run AI Analysis" — YieldIQ will check your gaps and recommend channel allocations.
               </div>
             )}
           </div>
