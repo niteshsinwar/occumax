@@ -235,6 +235,10 @@ export function Dashboard() {
     state: "idle" | "loading" | "error";
     message?: string;
   }>({ state: "idle" });
+  const [offerApplyStatus, setOfferApplyStatus] = useState<{
+    state: "idle" | "loading" | "error";
+    message?: string;
+  }>({ state: "idle" });
   const { show, Toasts } = useToast();
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
@@ -505,14 +509,65 @@ export function Dashboard() {
 
   const runSandwichPlaybook = useCallback(async () => {
     if (!heatmap || spanDays === 0) return;
-    setOfferEstimateStatus({ state: "loading" });
+    setOfferApplyStatus({ state: "loading" });
     try {
       const start = parseISO(heatmap.dates[0]);
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
       const startStr = formatISO(start, { representation: "date" });
       const endStr = formatISO(end, { representation: "date" });
 
-      // Ask AI for best orphan-night discount + estimated recovery (uses current swapPlan if present)
+      // Apply should be explicit: reuse previewed discount (no AI call here).
+      const discountPct = offerEstimate?.offer_discount_pct;
+      if (discountPct == null) {
+        setOfferApplyStatus({
+          state: "error",
+          message: "Preview the orphan-night offer first to select a discount, then apply.",
+        });
+        show("Preview the orphan-night offer first, then apply.", "info");
+        return;
+      }
+
+      const res = await dashboardSandwichPlaybook({
+        start: startStr,
+        end: endStr,
+        categories: selectedCategories,
+        discount_pct: discountPct,
+      });
+      const body = res.data as { orphan_slots_found: number; slots_updated: number };
+      if (body.slots_updated > 0) {
+        show(
+          `Offers applied (${Math.round(discountPct * 100)}% off) on ${body.slots_updated} slot(s)`,
+          "success",
+        );
+      } else if (body.orphan_slots_found > 0) {
+        show("Orphan nights found, but no rule/offer changes were needed in this slice.", "info");
+      } else {
+        show("No orphan-night gaps found in this slice.", "info");
+      }
+      await loadHeatmap();
+      setOfferApplyStatus({ state: "idle" });
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
+      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : "Could not apply orphan-night offers. Please try again.";
+      setOfferApplyStatus({ state: "error", message: msg });
+      show("Failed to apply orphan-night offers", "error");
+    }
+  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan, offerEstimate?.offer_discount_pct]);
+
+  const runOfferPreview = useCallback(async () => {
+    if (!heatmap || spanDays === 0) return;
+    setOfferEstimateStatus({ state: "loading" });
+    setOfferApplyStatus({ state: "idle" });
+    try {
+      const start = parseISO(heatmap.dates[0]);
+      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const startStr = formatISO(start, { representation: "date" });
+      const endStr = formatISO(end, { representation: "date" });
+
       const est = await dashboardRecoveryEstimate({
         start: startStr,
         end: endStr,
@@ -530,36 +585,18 @@ export function Dashboard() {
       };
       setOfferEstimate(estBody);
       setOfferEstimateStatus({ state: "idle" });
-
-      const res = await dashboardSandwichPlaybook({
-        start: startStr,
-        end: endStr,
-        categories: selectedCategories,
-        discount_pct: estBody.offer_discount_pct,
-      });
-      const body = res.data as { orphan_slots_found: number; slots_updated: number };
-      if (body.slots_updated > 0) {
-        show(
-          `Offers applied (${Math.round(estBody.offer_discount_pct * 100)}% off) on ${body.slots_updated} slot(s) · est +$${Math.round(estBody.offer_recovered_estimated).toLocaleString("en-US")}`,
-          "success",
-        );
-      } else if (body.orphan_slots_found > 0) {
-        show("Orphan nights found, but no rule/offer changes were needed in this slice.", "info");
-      } else {
-        show("No orphan-night gaps found in this slice.", "info");
-      }
-      await loadHeatmap();
+      show(`Offer preview ready (${Math.round(estBody.offer_discount_pct * 100)}% off)`, "success");
     } catch (err: unknown) {
       const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
       const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
       const msg =
         typeof detail === "string"
           ? detail
-          : "AI prediction is currently unavailable. Please try again (and verify `GEMINI_API_KEY` is configured on the server).";
+          : "Could not reach the AI model to generate an offer preview. Please try again.";
       setOfferEstimateStatus({ state: "error", message: msg });
-      show("Failed to apply orphan-night offers", "error");
+      show("Offer preview failed", "error");
     }
-  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan, swapPlan]);
+  }, [heatmap, spanDays, weekSpan, selectedCategories, swapPlan, show]);
 
   const runRecoveryPlan = useCallback(async () => {
     // Demo-friendly playbook (no auto-commit): make the steps visible for hackathon storytelling.
@@ -831,11 +868,26 @@ export function Dashboard() {
               <button
                 type="button"
                 className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runSandwichPlaybook()}
+                onClick={() => runOfferPreview()}
                 disabled={!heatmap || isOptimiseLoading || offerEstimateStatus.state === "loading"}
-                title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
+                title="Preview AI discount + uplift estimate (no DB writes)"
               >
-                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Apply orphan-night offers"}
+                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Preview orphan-night offer"}
+              </button>
+              <button
+                type="button"
+                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => runSandwichPlaybook()}
+                disabled={
+                  !heatmap ||
+                  isOptimiseLoading ||
+                  offerApplyStatus.state === "loading" ||
+                  offerEstimateStatus.state === "loading" ||
+                  !offerEstimate
+                }
+                title={!offerEstimate ? "Preview the offer first, then apply" : "Apply orphan-night offers to the DB for this slice"}
+              >
+                {offerApplyStatus.state === "loading" ? "Applying offers…" : "Apply orphan-night offers"}
               </button>
               {swapPlan && (swapPlan.length ?? 0) > 0 && (
                 <button
@@ -1098,7 +1150,7 @@ export function Dashboard() {
                                 via orphan-night offers (AI · {Math.round(offerEstimate.offer_discount_pct * 100)}% off)
                               </>
                             )
-                            : "Run “Apply orphan-night offers” to estimate offer recovery (AI) and choose the best discount."}
+                            : "Run “Preview orphan-night offer” to estimate offer recovery (AI) and choose the best discount."}
                     </div>
                     {offerEstimate && (
                       <div className="text-[10px] text-text-muted">
@@ -1251,7 +1303,7 @@ export function Dashboard() {
                 <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
                   {offerEstimate
                     ? `AI · ${Math.round(offerEstimate.offer_discount_pct * 100)}% off · incremental estimate`
-                    : "Run “Apply orphan-night offers” to estimate uplift."}
+                    : "Run “Preview orphan-night offer” to estimate uplift."}
                 </div>
               </div>
 
