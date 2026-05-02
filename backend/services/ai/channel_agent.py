@@ -329,6 +329,7 @@ def _build_graph(tools: list):
         openai_api_base=settings.POLYAI_API_BASE,
         openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.3,
+        model_kwargs={"extra_body": {"prefer": "quality"}},
     )
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
