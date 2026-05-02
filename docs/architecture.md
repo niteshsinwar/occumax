@@ -88,10 +88,10 @@ Key endpoint groups:
 | `POST /manager/optimise` | Run the yield optimisation algorithm — returns swap plan, does NOT write to DB |
 | `POST /manager/commit` | Apply a swap plan from /optimise to the DB (two-pass vacate→fill) |
 | `POST /manager/channel-allocate` | Pre-block inventory for a specific OTA partner (creates SOFT placeholder bookings) |
-| `GET /manager/channel-recommend` | Run Gemini channel AI — returns ranked OTA/GDS allocation recommendations |
-| `GET /manager/pricing/analyse` | Run Gemini pricing AI — returns per-category-per-date rate recommendations plus a **predictive what-if** discount ladder (demand lift, net price index, revenue index; `services/ai/pricing_what_if_agent.py`, heuristic fallback) |
+| `GET /manager/channel-recommend` | Run Poly AI channel agent — returns ranked OTA/GDS allocation recommendations |
+| `GET /manager/pricing/analyse` | Run Poly AI pricing agent — returns per-category-per-date rate recommendations plus a **predictive what-if** discount ladder (demand lift, net price index, revenue index; `services/ai/pricing_what_if_agent.py`, heuristic fallback) |
 | `POST /manager/pricing/commit` | Apply pricing recommendations — batch-updates `slot.current_rate` |
-| `POST /ai/chat` | AI receptionist agent (Gemini-backed, full conversation history, returns action_data card) |
+| `POST /ai/chat` | AI receptionist agent (Poly AI-backed, full conversation history, returns action_data card) |
 
 ---
 
@@ -126,7 +126,7 @@ Split stay: covers all requested nights across 2–3 room segments with a 5–10
 
 ## AI Agents
 
-Three LangGraph agents backed by Google Gemini 2.5 Flash (`GEMINI_API_KEY` secret):
+Three LangGraph agents backed by Poly AI (`POLYAI_API_KEY` secret):
 
 **Receptionist agent** (`services/ai/receptionist_agent.py`) — conversational booking + always-on revenue advisor. 6 tools:
 
@@ -146,11 +146,11 @@ The agent returns `action_data: { type, data }` alongside its text reply. The fr
 
 **Pricing agent** (`services/ai/pricing_agent.py`) — dynamic rate recommendations. 3 tools: `get_pricing_context`, `get_low_occupancy_dates`, `get_pickup_pace`. Returns a list of `{ category, date, suggested_rate, reason }` items.
 
-**Pricing what-if** (`services/ai/pricing_what_if_agent.py`) — single-shot Gemini JSON (or deterministic heuristic) that simulates a 0–40% discount ladder: `demand_lift_pct`, `net_price_index` (baseline 100), `revenue_index`, and `recommended_index`. Bundled on the same `GET /manager/pricing/analyse` response as `what_if` for the Pricing UI.
+**Pricing what-if** (`services/ai/pricing_what_if_agent.py`) — single-shot AI JSON (or deterministic heuristic) that simulates a 0–40% discount ladder: `demand_lift_pct`, `net_price_index` (baseline 100), `revenue_index`, and `recommended_index`. Bundled on the same `GET /manager/pricing/analyse` response as `what_if` for the Pricing UI.
 
 **Channel agent** (`services/ai/channel_agent.py`) — OTA/GDS allocation analysis. 3 tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`.
 
-All agents share the same pattern: LangGraph `StateGraph` with a tool node + Gemini 2.5 Flash with `bind_tools`. Each is invoked via a single async `run_*_agent()` entry point called from the controller layer.
+All agents share the same pattern: LangGraph `StateGraph` with a tool node + Poly AI with `bind_tools`. Each is invoked via a single async `run_*_agent()` entry point called from the controller layer.
 
 ---
 

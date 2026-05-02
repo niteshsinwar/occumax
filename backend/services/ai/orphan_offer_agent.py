@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import date
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from config import settings
 
@@ -70,13 +70,14 @@ async def recommend_orphan_offer_strategy(payload: dict) -> dict:
     """
     fill_default = float(payload.get("fill_prob_before", 0.10))
     try:
-        if not getattr(settings, "GEMINI_API_KEY", None):
-            raise RuntimeError("GEMINI_API_KEY not configured")
+        if getattr(settings, "POLYAI_API_KEY", "any") == "":
+            pass # We allow 'any' as default
 
-        model = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+        model = ChatOpenAI(
+            model="auto",
             temperature=0.2,
-            google_api_key=settings.GEMINI_API_KEY,
+            openai_api_base=settings.POLYAI_API_BASE,
+            openai_api_key=settings.POLYAI_API_KEY,
         )
 
         today = date.today().isoformat()
@@ -92,7 +93,7 @@ async def recommend_orphan_offer_strategy(payload: dict) -> dict:
         raw = _parse_strategy_json(text)
         return _normalize_strategy(raw, fill_default)
     except Exception:
-        logger.exception("Failed to compute orphan-offer strategy via Gemini; using heuristic fallback.")
+        logger.exception("Failed to compute orphan-offer strategy via AI; using heuristic fallback.")
         before = max(0.0, min(1.0, fill_default))
         after = min(1.0, before + 0.12)
         return _normalize_strategy(
@@ -100,7 +101,7 @@ async def recommend_orphan_offer_strategy(payload: dict) -> dict:
                 "discount_pct": 0.30,
                 "fill_prob_before": before,
                 "fill_prob_after": after,
-                "notes": "Heuristic estimate (Gemini unavailable or response not parseable).",
+                "notes": "Heuristic estimate (AI unavailable or response not parseable).",
             },
             fill_default,
         )

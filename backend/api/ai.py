@@ -1,5 +1,5 @@
 """
-AI routes — Receptionist conversational agent (LangGraph + Gemini).
+AI routes — Receptionist conversational agent (LangGraph + Poly AI).
 
 Routes
 ------

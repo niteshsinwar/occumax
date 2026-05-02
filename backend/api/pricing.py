@@ -28,7 +28,7 @@ async def analyse_pricing():
     Run the pricing AI agent against live occupancy data.
 
     Reads current slots/bookings, builds an occupancy snapshot, passes it to
-    Gemini, and returns a list of PricingRecommendations plus a narrative summary.
+    AI, and returns a list of PricingRecommendations plus a narrative summary.
 
     Nothing is written to the database — call POST /commit to apply changes.
     """

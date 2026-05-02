@@ -4,7 +4,7 @@ Receptionist AI Agent — LangGraph + Gemini
 Architecture:
   - Stateless: frontend owns full conversation history, sends it on every request
   - LangGraph agentic loop: agent → tool_node → agent → ... → END
-  - Gemini 1.5 Flash via langchain-google-genai
+  - Poly AI endpoint via langchain-openai
   - 3 tools: check_availability, find_split_stay (Phase 2 stub), confirm_booking
   - action_data: structured payload returned alongside text reply for frontend cards
 """
@@ -26,7 +26,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -785,11 +785,11 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
 
     # ── LLM ───────────────────────────────────────────────────────────────────
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=settings.GEMINI_API_KEY,
+    llm = ChatOpenAI(
+        model="auto",
+        openai_api_base=settings.POLYAI_API_BASE,
+        openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.3,
-        convert_system_message_to_human=True,   # Gemini doesn't natively support system role
     )
     llm_with_tools = llm.bind_tools(tools)
 
@@ -888,7 +888,7 @@ async def run_agent(
     final_msg = result["messages"][-1]
     raw_content = final_msg.content if hasattr(final_msg, "content") else ""
 
-    # Gemini 2.5+ returns content as a list of typed blocks:
+    # Poly AI returns content as a list of typed blocks:
     #   [{"type": "text", "text": "..."}, ...]
     # Earlier models return a plain string. Handle both.
     if isinstance(raw_content, list):

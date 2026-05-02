@@ -27,7 +27,8 @@ class Settings(BaseSettings):
             object.__setattr__(self, "DATABASE_URL", url)
 
     # ── AI ────────────────────────────────────────────────────────────────────
-    GEMINI_API_KEY: str = ""
+    POLYAI_API_BASE: str = "https://polyai.80.225.202.88.nip.io/v1"
+    POLYAI_API_KEY: str = "any"
 
     # ── Hotel identity ────────────────────────────────────────────────────────
     HOTEL_NAME: str = "Demo Hotel"

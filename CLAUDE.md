@@ -50,7 +50,7 @@ Every git push triggers an automatic deploy. You never touch servers directly â€
 | API route handlers (thin) | `api/` |
 | Business logic orchestration | `controllers/` |
 | Algorithm engine | `services/algorithm/` |
-| AI agents (Gemini/LangGraph) | `services/ai/` |
+| AI agents (Poly AI/LangGraph) | `services/ai/` |
 | Analytics | `services/analytics/` |
 | Pydantic request/response shapes | `core/schemas/` |
 | Non-sensitive config (git-tracked) | `.env.server` |
@@ -125,7 +125,7 @@ pip install -r requirements.txt
 cp .env.server .env
 # Add to .env:
 #   DATABASE_URL=postgresql+asyncpg://user:pass@localhost/occumax
-#   GEMINI_API_KEY=your-key
+#   POLYAI_API_KEY=any
 alembic upgrade head
 uvicorn main:app --reload --port 8000
 

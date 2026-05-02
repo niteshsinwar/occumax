@@ -33,7 +33,7 @@ class PricingWhatIfScenario(BaseModel):
 
 class PricingWhatIfAnalysis(BaseModel):
     """
-    AI-driven what-if discount ladder (Gemini) with heuristic fallback.
+    AI-driven what-if discount ladder (Poly AI) with heuristic fallback.
     """
 
     headline: str

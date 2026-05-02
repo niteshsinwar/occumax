@@ -13,7 +13,7 @@ import logging
 import re
 from datetime import date, timedelta
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from config import settings
 from core.schemas.pricing import PricingWhatIfAnalysis
@@ -178,13 +178,14 @@ async def run_pricing_what_if(snapshot: dict, today: date) -> dict:
     payload = {"hotel_snapshot_next_14d_by_category": compact}
 
     try:
-        if not getattr(settings, "GEMINI_API_KEY", None):
-            raise RuntimeError("GEMINI_API_KEY not configured")
+        if getattr(settings, "POLYAI_API_KEY", "any") == "":
+            pass
 
-        model = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+        model = ChatOpenAI(
+            model="auto",
             temperature=0.15,
-            google_api_key=settings.GEMINI_API_KEY,
+            openai_api_base=settings.POLYAI_API_BASE,
+            openai_api_key=settings.POLYAI_API_KEY,
         )
         human = json.dumps({"today": today.isoformat(), **payload}, ensure_ascii=False)
         resp = await model.ainvoke([{"role": "system", "content": _SYSTEM}, {"role": "user", "content": human}])
@@ -197,5 +198,5 @@ async def run_pricing_what_if(snapshot: dict, today: date) -> dict:
         data = _parse_json(text)
         return _finalize_what_if_payload(data)
     except Exception:
-        logger.exception("Pricing what-if: Gemini failed; using heuristic ladder.")
+        logger.exception("Pricing what-if: AI failed; using heuristic ladder.")
         return _heuristic_what_if(snapshot, today)

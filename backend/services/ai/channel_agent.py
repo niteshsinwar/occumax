@@ -26,7 +26,7 @@ from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -324,11 +324,11 @@ class _AgentState(TypedDict):
 # ── Graph ──────────────────────────────────────────────────────────────────────
 
 def _build_graph(tools: list):
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=settings.GEMINI_API_KEY,
+    llm = ChatOpenAI(
+        model="auto",
+        openai_api_base=settings.POLYAI_API_BASE,
+        openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.3,
-        convert_system_message_to_human=True,  # Gemini doesn't natively support system role
     )
     llm_with_tools = llm.bind_tools(tools)
     tool_map = {t.name: t for t in tools}
@@ -429,9 +429,9 @@ async def run_channel_agent(
         })
     except Exception as exc:
         msg = str(exc)
-        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "spending cap" in msg:
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
             from fastapi import HTTPException
-            raise HTTPException(status_code=503, detail="Gemini API spending cap reached. Go to ai.studio/spend to increase your limit.")
+            raise HTTPException(status_code=503, detail="AI API rate limit reached.")
         logger.error("Channel agent error: %s", msg)
         raise
 

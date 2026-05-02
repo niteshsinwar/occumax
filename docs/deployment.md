@@ -92,7 +92,7 @@ These are injected at deploy time. You cannot read or change them from the repo.
 | `MAIN_HOST` | Production server IP |
 | `DEV_DATABASE_URL` | PostgreSQL connection string for dev |
 | `MAIN_DATABASE_URL` | PostgreSQL connection string for production |
-| `GEMINI_API_KEY` | Google Gemini AI key |
+| `POLYAI_API_KEY` | Poly AI API key (can be 'any' depending on setup) |
 | `GH_TOKEN` | GitHub token used by the server to pull code |
 
 To change a secret value: ask the project owner — it requires GitHub admin access.

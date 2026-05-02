@@ -326,7 +326,7 @@ def _iter_nights(start: date, end: date):
 
 async def get_channel_recommendations() -> ChannelRecommendResponse:
     """
-    Build occupancy context snapshot and invoke the Gemini channel agent.
+    Build occupancy context snapshot and invoke the AI channel agent.
     Returns AI-generated channel allocation recommendations.
     """
     today = date.today()

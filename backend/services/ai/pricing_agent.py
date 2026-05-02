@@ -28,7 +28,7 @@ from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 from sqlalchemy import select
@@ -274,11 +274,11 @@ class _AgentState(TypedDict):
 # ── Agent graph ───────────────────────────────────────────────────────────────
 
 def _build_graph(tools: list):
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=settings.GEMINI_API_KEY,
+    llm = ChatOpenAI(
+        model="auto",
+        openai_api_base=settings.POLYAI_API_BASE,
+        openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.2,
-        convert_system_message_to_human=True,  # Gemini doesn't natively support system role
     )
     llm_with_tools = llm.bind_tools(tools)
 
@@ -377,15 +377,15 @@ async def run_pricing_agent(
         return {"recommendations": [], "summary": "Analysis timed out — try again or reduce the booking window."}
     except Exception as exc:
         msg = str(exc)
-        if "429" in msg or "RESOURCE_EXHAUSTED" in msg or "spending cap" in msg:
+        if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
             from fastapi import HTTPException
-            raise HTTPException(status_code=503, detail="Gemini API spending cap reached. Go to ai.studio/spend to increase your limit.")
+            raise HTTPException(status_code=503, detail="AI API rate limit reached.")
         logger.error("Pricing agent error: %s", msg)
         raise
     messages = result["messages"]
 
     # Last AIMessage without tool_calls = final answer
-    # Gemini returns content as a list[dict] when tools were used — extract text parts.
+    # Poly AI returns content as a string or list[dict] when tools were used — extract text parts.
     final_text = ""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and not msg.tool_calls:

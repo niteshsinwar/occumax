@@ -16,8 +16,6 @@ on:
         required: true     # Server IP — used for SSH and to build VITE_API_URL
       DATABASE_URL:
         required: true
-      GEMINI_API_KEY:
-        required: true
       GH_TOKEN:
         required: true
 
@@ -74,14 +72,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DEPLOY_HOST: ${{ secrets.HOST }}
           DEPLOY_BRANCH: ${{ inputs.branch }}
         run: |
           ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
             GH_TOKEN="$GH_TOKEN" \
             DATABASE_URL="$DATABASE_URL" \
-            GEMINI_API_KEY="$GEMINI_API_KEY" \
             DEPLOY_HOST="$DEPLOY_HOST" \
             DEPLOY_BRANCH="$DEPLOY_BRANCH" \
             bash << 'ENDSSH'
@@ -106,7 +102,6 @@ jobs:
             # Build .env from repo config + injected secrets
             cat /opt/occumax/backend/.env.server > /opt/occumax/.env
             echo "DATABASE_URL=${DATABASE_URL}" >> /opt/occumax/.env
-            echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> /opt/occumax/.env
             echo "CORS_ORIGINS=https://${DEPLOY_HOST}.nip.io" >> /opt/occumax/.env
 
             # Recreate venv if missing (can happen after server resets)
@@ -153,7 +148,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
             "sudo tee /etc/nginx/conf.d/occumax-timeouts.conf > /dev/null << 'EOF'
           # AI endpoints (pricing/analyse, channel-recommend, ai/chat) can take
-          # 60-120s for multi-turn Gemini agent loops. Raise timeouts to 300s so
+          # 60-120s for multi-turn AI agent loops. Raise timeouts to 300s so
           # Nginx does not kill the connection mid-run with a 504.
           proxy_read_timeout    300s;
           proxy_connect_timeout  15s;

@@ -504,7 +504,7 @@ def t11_tool_guard_greeting(sess: FrontendSession, tr: TestRunner):
                 )
             else:
                 tr.ok(f"'{msg}' → no booking card", r.get("reply","")[:60])
-            time.sleep(0.5)   # small delay between Gemini calls
+            time.sleep(0.5)   # small delay between AI calls
         except Exception as e:
             tr.fail(f"'{msg}' → request failed: {e}")
 
@@ -548,7 +548,7 @@ def main():
     parser.add_argument("--base-url", default="http://localhost:8000", metavar="URL")
     parser.add_argument("--verbose", action="store_true", help="Show request/response details")
     parser.add_argument("--delay",   type=float, default=1.0,
-                        help="Seconds to wait between tests (avoid Gemini rate limit)")
+                        help="Seconds to wait between tests (avoid AI rate limit)")
     args = parser.parse_args()
 
     print(f"\n{BOLD}Receptionist Agent — Frontend-Faithful Test Suite{RESET}")

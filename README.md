@@ -26,7 +26,7 @@ occumax/
 │   │   ├── models/         # SQLAlchemy ORM models (schema source of truth)
 │   │   └── schemas/        # Pydantic request/response schemas
 │   ├── services/
-│   │   ├── ai/             # LangGraph agents (Gemini)
+│   │   ├── ai/             # LangGraph agents (Poly AI)
 │   │   ├── algorithm/      # Booking placement & optimisation engine
 │   │   └── analytics/      # Forecasting & reporting
 │   ├── tests/
@@ -53,7 +53,7 @@ occumax/
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.server .env          # then add DATABASE_URL and GEMINI_API_KEY
+cp .env.server .env          # then add DATABASE_URL and POLYAI_API_KEY
 uvicorn main:app --reload
 ```
 

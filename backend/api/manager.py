@@ -46,7 +46,7 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession = Depe
 @router.get("/channel-recommend", response_model=ChannelRecommendResponse)
 async def channel_recommend():
     """
-    Run the Gemini channel allocation AI agent.
+    Run the channel allocation AI agent.
     Analyses 14-day occupancy gaps and historical partner performance to return
     ranked recommendations for which OTA/GDS partners should receive inventory.
     """
