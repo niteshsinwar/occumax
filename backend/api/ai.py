@@ -117,6 +117,35 @@ async def _build_hotel_context(db: AsyncSession) -> str:
         "\nUse get_room_inventory(category) to see per-room IDs, "
         "exact rates, and availability windows when you need specifics."
     )
+
+    # Pricing intelligence: pull today's recommendations from pricing_recs (written by pricing agent at 8AM).
+    # action=INCREASE → high demand, hold rate. action=DISCOUNT → soft demand, room may not sell at base rate.
+    try:
+        from core.models.pricing_recommendation import PricingRec
+        pricing_rows = await db.execute(
+            select(
+                PricingRec.category,
+                PricingRec.recommended_action,
+                PricingRec.confidence,
+                PricingRec.change_pct,
+            )
+            .where(PricingRec.date == today)
+            .order_by(PricingRec.category)
+        )
+        pricing_data = pricing_rows.all()
+        if pricing_data:
+            lines.append("\nPricing intelligence (today — from pricing engine):")
+            for cat, action, conf, chg in pricing_data:
+                sign = "+" if chg >= 0 else ""
+                lines.append(
+                    f"  {cat:<10}  action={action:<8}  confidence={conf:<6}  rate_change={sign}{round(chg, 1)}%"
+                )
+            lines.append(
+                "  (INCREASE=high sell probability, DISCOUNT=soft demand/offer discount, MAINTAIN=neutral)"
+            )
+    except Exception:
+        pass  # pricing_recs may not be populated yet — safe to skip
+
     return "\n".join(lines)
 
 

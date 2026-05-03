@@ -1,405 +1,438 @@
 """
-Pricing AI Agent — LangGraph + Gemini 2.5 Flash
+Pricing AI Agent — Multi-call strategy with Poly AI
 
-Single-shot agent (no conversation history):
-  1. Manager calls GET /manager/pricing/analyse
-  2. Agent receives occupancy snapshot + Tier-1 context text
-  3. Agent calls tools to gather detail, then returns structured recommendations
-  4. Controller converts results into PricingRecommendation list
+Strategy (6 sequential + parallel LLM calls):
+  1. Parallel: weather analysis, events analysis, market/news analysis, historical analysis
+  2. Sequential: synthesis call combining all 4 factor analyses + live occupancy snapshot
+  3. Persist results to pricing_recs table for caching / 8AM scheduler
 
-Tools:
-  get_pricing_context(category, start_date, end_date)   — per-date detail for a range
-  get_empty_windows(category)                            — consecutive empty runs ≥2 nights
-  get_pickup_pace(category, days_back)                   — bookings made in last N days
-
-Output format (from AI final message):
-  JSON array of recommendation objects embedded in a fenced code block or raw JSON.
+Each call is a focused single-shot LLM invocation (no tools, no graph) — fast and reliable.
+The synthesis call aggregates all signals into a 20-day calendar per room category.
 """
 
-# NOTE: intentionally no `from __future__ import annotations` — LangGraph
-# resolves TypedDict annotations at runtime and needs them in global scope.
+from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import operator
+import re
 from datetime import date, timedelta
-from typing import Annotated, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from config import settings
-from core.models import Room, Booking
+from services.ai.pricing_mock_data import (
+    get_events_for_window,
+    get_historical_trends,
+    get_market_news,
+    get_weather_forecast,
+)
 
 logger = logging.getLogger(__name__)
 
-
-# ── System prompt ─────────────────────────────────────────────────────────────
-
-_SYSTEM = """\
-You are the Revenue Management AI (RateIQ) for {hotel_name}, a hotel in New Jersey, USA.
-Today is {today}.
-
-Your job: analyse hotel occupancy data and produce intelligent, market-aware
-pricing recommendations for Standard, Deluxe, and Suite categories.
-
-Occupancy Tier-1 snapshot (next 14 days — Standard, Deluxe, Suite):
-{context}
-
-── New Jersey Hotel Market Context ───────────────────────────────────────────
-Use this context to make reason fields specific and insightful — not generic.
-
-Demand drivers:
-  • Weekdays (Mon–Thu): Corporate travelers — pharma (J&J, Novartis, Sanofi in
-    Titusville/East Hanover), finance (Goldman/Morgan Stanley NJ offices), and
-    tech (AT&T, Cognizant campuses). Business demand is rate-inelastic. Hold firm.
-  • Weekends (Fri–Sun): Drive-to leisure from NYC, Philadelphia, and Long Island.
-    Price-sensitive. Packages (parking, breakfast) outperform flat discounts.
-  • Peak seasons:
-    May–Jun: Graduation season (Princeton, Rutgers, Seton Hall, Montclair State)
-              — Suites and Deluxe fill weeks in advance; hold rates firm.
-    Jun–Aug: Shore drive market (Asbury Park, Long Beach Island, Cape May).
-              Weekend leisure peaks; weekday corporate continues.
-    Sep–Nov: Fall foliage, NFL season (Giants/Jets at MetLife Stadium in East
-              Rutherford), and conference season. Strong mixed demand.
-    Dec:     Holiday corporate parties + leisure — Short Hills Mall, NYC day trips.
-              Suites and Deluxe sell at a premium.
-    Mar–Apr: Spring shoulder — softer leisure; corporate steady.
-
-  • Key demand events (factor into rate reasoning when dates align):
-    -- MetLife Stadium (East Rutherford): concerts and NFL games → +25–40% Deluxe/Suite
-       uplift within 2 nights of event; bookings arrive 7–10 days out.
-    -- Atlantic City casino conventions → mid-week Standard/Deluxe bump.
-    -- NJ Convention & Expo Center (Edison): pharma summits, NJEA, trade shows
-       fill Standard 3–6 weeks out.
-    -- Princeton/Rutgers graduation weekends (mid-May) → 95%+ Suite occupancy.
-    -- Asbury Park summer concert series (Jun–Aug weekends) → leisure spike.
-    -- NYC overflow: when NYC hotel rates spike above $400/night, NJ captures
-       overflow guests booking 1–3 days out — watch for late-arrival pickup surges.
-
-OTA dynamics:
-  • Expedia, Booking.com, Hotels.com, and Priceline dominate NJ OTA bookings.
-  • Standard rooms face highest OTA price competition — Priceline flash deals.
-  • Suites and Deluxe have fewer OTA competitors — hold rates and push direct.
-  • Last-minute OTA deals (1–2 days out) drive Standard/Deluxe fill during NYC
-    overflow nights.
-
-── Pricing Rules ─────────────────────────────────────────────────────────────
-Occupancy thresholds (adjust for lead time, pickup pace, and day-of-week):
-  < 30%  → DISCOUNT aggressive   (–15–25%) — but check day-of-week first
-  30–50% → DISCOUNT moderate     (–5–15%)
-  50–70% → HOLD standard BAR
-  70–85% → INCREASE moderate     (+10–20%)
-  > 85%  → INCREASE aggressive   (+20–35%)
-
-Day-of-week adjustment:
-  Weekday low occ (<40%): standard discount — corporate bookings are rate-sticky
-  Weekend low occ (<40%): leisure package angle, mention parking/breakfast bundle
-  Weekday high occ (>80%): increase confidently — corporate guests book on company card
-  Weekend high occ (>80%): increase moderately — leisure guests are elastic
-
-Lead-time rule:
-  Check-in within 3 days  → tighten discounts (urgency pricing, OTA visibility)
-  Check-in 4–7 days out   → standard thresholds
-  Check-in 8–14 days out  → lead-time discount if occ < 50%
-
-Pickup-pace rule:
-  If last-7-day pickup rate < expected → discount or promote
-  If last-7-day pickup rate > expected → increase or hold
-
-Floor-rate constraint (HARD): NEVER suggest a rate below floor_rate for any date.
-
-── Tools ─────────────────────────────────────────────────────────────────────
-get_pricing_context(category, start_date, end_date)
-  → Per-date occupancy + rate detail for a range (up to 30 days).
-  → Focus on STANDARD, DELUXE, SUITE.
-
-get_low_occupancy_dates(category, threshold_pct=50.0)
-  → Dates in next 30 days where category occupancy is below threshold_pct.
-  → Includes lead_days for urgency adjustments.
-
-get_pickup_pace(category, days_back)
-  → Bookings confirmed in the last N days for this category.
-
-── Output format ─────────────────────────────────────────────────────────────
-After calling the tools you need, output a JSON object (no markdown fence) with:
-  {{
-    "recommendations": [
-      {{
-        "category": "DELUXE",
-        "date": "2026-05-16",
-        "current_rate": 249,
-        "suggested_rate": 329,
-        "change_pct": 32.1,
-        "confidence": "HIGH",
-        "reason": "Friday before Rutgers graduation weekend — Deluxe at 92% OTB; families book 10+ days ahead and are rate-inelastic. Capture last rooms at peak.",
-        "occupancy_pct": 92.0,
-        "otb": 9,
-        "floor_rate": 149
-      }},
-      ...
-    ],
-    "summary": "Concise 2–3 sentence summary referencing NJ market conditions, which categories need action, and one actionable management insight."
-  }}
-
-Rules for recommendations:
-  - Focus on STANDARD, DELUXE, and SUITE. Include other categories only if clearly impactful.
-  - Only recommend dates where action is warranted (occ < 50% or occ > 80%).
-  - Omit 50–80% dates unless pickup pace is abnormally slow.
-  - Max 30 recommendations total. Focus on the most impactful.
-  - All rates in USD. suggested_rate must be rounded to nearest $5.
-  - change_pct = round((suggested_rate - current_rate) / current_rate * 100, 1)
-  - Confidence: HIGH if occ >85% or <30%, MEDIUM if 70–85% or 30–50%, LOW otherwise.
-  - reason field: MUST be 15–30 words, market-aware, specific to the date/day-of-week
-    and NJ demand context. Reference events (MetLife, graduation, shore season, NYC overflow)
-    when relevant. NEVER write just "X% occupancy, aggressive discount."
-  - summary: Reference NJ conditions — events, seasons, channel pressure. Mention the
-    highest-priority action and any event-driven opportunity.
-
-Output ONLY the JSON object. No explanation text before or after.
-"""
+WINDOW_DAYS = 20
+CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
 
 
-# ── Tools ─────────────────────────────────────────────────────────────────────
+# ── LLM factory ───────────────────────────────────────────────────────────────
 
-def _make_tools(snapshot: dict, session_factory: async_sessionmaker, today: date):
-    """Create tool callables bound to the current request's data."""
-
-    @tool
-    async def get_pricing_context(category: str, start_date: str, end_date: str) -> str:
-        """
-        Return per-date occupancy and rate data for a category between start_date
-        and end_date (inclusive, ISO format YYYY-MM-DD). Max 30 days.
-        """
-        try:
-            ci = date.fromisoformat(start_date)
-            co = date.fromisoformat(end_date)
-        except ValueError:
-            return json.dumps({"error": "Invalid date format. Use YYYY-MM-DD."})
-
-        days = min((co - ci).days + 1, 30)
-        cat_data = snapshot.get(category.upper(), {})
-        result = []
-        for delta in range(days):
-            d = (ci + timedelta(days=delta)).isoformat()
-            b = cat_data.get(d)
-            if b:
-                result.append({"date": d, **b})
-            else:
-                result.append({"date": d, "occ_pct": 0, "otb": 0, "total": 0,
-                                "avg_rate": 0, "floor_rate": 0, "base_rate": 0})
-        return json.dumps({"category": category.upper(), "data": result})
-
-    @tool
-    async def get_low_occupancy_dates(category: str, threshold_pct: float = 50.0) -> str:
-        """
-        Return dates in the next 30 days where CATEGORY-LEVEL occupancy is below
-        threshold_pct (default 50%). Uses aggregate booked/total counts per date —
-        completely independent of which specific room holds each booking.
-
-        Use this to identify discount candidates. Do NOT use per-room slot patterns
-        for pricing decisions — room-level arrangement is managed by the yield
-        optimiser and should not influence rates.
-        """
-        cat_data = snapshot.get(category.upper(), {})
-        low_dates = []
-        for delta in range(30):
-            d = (today + timedelta(days=delta)).isoformat()
-            b = cat_data.get(d, {})
-            occ = b.get("occ_pct", 0.0)
-            if occ < threshold_pct:
-                low_dates.append({
-                    "date":      d,
-                    "occ_pct":   occ,
-                    "otb":       b.get("otb", 0),
-                    "total":     b.get("total", 0),
-                    "avg_rate":  b.get("avg_rate", 0),
-                    "floor_rate": b.get("floor_rate", 0),
-                    "lead_days": delta,     # days from today — useful for urgency pricing
-                })
-        return json.dumps({
-            "category":       category.upper(),
-            "threshold_pct":  threshold_pct,
-            "low_dates_count": len(low_dates),
-            "dates":          low_dates,
-        })
-
-    @tool
-    async def get_pickup_pace(category: str, days_back: int = 7) -> str:
-        """
-        Return number of bookings confirmed in the last N days for this category.
-        Use to judge whether demand is building or stalling.
-        """
-        cutoff = today - timedelta(days=max(1, min(days_back, 30)))
-        try:
-            async with session_factory() as db:
-                res = await db.execute(
-                    select(Booking.id, Booking.check_in, Booking.created_at)
-                    .join(Room, Booking.assigned_room_id == Room.id)
-                    .where(
-                        Room.category == category.upper(),
-                        Booking.created_at >= cutoff,
-                    )
-                )
-                rows = res.all()
-        except Exception as e:
-            logger.warning("get_pickup_pace query error: %s", e)
-            rows = []
-
-        return json.dumps({
-            "category": category.upper(),
-            "days_back": days_back,
-            "new_bookings": len(rows),
-            "expected_pace_note": (
-                f"With {days_back} days lookback, {len(rows)} new bookings found. "
-                "Compare against category total rooms × occ_target to gauge momentum."
-            ),
-        })
-
-    return [get_pricing_context, get_low_occupancy_dates, get_pickup_pace]
-
-
-# ── Agent state (module-level so LangGraph annotation resolution finds it) ────
-
-class _AgentState(TypedDict):
-    messages: Annotated[list, operator.add]
-
-
-# ── Agent graph ───────────────────────────────────────────────────────────────
-
-def _build_graph(tools: list):
-    llm = ChatOpenAI(
+def _make_llm(max_tokens: int = 10000) -> ChatOpenAI:
+    return ChatOpenAI(
         model="auto",
         openai_api_base=settings.POLYAI_API_BASE,
         openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.2,
+        model_kwargs={
+            "response_format": {"type": "text"},
+            "extra_body": {"max_tokens": max_tokens, "prefer": "quality"},
+        },
     )
-    llm_with_tools = llm.bind_tools(tools)
-
-    tool_node = ToolNode(tools)
-
-    async def agent_node(state: _AgentState):
-        response = await llm_with_tools.ainvoke(state["messages"])
-        return {"messages": [response]}
-
-    def should_continue(state: _AgentState):
-        last = state["messages"][-1]
-        if isinstance(last, AIMessage) and last.tool_calls:
-            return "tools"
-        return END
-
-    graph = StateGraph(_AgentState)
-    graph.add_node("agent", agent_node)
-    graph.add_node("tools", tool_node)
-    graph.set_entry_point("agent")
-    graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
-    return graph.compile()
 
 
-def _parse_recommendations(ai_text: str) -> dict:
-    """Extract JSON from AI final message. Returns dict with recommendations + summary."""
-    # Try to find JSON object in the text
-    text = ai_text.strip()
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
-    # Strip markdown fences if present
-    if "```" in text:
-        start = text.find("{", text.find("```"))
-        end = text.rfind("}") + 1
-        if start != -1 and end > start:
-            text = text[start:end]
+async def _safe_call(llm: ChatOpenAI, messages: list, label: str) -> str:
+    """Single LLM call with error handling. Returns raw content string."""
+    try:
+        resp = await llm.ainvoke(messages)
+        content = getattr(resp, "content", "") or ""
+        if isinstance(content, list):
+            content = "".join(
+                p.get("text", "") for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        return content
+    except Exception as exc:
+        logger.warning("LLM call [%s] failed: %s", label, exc)
+        return "{}"
 
-    # If it looks like raw JSON starting with {
-    if text.startswith("{"):
+
+def _parse_json(text: str, default: dict) -> dict:
+    """Extract first JSON object from LLM output."""
+    raw = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, re.IGNORECASE)
+    if fence:
+        raw = fence.group(1).strip()
+    if raw.startswith("{"):
         try:
-            return json.loads(text)
+            return json.loads(raw)
         except json.JSONDecodeError:
             pass
-
-    # Find first { to last }
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start != -1 and end > start:
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if m:
         try:
-            return json.loads(text[start:end])
+            return json.loads(m.group(0))
         except json.JSONDecodeError:
             pass
+    logger.debug("JSON parse failed for label — using default")
+    return default
 
-    logger.warning("Pricing agent: could not parse JSON from AI output (full): %s", text)
-    return {"recommendations": [], "summary": "Unable to parse AI response."}
+
+# ── Call 1: Weather analysis ──────────────────────────────────────────────────
+
+_WEATHER_SYSTEM = """\
+You are a hotel revenue analyst for a New Jersey hotel (corporate + leisure mix, near NYC).
+Analyze the weather forecast and output ONLY valid JSON — no other text.
+
+For each date, rate how weather affects hotel demand.
+
+Output schema (no fences, raw JSON):
+{
+  "analysis": {
+    "YYYY-MM-DD": {
+      "impact": "positive" | "neutral" | "negative",
+      "brief": "one sentence about weather impact on demand"
+    }
+  }
+}
+
+Rules:
+- Sunny/warm weekends (Fri-Sun) = positive — NJ shore drive-to leisure market surges
+- Rain/storms on weekends = negative — leisure drop-off; consider rate support
+- Weekday weather rarely affects demand — corporate travelers are inelastic
+- Clear warm Fridays = anticipate early leisure arrivals
+"""
+
+async def _call_weather_agent(llm: ChatOpenAI, weather: list) -> dict:
+    human = json.dumps({"forecast": weather}, ensure_ascii=False)
+    text = await _safe_call(llm, [SystemMessage(content=_WEATHER_SYSTEM), HumanMessage(content=human)], "weather")
+    return _parse_json(text, {"analysis": {}}).get("analysis", {})
+
+
+# ── Call 2: Events analysis ───────────────────────────────────────────────────
+
+_EVENTS_SYSTEM = """\
+You are a hotel revenue analyst. Analyze local NJ/NYC-area events and output ONLY valid JSON.
+
+For each event date (and 1-2 lead-in days), estimate demand impact on the hotel.
+
+Output schema (no fences, raw JSON):
+{
+  "analysis": {
+    "YYYY-MM-DD": {
+      "event": "event name or null",
+      "demand_boost_pct": 25,
+      "brief": "one sentence about event impact on hotel demand"
+    }
+  }
+}
+
+Rules:
+- Graduation weekends (Rutgers/Princeton) = +40-65% demand; families book Suites/Deluxe
+- Stadium concerts (MetLife) = +25-40% for that night + 1 night before
+- Conferences (Edison NJ Convention Center) = +15-25% Standard/Deluxe mid-week
+- Holiday weekends (Memorial Day) = +25-40% leisure demand
+- Include 1-2 lead-in days before major events (early arrivals)
+- Use 0 demand_boost_pct for dates with no event influence
+"""
+
+async def _call_events_agent(llm: ChatOpenAI, events: list, today: date) -> dict:
+    human = json.dumps({"events": events, "analysis_start": today.isoformat()}, ensure_ascii=False)
+    text = await _safe_call(llm, [SystemMessage(content=_EVENTS_SYSTEM), HumanMessage(content=human)], "events")
+    return _parse_json(text, {"analysis": {}}).get("analysis", {})
+
+
+# ── Call 3: Market/news analysis ──────────────────────────────────────────────
+
+_MARKET_SYSTEM = """\
+You are a hotel revenue strategist. Analyze market news and output ONLY valid JSON.
+
+Output schema (no fences, raw JSON):
+{
+  "sentiment": "bullish" | "neutral" | "bearish",
+  "rate_pressure": "up" | "flat" | "down",
+  "key_insight": "2-3 sentence market outlook paragraph",
+  "category_outlook": {
+    "ECONOMY": "brief pricing outlook",
+    "STANDARD": "brief pricing outlook",
+    "STUDIO": "brief pricing outlook",
+    "DELUXE": "brief pricing outlook",
+    "SUITE": "brief pricing outlook",
+    "PREMIUM": "brief pricing outlook"
+  }
+}
+"""
+
+async def _call_market_agent(llm: ChatOpenAI, news: list) -> dict:
+    human = json.dumps({"news_headlines": news, "market": "NJ/NYC metro hotel market"}, ensure_ascii=False)
+    text = await _safe_call(llm, [SystemMessage(content=_MARKET_SYSTEM), HumanMessage(content=human)], "market")
+    default = {"sentiment": "neutral", "rate_pressure": "flat", "key_insight": "", "category_outlook": {}}
+    return _parse_json(text, default)
+
+
+# ── Call 4: Historical trends analysis ────────────────────────────────────────
+
+_HISTORY_SYSTEM = """\
+You are a hotel revenue analyst with 2-year booking history data.
+Analyze seasonal patterns for this NJ hotel and output ONLY valid JSON.
+
+Output schema (no fences, raw JSON):
+{
+  "seasonal_multipliers": {
+    "ECONOMY": 1.05,
+    "STANDARD": 1.10,
+    "STUDIO": 1.08,
+    "DELUXE": 1.15,
+    "SUITE": 1.25,
+    "PREMIUM": 1.12
+  },
+  "pattern_insight": "2-3 sentences about YoY booking patterns for this period",
+  "week_note": "specific insight about this week historically vs full year"
+}
+
+Context: NJ hotel in May — graduation season, shore drive-to market opening, pharma conference season.
+"""
+
+async def _call_history_agent(llm: ChatOpenAI, history: dict, today: date) -> dict:
+    human = json.dumps({"period": f"Week of {today.isoformat()}", "historical_data": history}, ensure_ascii=False)
+    text = await _safe_call(llm, [SystemMessage(content=_HISTORY_SYSTEM), HumanMessage(content=human)], "history")
+    default = {"seasonal_multipliers": {}, "pattern_insight": "", "week_note": ""}
+    return _parse_json(text, default)
+
+
+# ── Call 5: Synthesis (final calendar) ───────────────────────────────────────
+
+_SYNTHESIS_SYSTEM = """\
+You are RateIQ, the Revenue Management AI for {hotel_name} (New Jersey, USA). Today: {today}.
+
+You have received 4 factor analyses: weather, events, market news, and historical trends.
+Combined with the live occupancy snapshot, generate actionable pricing entries for the next 20 days.
+
+Output ONLY valid JSON (no markdown fences):
+{{
+  "summary": "2-3 sentence market summary covering key events, occupancy outlook, and priority action",
+  "calendar": {{
+    "STANDARD": [
+      {{
+        "date": "YYYY-MM-DD",
+        "suggested_rate": 179,
+        "change_pct": 20.1,
+        "action": "INCREASE",
+        "confidence": "HIGH",
+        "reason": "15-30 word market-aware reason referencing specific NJ demand driver",
+        "weather_factor": "brief sentence",
+        "event_factor": "brief sentence or empty string",
+        "news_factor": "brief sentence"
+      }}
+    ],
+    "DELUXE": [...],
+    "SUITE": [...],
+    "ECONOMY": [...],
+    "STUDIO": [...],
+    "PREMIUM": [...]
+  }}
+}}
+
+Hard rules:
+- ONLY include entries where action is INCREASE or DISCOUNT — omit MAINTAIN dates entirely
+- INCREASE when: occ > 70% OR strong event signal (graduation, concert, holiday weekend)
+- DISCOUNT when: occ < 50% AND no major event AND lead_days > 2
+- suggested_rate MUST be >= floor_rate; rounded to nearest $5
+- action: "INCREASE" if change_pct > 2, "DISCOUNT" if change_pct < -2
+- Confidence: HIGH if occ >85% or <30%, MEDIUM if 70-85% or 30-50%, LOW otherwise
+- reason: MUST reference NJ-specific context (event name, day-of-week, market trend) — 15-30 words
+- Skip categories with 0 total rooms
+- Keep each factor field under 15 words
+- Output ONLY the JSON object — no text before or after
+"""
+
+async def _call_synthesis_agent(
+    llm: ChatOpenAI,
+    snapshot: dict,
+    today: date,
+    weather_analysis: dict,
+    events_analysis: dict,
+    market_analysis: dict,
+    history_analysis: dict,
+) -> dict:
+    dates_window = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+
+    # Compact snapshot for synthesis context (only categories that exist)
+    compact_snapshot = {
+        cat: {
+            d: {
+                "occ_pct": b.get("occ_pct"),
+                "otb": b.get("otb"),
+                "total": b.get("total"),
+                "avg_rate": b.get("avg_rate"),
+                "floor_rate": b.get("floor_rate"),
+                "base_rate": b.get("base_rate"),
+            }
+            for d, b in list(dates_data.items())[:WINDOW_DAYS]
+        }
+        for cat, dates_data in snapshot.items()
+        if snapshot.get(cat)
+    }
+
+    context = json.dumps({
+        "dates_window": dates_window,
+        "occupancy_snapshot": compact_snapshot,
+        "weather_impact": weather_analysis,
+        "events_impact": events_analysis,
+        "market_outlook": market_analysis,
+        "historical_multipliers": history_analysis.get("seasonal_multipliers", {}),
+        "historical_note": history_analysis.get("week_note", ""),
+    }, ensure_ascii=False)
+
+    system = _SYNTHESIS_SYSTEM.format(
+        hotel_name=settings.HOTEL_NAME,
+        today=today.isoformat(),
+    )
+
+    text = await _safe_call(
+        llm,
+        [SystemMessage(content=system), HumanMessage(content=context)],
+        "synthesis",
+    )
+    return _parse_json(text, {"summary": "Analysis complete.", "calendar": {}})
+
+
+# ── Persist to DB ─────────────────────────────────────────────────────────────
+
+async def _persist_recs(
+    result: dict,
+    snapshot: dict,
+    session_factory: async_sessionmaker,
+) -> None:
+    """Upsert AI calendar recommendations to pricing_recs table."""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from core.models.pricing_recommendation import PricingRec
+
+    calendar = result.get("calendar", {})
+    if not calendar:
+        return
+
+    rows = []
+    for cat, cells in calendar.items():
+        if not isinstance(cells, list):
+            continue
+        snap_cat = snapshot.get(cat.upper(), {})
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            d_str = cell.get("date", "")
+            if not d_str:
+                continue
+            snap_day = snap_cat.get(d_str, {})
+            rows.append({
+                "id": f"{cat.upper()}_{d_str}",
+                "category": cat.upper(),
+                "date": d_str,
+                "recommended_action": cell.get("action", "MAINTAIN"),
+                "current_rate": float(snap_day.get("avg_rate", 0.0)),
+                "recommended_rate": float(cell.get("suggested_rate", snap_day.get("avg_rate", 0.0))),
+                "change_pct": float(cell.get("change_pct", 0.0)),
+                "confidence": cell.get("confidence", "MEDIUM"),
+                "reasoning": cell.get("reason", ""),
+                "weather_factor": cell.get("weather_factor", "") or "",
+                "event_factor": cell.get("event_factor", "") or "",
+                "news_factor": cell.get("news_factor", ""),
+                "is_orphan": False,
+                "occupancy_pct": float(snap_day.get("occ_pct", 0.0)),
+                "otb": int(snap_day.get("otb", 0)),
+                "floor_rate": float(snap_day.get("floor_rate", 0.0)),
+                "computed_at": __import__("datetime").datetime.utcnow(),
+            })
+
+    if not rows:
+        return
+
+    try:
+        async with session_factory() as db:
+            for row in rows:
+                stmt = (
+                    pg_insert(PricingRec)
+                    .values(**row)
+                    .on_conflict_do_update(
+                        index_elements=["id"],
+                        set_={k: v for k, v in row.items() if k != "id"},
+                    )
+                )
+                await db.execute(stmt)
+            await db.commit()
+        logger.info("Persisted %d pricing recs to DB", len(rows))
+    except Exception as exc:
+        logger.warning("Could not persist pricing recs: %s", exc)
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
 async def run_pricing_agent(
     snapshot: dict,
-    context_text: str,
+    context_text: str,  # kept for API compatibility; multi-call strategy builds its own context
     today: date,
     session_factory: async_sessionmaker,
 ) -> dict:
     """
-    Run one pricing analysis turn.
-    Returns dict: { recommendations: [...], summary: str }
+    Run multi-call pricing analysis. Returns:
+      { "summary": str, "calendar": { category: [cells] } }
+
+    Phase 1 — 4 parallel focused LLM calls (weather, events, market, history)
+    Phase 2 — 1 synthesis call combining all signals + live occupancy
+    Phase 3 — persist to pricing_recs table
     """
-    tools = _make_tools(snapshot, session_factory, today)
-    graph = _build_graph(tools)
+    llm = _make_llm()
 
-    system_prompt = _SYSTEM.format(
-        hotel_name=settings.HOTEL_NAME,
-        today=today.isoformat(),
-        context=context_text,
-    )
+    # Gather mock external data
+    weather = get_weather_forecast(today, WINDOW_DAYS)
+    events = get_events_for_window(today, WINDOW_DAYS)
+    news = get_market_news()
+    history = get_historical_trends()
 
-    prompt = (
-        "Analyse the hotel occupancy data and generate pricing recommendations "
-        "for all categories. Use the tools to gather detail on categories that need "
-        "closer inspection. Output the final JSON recommendations object."
-    )
+    llm_synthesis = _make_llm(max_tokens=10000)
 
-    initial_messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=prompt),
-    ]
-
+    # Phase 1: parallel factor analyses
     try:
-        result = await asyncio.wait_for(
-            graph.ainvoke({"messages": initial_messages}),
-            timeout=290,  # 10s under Nginx's 300s proxy_read_timeout
+        weather_analysis, events_analysis, market_analysis, history_analysis = await asyncio.wait_for(
+            asyncio.gather(
+                _call_weather_agent(llm, weather),
+                _call_events_agent(llm, events, today),
+                _call_market_agent(llm, news),
+                _call_history_agent(llm, history, today),
+            ),
+            timeout=120,
         )
     except asyncio.TimeoutError:
-        logger.error("Pricing agent timed out after 290s")
-        return {"recommendations": [], "summary": "Analysis timed out — try again or reduce the booking window."}
-    except Exception as exc:
-        msg = str(exc)
-        if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=503, detail="AI API rate limit reached.")
-        logger.error("Pricing agent error: %s", msg)
-        raise
-    messages = result["messages"]
+        logger.warning("Factor analysis calls timed out — using defaults")
+        weather_analysis, events_analysis, market_analysis, history_analysis = {}, {}, {}, {}
 
-    # Last AIMessage without tool_calls = final answer
-    # Poly AI returns content as a string or list[dict] when tools were used — extract text parts.
-    final_text = ""
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and not msg.tool_calls:
-            if isinstance(msg.content, str):
-                final_text = msg.content
-            elif isinstance(msg.content, list):
-                final_text = "".join(
-                    part.get("text", "") for part in msg.content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
-            break
+    # Phase 2: synthesis (higher token limit — full 20-day calendar output)
+    try:
+        result = await asyncio.wait_for(
+            _call_synthesis_agent(
+                llm_synthesis, snapshot, today,
+                weather_analysis, events_analysis, market_analysis, history_analysis,
+            ),
+            timeout=180,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Synthesis call timed out")
+        result = {"summary": "Analysis timed out — try again.", "calendar": {}}
 
-    if not final_text:
-        logger.error("Pricing agent: no final message found in output")
-        return {"recommendations": [], "summary": "Pricing analysis failed."}
+    # Phase 3: persist
+    await _persist_recs(result, snapshot, session_factory)
 
-    return _parse_recommendations(final_text)
+    return result

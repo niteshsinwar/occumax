@@ -5,7 +5,7 @@ Architecture:
   - Stateless: frontend owns full conversation history, sends it on every request
   - LangGraph agentic loop: agent → tool_node → agent → ... → END
   - Poly AI endpoint via langchain-openai
-  - 3 tools: check_availability, find_split_stay (Phase 2 stub), confirm_booking
+  - 4 tools: check_availability, suggest_upgrade, get_room_inventory, get_revenue_intelligence
   - action_data: structured payload returned alongside text reply for frontend cards
 """
 
@@ -82,7 +82,7 @@ Current hotel snapshot (category-level — see tool for per-room detail):
 ── CORE RULE — tool calls ────────────────────────────────────────────────────
 • For BOOKING requests: you MUST have BOTH an explicit category AND explicit
   check-in + check-out dates from the guest. Only then call check_availability
-  or find_split_stay. Never call booking tools for greetings, general questions,
+  or suggest_upgrade. Never call booking tools for greetings, general questions,
   or occupancy queries — call get_revenue_intelligence() instead.
 • For INSIGHTS: call get_revenue_intelligence(). Never call check_availability
   just to show data — it produces a card that confuses the receptionist.
@@ -97,22 +97,26 @@ check_availability(category, check_in, check_out)
   → Returns DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE.
   → ALWAYS call this even if you already know availability from context.
 
-find_split_stay(category, check_in, check_out)
+suggest_upgrade(preferred_category, check_in, check_out)
   → Call when check_availability returns NOT_POSSIBLE.
-  → Returns SPLIT_POSSIBLE (2–3 rooms, discount) or NOT_POSSIBLE.
-
-find_split_stay_flex(preferred_category, check_in, check_out)
-  → Call when the receptionist allows mixed-category split stays.
-  → Returns SPLIT_POSSIBLE across ANY categories, preferring preferred_category.
+  → Checks all higher-tier categories for the same dates.
+  → Uses live pricing intelligence (probability of selling) to decide discount:
+      High probability (demand strong) → full rate, no discount.
+      Low probability (demand soft)    → discount recommended.
+  → Returns UPGRADE_AVAILABLE with category, room_id, discount_pct, pricing_reason.
+  → Returns NO_UPGRADE if no higher category has rooms available.
 
 get_room_inventory(category)
   → Call when the guest asks about floors, specific room IDs, or exact rates.
   → Do NOT call just to check booking feasibility — use check_availability.
+  → After identifying a preferred room (by floor or ID), call
+    check_room_availability(room_id, check_in, check_out) to get a confirmable card.
 
-probe_split_window(category, anchor_check_in, duration_nights)
-  → Call when find_split_stay returned NOT_POSSIBLE for the guest's dates.
-  → Tries ±5 day shifts to find the nearest split stay window.
-  → Also call when guest asks "any date/category with split stay discount?"
+check_room_availability(room_id, check_in, check_out)
+  → Call after get_room_inventory when the guest has a floor or room preference.
+  → Checks that exact room's slots and returns a confirmable DIRECT_AVAILABLE card,
+    or OCCUPIED if the room is blocked on any date in the range.
+  → Do NOT use for general availability — use check_availability for that.
 
 get_revenue_intelligence()
   → Call proactively when the receptionist asks a general question, greets you,
@@ -141,19 +145,18 @@ get_revenue_intelligence()
 2. Call check_availability → produces action card.
 3. DIRECT_AVAILABLE / SHUFFLE_POSSIBLE → one sentence + "Confirm with the button."
 4. NOT_POSSIBLE →
-   a. Call find_split_stay(same category, same dates). SPLIT_POSSIBLE → done.
-   b. If mixed-category split allowed: call find_split_stay_flex. SPLIT_POSSIBLE → done.
-   c. Call check_availability(next higher category, same dates). Available → done.
-   d. Call check_availability(next lower category, same dates). Available → done.
-   e. Call check_availability(same category, check_in+1 day, same duration). Available → done.
-   f. None worked → call get_room_inventory(category), report earliest free window.
+   a. Call suggest_upgrade(same_category, same_dates).
+      UPGRADE_AVAILABLE → present upgrade option.
+      If discount_pct > 0: mention the discount and pricing_reason naturally.
+      ("Deluxe is open for those dates — demand is softer so I'd offer it at 10% off.")
+   b. NO_UPGRADE → call get_room_inventory(preferred_category), report earliest free window.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── [PREFS] mode ─────────────────────────────────────────────────────────────
 Message starts with [PREFS] — the receptionist just toggled a checkbox to update
 guest options. This is a preference acknowledgement ONLY. Do NOT call any booking
 tools. Reply with exactly one short sentence confirming the updated option (e.g.
-"Got it — split stay option is now off."). No card, no tool calls.
+"Got it — nearby dates option is now on."). No card, no tool calls.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── [HANDOFF] mode ────────────────────────────────────────────────────────────
@@ -161,10 +164,8 @@ Message starts with [HANDOFF] — the deterministic engine confirmed the exact r
 dates are impossible in the preferred category. The message contains options.* flags.
 YOU MUST READ EACH FLAG AND SKIP THE CORRESPONDING STEP IF IT IS FALSE.
 
-Category order (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
-
 Stop at the first step that returns an actionable result (DIRECT_AVAILABLE,
-SHUFFLE_POSSIBLE, or SPLIT_POSSIBLE). Never skip to a later step if an earlier one
+SHUFFLE_POSSIBLE, or UPGRADE_AVAILABLE). Never skip to a later step if an earlier one
 already produced a card.
 
   [execute only if options.nearby_dates_pm1=true]
@@ -172,21 +173,13 @@ already produced a card.
           Also try check_in - 1 day if STEP 1a fails. Stop if either is available.
 
   [execute only if options.different_category=true]
-  STEP 2: Try ALL other categories for the original dates, in this order:
-            next higher (e.g. PREMIUM for DELUXE)
-            next lower  (e.g. STUDIO for DELUXE)
-            then the rest: SUITE, STANDARD, ECONOMY (skip preferred and already-tried).
-          Call check_availability once per category. Stop at the first that is available.
-          A NOT_POSSIBLE for one category tells you NOTHING about the others — check each.
-
-  [execute only if options.split_stay=true]
-  STEP 3: find_split_stay(same_category, original dates). Stop if SPLIT_POSSIBLE.
-
-  [execute only if options.mixed_category_split=true AND options.split_stay=true]
-  STEP 4: find_split_stay_flex(preferred_category, original dates). Stop if SPLIT_POSSIBLE.
+  STEP 2: Call suggest_upgrade(preferred_category, original_dates).
+          This finds the best available higher-tier room and applies pricing intelligence.
+          UPGRADE_AVAILABLE → present the upgrade + any discount the pricing engine set.
+          Stop here.
 
   [always — if nothing above produced a card]
-  STEP 5: get_room_inventory(preferred_category). Report the earliest free window. No card.
+  STEP 3: get_room_inventory(preferred_category). Report the earliest free window. No card.
 
 Do NOT call check_availability for the original preferred_category on the original dates —
 the deterministic engine already confirmed that is impossible.
@@ -242,19 +235,17 @@ def _extract_action_data(messages: list[BaseMessage]) -> Optional[dict]:
     Scan ALL tool results and return the highest-priority action_data.
 
     Priority (highest wins — order matters):
-      0. confirmed    — booking_confirmed / split_stay_confirmed
-      1. actionable   — DIRECT_AVAILABLE or SHUFFLE_POSSIBLE (receptionist can act)
-      2. split        — SPLIT_POSSIBLE (receptionist can act)
-      3. informational— NOT_POSSIBLE (shows infeasible dates, no confirm button)
+      0. confirmed    — booking_confirmed
+      1. actionable   — DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or UPGRADE_AVAILABLE
+      2. informational— NOT_POSSIBLE (shows infeasible dates, no confirm button)
 
     Scanning in chronological order and keeping the highest-priority result means
     that if the AI calls check_availability(ECONOMY) → DIRECT_AVAILABLE and then
     check_availability(DELUXE) → NOT_POSSIBLE, the DIRECT_AVAILABLE card wins
     rather than being overwritten by the later NOT_POSSIBLE result.
     """
-    confirmed: Optional[dict]    = None
-    actionable: Optional[dict]   = None
-    split_possible: Optional[dict] = None
+    confirmed: Optional[dict]  = None
+    actionable: Optional[dict] = None
     not_possible: Optional[dict] = None
 
     for msg in messages:
@@ -265,20 +256,37 @@ def _extract_action_data(messages: list[BaseMessage]) -> Optional[dict]:
         except (json.JSONDecodeError, TypeError):
             continue
 
-        if data.get("stay_group_id"):
-            confirmed = {"type": "split_stay_confirmed", "data": data}
-        elif data.get("booking_id"):
+        if data.get("booking_id"):
             confirmed = {"type": "booking_confirmed", "data": data}
-        elif data.get("state") == "SPLIT_POSSIBLE":
-            split_possible = {"type": "split_stay_result", "data": data}
         elif data.get("state") in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
             # Keep the first actionable result; don't overwrite with a later NOT_POSSIBLE
             if actionable is None:
                 actionable = {"type": "availability_result", "data": data}
+        elif data.get("state") == "UPGRADE_AVAILABLE" and data.get("upgrades"):
+            # Promote the best upgrade option to an actionable availability_result card.
+            # Carries is_upgrade + discount fields so the frontend can display them.
+            if actionable is None:
+                best = data["upgrades"][0]
+                actionable = {
+                    "type": "availability_result",
+                    "data": {
+                        "state": best["state"],
+                        "room_id": best["room_id"],
+                        "swap_plan": best.get("swap_plan"),
+                        "comparison": best.get("comparison"),
+                        "request": best["request"],
+                        "is_upgrade": True,
+                        "upgrade_from": data["preferred_category"],
+                        "discount_recommended": best.get("discount_recommended", False),
+                        "discount_pct": best.get("discount_pct", 0.0),
+                        "pricing_reason": best.get("pricing_reason", ""),
+                        "prob_of_selling": best.get("prob_of_selling", ""),
+                    },
+                }
         elif data.get("state") == "NOT_POSSIBLE":
             not_possible = {"type": "availability_result", "data": data}
 
-    return confirmed or actionable or split_possible or not_possible
+    return confirmed or actionable or not_possible
 
 
 # ── Agent state ───────────────────────────────────────────────────────────────
@@ -345,98 +353,6 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             logger.exception("check_availability tool error")
             return json.dumps({"error": str(exc)})
 
-    @tool
-    async def find_split_stay(
-        category: str,
-        check_in: str,
-        check_out: str,
-    ) -> str:
-        """
-        When check_availability returns NOT_POSSIBLE, find a split stay:
-        cover all requested nights across 2–3 rooms of the same category,
-        with a consecutive-stay discount (5% for 1 handoff, 10% for 2).
-        Returns segments with room_id, floor, check_in, check_out, nights,
-        base_rate, discounted_rate, total_rate, discount_pct.
-        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
-        Dates must be ISO format: YYYY-MM-DD.
-        """
-        try:
-            req = BookingRequestIn(
-                category   = RoomCategory(category.upper()),
-                check_in   = date.fromisoformat(check_in),
-                check_out  = date.fromisoformat(check_out),
-                guest_name = "",
-            )
-            result = await ctrl.find_split_stay(req, db)
-            return json.dumps({
-                "state":        result.state,
-                "message":      result.message,
-                "category":     category,
-                "discount_pct": result.discount_pct,
-                "total_nights": result.total_nights,
-                "total_rate":   result.total_rate,
-                "segments": [
-                    {
-                        "room_id":         s.room_id,
-                        "floor":           s.floor,
-                        "check_in":        str(s.check_in),
-                        "check_out":       str(s.check_out),
-                        "nights":          s.nights,
-                        "base_rate":       s.base_rate,
-                        "discounted_rate": s.discounted_rate,
-                    }
-                    for s in result.segments
-                ],
-            })
-        except Exception as exc:
-            logger.exception("find_split_stay tool error")
-            return json.dumps({"error": str(exc)})
-
-    @tool
-    async def find_split_stay_flex(
-        preferred_category: str,
-        check_in: str,
-        check_out: str,
-    ) -> str:
-        """
-        Find a split stay allowing mixed room categories, preferring the requested
-        category and adjacent categories first.
-
-        Returns segments with room_id, category, floor, check_in, check_out, nights,
-        base_rate, discounted_rate, total_rate, discount_pct.
-        """
-        try:
-            req = BookingRequestIn(
-                category=RoomCategory(preferred_category.upper()),
-                check_in=date.fromisoformat(check_in),
-                check_out=date.fromisoformat(check_out),
-                guest_name="",
-            )
-            result = await ctrl.find_split_stay_flex(req, db)
-            return json.dumps({
-                "state":        result.state,
-                "message":      result.message,
-                "category":     preferred_category,
-                "discount_pct": result.discount_pct,
-                "total_nights": result.total_nights,
-                "total_rate":   result.total_rate,
-                "segments": [
-                    {
-                        "room_id":         s.room_id,
-                        "category":        (s.category.value if hasattr(s.category, "value") else s.category),
-                        "floor":           s.floor,
-                        "check_in":        str(s.check_in),
-                        "check_out":       str(s.check_out),
-                        "nights":          s.nights,
-                        "base_rate":       s.base_rate,
-                        "discounted_rate": s.discounted_rate,
-                    }
-                    for s in (result.segments or [])
-                ],
-            })
-        except Exception as exc:
-            logger.exception("find_split_stay_flex tool error")
-            return json.dumps({"error": str(exc)})
 
     @tool
     async def get_room_inventory(category: str) -> str:
@@ -539,86 +455,212 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             return json.dumps({"error": str(exc)})
 
     @tool
-    async def probe_split_window(
-        category: str,
-        anchor_check_in: str,
-        duration_nights: int,
+    async def check_room_availability(
+        room_id: str,
+        check_in: str,
+        check_out: str,
     ) -> str:
         """
-        Search for the nearest date window where a genuine split stay (2+ rooms,
-        5–10% discount) is possible for this category.
+        Check if a SPECIFIC room (by ID) is available for the given date range.
+        Call this after get_room_inventory when the guest has expressed a floor
+        or room preference — it returns a confirmable action card for that exact room.
 
-        Tries the anchor dates then shifts check_in by ±1, ±2, ±3, ±4, ±5 days
-        and returns the first window that yields SPLIT_POSSIBLE with 2+ segments.
-
-        Use this when:
-        - The guest asks about split stay discounts
-        - find_split_stay returns NOT_POSSIBLE for the current dates
-        - The guest asks "any date where split stay works?"
-
-        Parameters
-        ----------
-        category        : room category (ECONOMY / STANDARD / STUDIO / DELUXE / PREMIUM / SUITE)
-        anchor_check_in : the guest's preferred check_in date (YYYY-MM-DD)
-        duration_nights : length of stay in nights (integer)
-
-        Returns the first working window: state, segments, discount_pct, check_in, check_out.
-        If nothing found within ±5 days, returns NOT_POSSIBLE with a message.
+        Returns DIRECT_AVAILABLE with a card the receptionist can confirm,
+        or OCCUPIED with the date the room is blocked from.
+        room_id: exact room ID from get_room_inventory (e.g. "D09", "S03")
+        Dates must be ISO format: YYYY-MM-DD.
         """
         try:
-            cat      = RoomCategory(category.upper())
-            anchor   = date.fromisoformat(anchor_check_in)
-            today_d  = date.today()
+            ci = date.fromisoformat(check_in)
+            co = date.fromisoformat(check_out)
 
-            # Try shifts: 0, -1, +1, -2, +2, -3, +3, -4, +4, -5, +5
-            shifts = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]
-            for delta in shifts:
-                ci = anchor + timedelta(days=delta)
-                co = ci + timedelta(days=duration_nights)
-                if ci < today_d:
-                    continue
-                req = BookingRequestIn(
-                    category   = cat,
-                    check_in   = ci,
-                    check_out  = co,
-                    guest_name = "",
+            room_result = await db.execute(
+                select(Room.id, Room.category, Room.floor_number, Room.base_rate)
+                .where(Room.id == room_id, Room.is_active == True)
+            )
+            room = room_result.first()
+            if not room:
+                return json.dumps({"error": f"Room {room_id} not found or inactive."})
+
+            r_id, r_cat, r_floor, r_rate = room
+            cat_str = r_cat.value if hasattr(r_cat, "value") else str(r_cat)
+
+            stay_dates = [ci + timedelta(days=i) for i in range((co - ci).days)]
+
+            slots_result = await db.execute(
+                select(Slot.date, Slot.block_type)
+                .where(
+                    Slot.room_id == room_id,
+                    Slot.date >= ci,
+                    Slot.date < co,
                 )
-                result = await ctrl.find_split_stay(req, db)
-                if result.state == "SPLIT_POSSIBLE" and len(result.segments) >= 2:
-                    return json.dumps({
-                        "state":        "SPLIT_POSSIBLE",
-                        "category":     category,
-                        "check_in":     str(ci),
-                        "check_out":    str(co),
-                        "shift_days":   delta,
-                        "discount_pct": result.discount_pct,
-                        "total_nights": result.total_nights,
-                        "total_rate":   result.total_rate,
-                        "message":      result.message,
-                        "segments": [
-                            {
-                                "room_id":         s.room_id,
-                                "floor":           s.floor,
-                                "check_in":        str(s.check_in),
-                                "check_out":       str(s.check_out),
-                                "nights":          s.nights,
-                                "base_rate":       s.base_rate,
-                                "discounted_rate": s.discounted_rate,
-                            }
-                            for s in result.segments
-                        ],
-                    })
+            )
+            slot_map = {row.date: row.block_type for row in slots_result.all()}
+
+            blocked = [
+                d for d in stay_dates
+                if slot_map.get(d, BlockType.EMPTY) != BlockType.EMPTY
+            ]
+
+            if not blocked:
+                return json.dumps({
+                    "state": "DIRECT_AVAILABLE",
+                    "room_id": room_id,
+                    "message": (
+                        f"Room {room_id} (floor {r_floor}, {cat_str}, "
+                        f"${int(r_rate)}/night) is available {check_in} to {check_out}."
+                    ),
+                    "swap_plan": None,
+                    "comparison": None,
+                    "infeasible_dates": [],
+                    "alternatives": [],
+                    "request": {
+                        "category": cat_str,
+                        "check_in": check_in,
+                        "check_out": check_out,
+                    },
+                })
 
             return json.dumps({
-                "state":   "NOT_POSSIBLE",
+                "state": "OCCUPIED",
+                "room_id": room_id,
+                "floor": r_floor,
                 "message": (
-                    f"No {category} split stay found within ±5 days of {anchor_check_in} "
-                    f"for a {duration_nights}-night stay. The category may not have enough "
-                    "rooms with the required gap pattern."
+                    f"Room {room_id} is not available — blocked from "
+                    f"{min(blocked)}. Try another room on floor {r_floor}."
                 ),
+                "blocked_from": str(min(blocked)),
             })
+
         except Exception as exc:
-            logger.exception("probe_split_window tool error")
+            logger.exception("check_room_availability tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
+    async def suggest_upgrade(
+        preferred_category: str,
+        check_in: str,
+        check_out: str,
+    ) -> str:
+        """
+        When check_availability returns NOT_POSSIBLE for the preferred category,
+        find an available upgrade in the next higher-tier category.
+
+        Uses pricing intelligence from the pricing engine (probability of selling)
+        to decide whether to offer a discount on the upgrade:
+        - High probability (INCREASE action / majority demand): full rate, no discount.
+        - Low probability (DISCOUNT action / soft demand): recommend a discount.
+
+        preferred_category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        Dates must be ISO format: YYYY-MM-DD.
+
+        Returns UPGRADE_AVAILABLE with category, room_id, prob_of_selling,
+        discount_recommended, discount_pct, pricing_reason.
+        Returns NO_UPGRADE if no higher-tier room is available.
+        """
+        try:
+            from core.models.pricing_recommendation import PricingRec
+
+            cat_order = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+            pref = preferred_category.upper()
+            ci = date.fromisoformat(check_in)
+            co = date.fromisoformat(check_out)
+
+            if pref not in cat_order:
+                return json.dumps({"error": f"Unknown category: {preferred_category}"})
+
+            pref_idx = cat_order.index(pref)
+            higher_categories = cat_order[pref_idx + 1:]
+
+            if not higher_categories:
+                return json.dumps({
+                    "state": "NO_UPGRADE",
+                    "preferred_category": pref,
+                    "message": f"{pref} is already the highest tier — no upgrade available.",
+                })
+
+            # Date strings for pricing lookup
+            stay_dates = [(ci + timedelta(days=i)).isoformat() for i in range((co - ci).days)]
+
+            for cat in higher_categories:
+                # Check if this category has a room available
+                req = BookingRequestIn(
+                    category=RoomCategory(cat),
+                    check_in=ci,
+                    check_out=co,
+                    guest_name="",
+                )
+                avail = await ctrl.check_availability(req, db)
+                if avail.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
+                    continue
+
+                # Fetch pricing recs for this category + stay dates from pricing_recs table
+                rec_ids = [f"{cat}_{d}" for d in stay_dates]
+                recs_result = await db.execute(
+                    select(
+                        PricingRec.recommended_action,
+                        PricingRec.confidence,
+                        PricingRec.change_pct,
+                    ).where(PricingRec.id.in_(rec_ids))
+                )
+                recs = recs_result.all()
+
+                # Aggregate demand signal across stay dates
+                total = len(recs)
+                increase_days = sum(1 for r in recs if r.recommended_action == "INCREASE")
+                discount_days = sum(1 for r in recs if r.recommended_action == "DISCOUNT")
+
+                if total == 0 or increase_days >= total * 0.5:
+                    # Strong or unknown demand — hold rate
+                    prob_of_selling = "HIGH"
+                    discount_pct = 0.0
+                    pricing_reason = "High demand expected — upgrade offered at full rate."
+                elif discount_days > total * 0.5:
+                    # Soft demand — pricing engine recommends discount
+                    prob_of_selling = "LOW"
+                    soft_recs = [r for r in recs if r.recommended_action == "DISCOUNT"]
+                    avg_drop = sum(abs(r.change_pct) for r in soft_recs) / max(1, len(soft_recs))
+                    discount_pct = round(min(avg_drop, 20.0))
+                    pricing_reason = (
+                        f"Softer demand this period — {int(discount_pct)}% discount "
+                        "recommended to secure the booking."
+                    )
+                else:
+                    prob_of_selling = "MEDIUM"
+                    discount_pct = 0.0
+                    pricing_reason = "Moderate demand — upgrade offered at standard rate."
+
+                comparison = avail.comparison if isinstance(avail.comparison, dict) else None
+
+                return json.dumps({
+                    "state": "UPGRADE_AVAILABLE",
+                    "preferred_category": preferred_category,
+                    "upgrades": [{
+                        "category": cat,
+                        "room_id": avail.room_id,
+                        "state": avail.state,
+                        "swap_plan": avail.swap_plan,
+                        "comparison": comparison,
+                        "prob_of_selling": prob_of_selling,
+                        "discount_recommended": discount_pct > 0,
+                        "discount_pct": discount_pct,
+                        "pricing_reason": pricing_reason,
+                        "request": {
+                            "category": cat,
+                            "check_in": check_in,
+                            "check_out": check_out,
+                        },
+                    }],
+                })
+
+            return json.dumps({
+                "state": "NO_UPGRADE",
+                "preferred_category": preferred_category,
+                "message": f"No higher-tier rooms available for {check_in}–{check_out}.",
+            })
+
+        except Exception as exc:
+            logger.exception("suggest_upgrade tool error")
             return json.dumps({"error": str(exc)})
 
     @tool
@@ -781,7 +823,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
     # The AI only recommends. All DB writes go through the receptionist's
     # confirm button in the UI — never triggered by the AI itself.
 
-    tools = [check_availability, get_room_inventory, find_split_stay, find_split_stay_flex, probe_split_window, get_revenue_intelligence]
+    tools = [check_availability, suggest_upgrade, get_room_inventory, get_revenue_intelligence]
 
     # ── LLM ───────────────────────────────────────────────────────────────────
 

@@ -1,34 +1,197 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { analysePricing, commitPricing, dashboardSandwichPlaybook, getHeatmap } from "../../api/client";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
   HeatmapRow,
   PricingAnalyseResponse,
+  PricingCalendarCell,
   PricingCommitItem,
-  PricingRecommendation,
-  PricingWhatIfScenario,
-  RoomCategory,
 } from "../../types";
 import { useToast } from "../shared/Toast";
 import {
+  AlertTriangle,
   CheckCircle2,
   DollarSign,
   Loader2,
   RefreshCw,
   Sparkles,
-  Tags,
   TrendingDown,
   TrendingUp,
-  Wand2,
-  XCircle,
+  X,
 } from "lucide-react";
-import { addDays, formatISO, parseISO } from "date-fns";
 import { AiTag } from "../shared/AiTag";
+import { format, parseISO } from "date-fns";
 
-/**
- * Pricing Insights and Optimization tab.
- * Hackathon focus: tie pricing actions to fragmentation + usable capacity recovery.
- */
+// ── Loading animation messages ────────────────────────────────────────────────
+
+const LOADING_MESSAGES = [
+  "Connecting to market data feeds...",
+  "Analyzing weather patterns for next 20 days...",
+  "Scanning NJ events and conference calendar...",
+  "Processing market sentiment and travel trends...",
+  "Evaluating occupancy and orphan room patterns...",
+  "Reviewing 2-year historical booking trends...",
+  "Synthesizing all pricing signals...",
+  "Finalizing recommendations...",
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function computeOrphanNightsFromHeatmap(rows: HeatmapRow[], maxDays: number): {
+  count: number;
+  categories: string[];
+} {
+  const cats = new Set<string>();
+  let count = 0;
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (let i = 1; i < cells.length - 1; i++) {
+      const c = cells[i];
+      const before = cells[i - 1];
+      const after = cells[i + 1];
+      if (!c || !before || !after) continue;
+      if (c.block_type !== "EMPTY") continue;
+      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
+      count += 1;
+      cats.add(row.category);
+    }
+  }
+  return { count, categories: [...cats].sort() };
+}
+
+function computeRevenueStats(rows: HeatmapRow[], maxDays: number): {
+  unsoldRooms: number;
+  revenueAtRisk: number;
+  revenueOnBooks: number;
+  roomsDiscounted: number;
+} {
+  let unsoldRooms = 0;
+  let revenueAtRisk = 0;
+  let revenueOnBooks = 0;
+  let roomsDiscounted = 0;
+
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (const c of cells) {
+      if (!c) continue;
+      if (c.block_type === "EMPTY") {
+        unsoldRooms += 1;
+        revenueAtRisk += c.current_rate;
+        if (c.current_rate < row.base_rate * 0.95) roomsDiscounted += 1;
+      } else {
+        revenueOnBooks += c.current_rate;
+      }
+    }
+  }
+  return { unsoldRooms, revenueAtRisk, revenueOnBooks, roomsDiscounted };
+}
+
+// ── Calendar cell component ───────────────────────────────────────────────────
+
+interface CellProps {
+  cell: PricingCalendarCell;
+  selected: boolean;
+  onToggle: () => void;
+}
+
+function CalendarCellView({ cell, selected, onToggle }: CellProps) {
+  const [showTooltip, setShowTooltip] = useState(false);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  const cellBg =
+    cell.is_orphan
+      ? "bg-text/10 border-text/20 opacity-60"
+      : cell.action === "INCREASE"
+      ? selected
+        ? "bg-occugreen/20 border-occugreen/60"
+        : "bg-occugreen/10 border-occugreen/30"
+      : cell.action === "DISCOUNT"
+      ? selected
+        ? "bg-occured/20 border-occured/50"
+        : "bg-occured/10 border-occured/25"
+      : selected
+      ? "bg-surface-2 border-border"
+      : "bg-surface border-border/50";
+
+  const ringClass = selected ? "ring-1 ring-accent/50" : "";
+
+  return (
+    <td className="p-0.5 relative">
+      <div
+        className={`border cursor-pointer px-2 py-1.5 min-w-[88px] transition-all hover:opacity-90 ${cellBg} ${ringClass}`}
+        onClick={onToggle}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+      >
+        {cell.is_orphan ? (
+          <div className="flex items-center justify-center h-8">
+            <AlertTriangle className="w-3 h-3 text-text-muted" />
+            <span className="text-[9px] text-text-muted ml-1 uppercase tracking-wide">Orphan</span>
+          </div>
+        ) : (
+          <>
+            <div className="text-xs font-mono font-bold text-text">
+              ${cell.suggested_rate.toLocaleString("en-US")}
+            </div>
+            <div className={`text-[9px] font-bold flex items-center gap-0.5 ${
+              cell.action === "INCREASE" ? "text-occugreen"
+              : cell.action === "DISCOUNT" ? "text-occured"
+              : "text-text-muted"
+            }`}>
+              {cell.action === "INCREASE" ? <TrendingUp className="w-2.5 h-2.5" /> : null}
+              {cell.action === "DISCOUNT" ? <TrendingDown className="w-2.5 h-2.5" /> : null}
+              {cell.change_pct > 0 ? "+" : ""}{cell.change_pct.toFixed(1)}%
+            </div>
+            <div className="mt-0.5 flex items-center gap-1">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                cell.confidence === "HIGH" ? "bg-occugreen"
+                : cell.confidence === "LOW" ? "bg-occured"
+                : "bg-yellow-500"
+              }`} />
+              <span className="text-[8px] text-text-muted">{cell.occupancy_pct}%</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Tooltip */}
+      {showTooltip && !cell.is_orphan && (
+        <div
+          ref={tooltipRef}
+          className="absolute z-50 bottom-full left-0 mb-1 w-64 bg-surface border border-border shadow-lg p-3 pointer-events-none"
+          style={{ minWidth: 256 }}
+        >
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1">
+            {cell.action} · {cell.confidence} confidence
+          </div>
+          <div className="text-xs text-text leading-relaxed mb-2">{cell.reason}</div>
+          {cell.weather_factor && (
+            <div className="text-[10px] text-text-muted">
+              <span className="font-bold text-text-muted/80">Weather:</span> {cell.weather_factor}
+            </div>
+          )}
+          {cell.event_factor && (
+            <div className="text-[10px] text-text-muted">
+              <span className="font-bold text-text-muted/80">Event:</span> {cell.event_factor}
+            </div>
+          )}
+          {cell.news_factor && (
+            <div className="text-[10px] text-text-muted">
+              <span className="font-bold text-text-muted/80">Market:</span> {cell.news_factor}
+            </div>
+          )}
+          <div className="mt-2 pt-2 border-t border-border/40 flex items-center justify-between text-[9px] text-text-muted">
+            <span>${cell.current_rate.toLocaleString()} → ${cell.suggested_rate.toLocaleString()}</span>
+            <span>{cell.otb} OTB</span>
+          </div>
+        </div>
+      )}
+    </td>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export function PricingOptimizationTab() {
   const { show, Toasts } = useToast();
 
@@ -38,143 +201,70 @@ export function PricingOptimizationTab() {
   const [analysing, setAnalysing] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [committed, setCommitted] = useState<{ updated: number; skipped: number } | null>(null);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
-  const [spanDays, setSpanDays] = useState(14);
-  const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
+  // selected cells for commit: Set of "CATEGORY::date"
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
 
-  type Decision = "accepted" | "rejected" | "override" | null;
-  type RowState = { decision: Decision; overrideValue: string };
-  const [rows, setRows] = useState<Record<string, RowState>>({});
+  const WINDOW_DAYS = 20;
+
+  // ── Load heatmap on mount ──────────────────────────────────────────────────
 
   const refreshHeatmap = useCallback(async () => {
     setLoadingHeatmap(true);
     try {
       const res = await getHeatmap();
-      const data = res.data as HeatmapResponse;
-      setHeatmap(data);
-      const cats = [...new Set(data.rows.map(r => r.category))] as RoomCategory[];
-      if (selectedCategories.length === 0) setSelectedCategories(cats);
+      setHeatmap(res.data as HeatmapResponse);
     } catch {
       show("Failed to load heatmap", "error");
     } finally {
       setLoadingHeatmap(false);
     }
-  }, [selectedCategories.length, show]);
+  }, [show]);
+
+  useEffect(() => { void refreshHeatmap(); }, []);
+
+  // ── Loading message cycling ────────────────────────────────────────────────
 
   useEffect(() => {
-    void refreshHeatmap();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!analysing) return;
+    setLoadingMsgIdx(0);
+    const id = setInterval(() => {
+      setLoadingMsgIdx(i => (i + 1) % LOADING_MESSAGES.length);
+    }, 3200);
+    return () => clearInterval(id);
+  }, [analysing]);
 
-  const availableCategories = useMemo(() => {
-    if (!heatmap) return [] as RoomCategory[];
-    return [...new Set(heatmap.rows.map(r => r.category))].sort() as RoomCategory[];
+  // ── Summary card data (computed from heatmap) ──────────────────────────────
+
+  const cardStats = useMemo(() => {
+    if (!heatmap) return null;
+    const orphan = computeOrphanNightsFromHeatmap(heatmap.rows, WINDOW_DAYS);
+    const rev = computeRevenueStats(heatmap.rows, WINDOW_DAYS);
+    return { ...orphan, ...rev };
   }, [heatmap]);
 
-  const activeRows = useMemo(() => {
-    if (!heatmap) return [] as HeatmapRow[];
-    const cats = new Set(selectedCategories);
-    return heatmap.rows.filter(r => cats.has(r.category));
-  }, [heatmap, selectedCategories]);
-
-  const maxDays = useMemo(() => Math.max(1, Math.min(60, Math.floor(spanDays || 14))), [spanDays]);
-
-  function computeMinLosOrphanNightBlocks(rowsIn: HeatmapRow[], maxDaysIn: number): number {
-    let blocked = 0;
-    for (const row of rowsIn) {
-      const cells = row.cells.slice(0, maxDaysIn);
-      for (let i = 1; i < cells.length - 1; i++) {
-        const c = cells[i];
-        if (!c || c.block_type !== "EMPTY") continue;
-        const before = cells[i - 1];
-        const after = cells[i + 1];
-        if (!before || !after) continue;
-        if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
-        if (c.min_stay_active && c.min_stay_nights > 1) blocked += 1;
-      }
-    }
-    return blocked;
-  }
-
-  function computeOrphanNightOfferCount(rowsIn: HeatmapRow[], maxDaysIn: number): number {
-    let n = 0;
-    for (const row of rowsIn) {
-      for (const c of row.cells.slice(0, maxDaysIn)) {
-        if (c.offer_type === "SANDWICH_ORPHAN") n += 1;
-      }
-    }
-    return n;
-  }
-
-  function computeStrandedDateCategoryScores(rowsIn: HeatmapRow[], maxDaysIn: number): Map<string, number> {
-    // key = `${category}::${date}` value = count of rooms with stranded night(s)
-    const map = new Map<string, number>();
-    const bump = (category: string, date: string) => {
-      const key = `${category}::${date}`;
-      map.set(key, (map.get(key) ?? 0) + 1);
-    };
-
-    for (const row of rowsIn) {
-      const cells = row.cells.slice(0, maxDaysIn);
-      let i = 0;
-      while (i < cells.length) {
-        if (cells[i]?.block_type !== "EMPTY") { i++; continue; }
-        const start = i;
-        while (i < cells.length && cells[i]?.block_type === "EMPTY") i++;
-        const len = i - start;
-        const beforeType = start > 0 ? cells[start - 1]?.block_type : null;
-        const afterType = i < cells.length ? cells[i]?.block_type : null;
-        const isSandwiched = beforeType !== null && afterType !== null && beforeType !== "EMPTY" && afterType !== "EMPTY";
-        const isStranded = isSandwiched && len >= 1 && len <= 3;
-        if (isStranded) {
-          for (let j = start; j < i; j++) bump(String(row.category), cells[j]!.date);
-        }
-      }
-
-      // additionally: count MinLOS-blocked orphan-night singles as “high urgency”
-      for (let k = 1; k < cells.length - 1; k++) {
-        const c = cells[k];
-        if (!c || c.block_type !== "EMPTY") continue;
-        const before = cells[k - 1];
-        const after = cells[k + 1];
-        if (!before || !after) continue;
-        if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
-        if (c.min_stay_active && c.min_stay_nights > 1) bump(String(row.category), c.date);
-      }
-    }
-    return map;
-  }
-
-  const strandedScores = useMemo(() => computeStrandedDateCategoryScores(activeRows, maxDays), [activeRows, maxDays]);
-
-  const topStranded = useMemo(() => {
-    const entries = [...strandedScores.entries()]
-      .map(([k, v]) => {
-        const [category, date] = k.split("::");
-        return { category, date, roomsImpacted: v };
-      })
-      .sort((a, b) => b.roomsImpacted - a.roomsImpacted)
-      .slice(0, 10);
-    return entries;
-  }, [strandedScores]);
-
-  const minLosBlocks = useMemo(() => computeMinLosOrphanNightBlocks(activeRows, maxDays), [activeRows, maxDays]);
-  const sandwichOffers = useMemo(() => computeOrphanNightOfferCount(activeRows, maxDays), [activeRows, maxDays]);
+  // ── Run analysis ──────────────────────────────────────────────────────────
 
   const runAnalysis = useCallback(async () => {
     setAnalysing(true);
     setPricing(null);
     setCommitted(null);
+    setSelectedCells(new Set());
     try {
       const res = await analysePricing();
       const data = res.data as PricingAnalyseResponse;
       setPricing(data);
-      setRows(Object.fromEntries(
-        data.recommendations.map(r => [
-          `${r.category}::${r.date}`,
-          { decision: null, overrideValue: String(r.suggested_rate) },
-        ])
-      ));
+      // Pre-select all non-MAINTAIN cells for commit
+      const preSelected = new Set<string>();
+      for (const row of data.calendar_rows) {
+        for (const cell of row.cells) {
+          if (cell.action !== "MAINTAIN" && !cell.is_orphan) {
+            preSelected.add(`${row.category}::${cell.date}`);
+          }
+        }
+      }
+      setSelectedCells(preSelected);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       show(detail ?? "Pricing analysis failed", "error");
@@ -183,67 +273,47 @@ export function PricingOptimizationTab() {
     }
   }, [show]);
 
-  const activeRecs = useMemo(() => {
-    if (!pricing) return [] as PricingRecommendation[];
-    const cats = new Set(selectedCategories.map(c => c.toUpperCase()));
-    return pricing.recommendations.filter(r => cats.has(r.category.toUpperCase()));
-  }, [pricing, selectedCategories]);
+  // ── Toggle cell selection ─────────────────────────────────────────────────
 
-  const recsByCategory = useMemo(() => {
-    const map = new Map<string, PricingRecommendation[]>();
-    for (const r of activeRecs) {
-      const key = r.category;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(r);
-    }
-    for (const [, list] of map) list.sort((a, b) => a.date.localeCompare(b.date));
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [activeRecs]);
+  const toggleCell = useCallback((category: string, date: string) => {
+    const key = `${category}::${date}`;
+    setSelectedCells(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
 
-  const matchedToStranded = useMemo(() => {
-    const strandedKeys = new Set([...strandedScores.keys()]);
-    return activeRecs.filter(r => strandedKeys.has(`${r.category}::${r.date}`));
-  }, [activeRecs, strandedScores]);
-
-  const suggestedDiscounts = useMemo(() => matchedToStranded.filter(r => r.change_pct < 0), [matchedToStranded]);
-  const suggestedIncreases = useMemo(() => activeRecs.filter(r => r.change_pct > 0 && r.occupancy_pct >= 80), [activeRecs]);
-
-  const acceptedCount = useMemo(
-    () => Object.values(rows).filter(r => r.decision === "accepted" || r.decision === "override").length,
-    [rows],
-  );
-
-  const setDecision = (key: string, d: Decision) =>
-    setRows(prev => ({ ...prev, [key]: { ...prev[key], decision: d } }));
-
-  const setOverride = (key: string, val: string) =>
-    setRows(prev => ({ ...prev, [key]: { ...prev[key], overrideValue: val, decision: "override" } }));
-
-  const acceptAllStrandedDiscounts = () => {
-    const keys = new Set(suggestedDiscounts.map(r => `${r.category}::${r.date}`));
-    setRows(prev => Object.fromEntries(
-      Object.entries(prev).map(([k, r]) => {
-        if (!keys.has(k)) return [k, r];
-        if (r.decision === "rejected") return [k, r];
-        return [k, { ...r, decision: "accepted" as const }];
-      })
-    ));
-  };
-
-  const handleCommit = async () => {
+  const selectAll = useCallback(() => {
     if (!pricing) return;
-    const items: PricingCommitItem[] = [];
-    for (const rec of pricing.recommendations) {
-      if (!selectedCategories.includes(rec.category as RoomCategory)) continue;
-      const key = `${rec.category}::${rec.date}`;
-      const row = rows[key];
-      if (!row || row.decision === "rejected" || row.decision === null) continue;
-      const rate = row.decision === "override"
-        ? Math.round(parseFloat(row.overrideValue) / 100) * 100
-        : rec.suggested_rate;
-      if (!isNaN(rate) && rate > 0) items.push({ category: rec.category, date: rec.date, new_rate: rate });
+    const all = new Set<string>();
+    for (const row of pricing.calendar_rows) {
+      for (const cell of row.cells) {
+        if (!cell.is_orphan) all.add(`${row.category}::${cell.date}`);
+      }
     }
-    if (!items.length) { show("No accepted recommendations to commit", "error"); return; }
+    setSelectedCells(all);
+  }, [pricing]);
+
+  const deselectAll = useCallback(() => setSelectedCells(new Set()), []);
+
+  // ── Commit ────────────────────────────────────────────────────────────────
+
+  const handleCommit = useCallback(async () => {
+    if (!pricing || selectedCells.size === 0) {
+      show("No cells selected to commit", "error");
+      return;
+    }
+    const items: PricingCommitItem[] = [];
+    for (const row of pricing.calendar_rows) {
+      for (const cell of row.cells) {
+        const key = `${row.category}::${cell.date}`;
+        if (selectedCells.has(key) && cell.suggested_rate > 0) {
+          items.push({ category: row.category, date: cell.date, new_rate: cell.suggested_rate });
+        }
+      }
+    }
+    if (!items.length) { show("No valid items to commit", "error"); return; }
     setCommitting(true);
     try {
       const res = await commitPricing(items);
@@ -254,41 +324,58 @@ export function PricingOptimizationTab() {
     } finally {
       setCommitting(false);
     }
-  };
+  }, [pricing, selectedCells, show]);
 
-  const runSandwichRefresh = async () => {
-    if (!heatmap) return;
+  // ── Derived counts ────────────────────────────────────────────────────────
+
+  const selectedCount = selectedCells.size;
+
+  const actionCounts = useMemo(() => {
+    if (!pricing) return { increases: 0, discounts: 0, maintain: 0 };
+    let increases = 0, discounts = 0, maintain = 0;
+    for (const row of pricing.calendar_rows) {
+      for (const cell of row.cells) {
+        if (cell.action === "INCREASE") increases++;
+        else if (cell.action === "DISCOUNT") discounts++;
+        else maintain++;
+      }
+    }
+    return { increases, discounts, maintain };
+  }, [pricing]);
+
+  // ── Date header formatter ─────────────────────────────────────────────────
+
+  const formatDateHeader = (iso: string) => {
     try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, maxDays);
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-      await dashboardSandwichPlaybook({ start: startStr, end: endStr, categories: selectedCategories });
-      show("Sandwich playbook applied (MinLOS relaxed + 50% offers refreshed)", "success");
-      await refreshHeatmap();
+      const d = parseISO(iso);
+      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+      return { day: format(d, "EEE"), date: format(d, "d"), isWeekend };
     } catch {
-      show("Failed to apply orphan-night playbook", "error");
+      return { day: "", date: iso.slice(8), isWeekend: false };
     }
   };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
       <Toasts />
 
-      {/* header */}
+      {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
         <div className="flex items-center gap-3">
-          <Tags className="w-4 h-4 text-accent" />
+          <DollarSign className="w-4 h-4 text-accent" />
           <div>
             <div className="text-sm font-bold text-text flex items-center gap-2">
               Pricing Optimization{" "}
-              <AiTag title="RateIQ analyzes occupancy and stranded gaps for rate actions, and runs a predictive what-if discount ladder (demand, net price, revenue index) to contextualize discount depth." />
+              <AiTag title="RateIQ runs 5 parallel AI calls — weather, events, market news, historical trends, occupancy — then synthesizes into a 20-day pricing calendar per room category." />
             </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-              Fragmentation-aware rate actions · tie discounts to stranded inventory
+              Multi-signal AI · 20-day calendar view · click cells to select for commit
             </div>
           </div>
         </div>
+
         <div className="flex items-center gap-2">
           <button
             className="text-[11px] uppercase tracking-widest font-bold text-text-muted hover:text-text border border-border px-3 py-2 hover:bg-surface-2 transition-colors flex items-center gap-1.5 disabled:opacity-40"
@@ -298,126 +385,152 @@ export function PricingOptimizationTab() {
             {loadingHeatmap ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
             Refresh
           </button>
+
           <button
             className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:bg-text/90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
             onClick={runAnalysis}
             disabled={analysing}
           >
-            {analysing ? <Loader2 className="w-3 h-3 animate-spin" /> : <DollarSign className="w-3 h-3" />}
+            {analysing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
             Run Analysis
           </button>
+
           {pricing && !committed && (
             <button
               className="bg-occugreen text-white text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:brightness-110 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
               onClick={handleCommit}
-              disabled={committing || acceptedCount === 0}
+              disabled={committing || selectedCount === 0}
             >
               {committing
                 ? <><Loader2 className="w-3 h-3 animate-spin" /> Committing</>
-                : <><CheckCircle2 className="w-3 h-3" /> Commit ({acceptedCount})</>}
+                : <><CheckCircle2 className="w-3 h-3" /> Commit ({selectedCount})</>}
             </button>
           )}
         </div>
       </div>
 
-      {/* controls */}
-      <div className="px-6 py-4 border-b border-border bg-surface-2/20 flex flex-wrap gap-4 items-center">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Window</span>
-          <input
-            type="number"
-            min={7}
-            max={60}
-            value={spanDays}
-            onChange={(e) => setSpanDays(parseInt(e.target.value || "14", 10))}
-            className="w-20 bg-surface border border-border text-text text-xs font-mono px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent"
-          />
-          <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">days</span>
+      {/* Summary cards */}
+      <div className="px-6 py-4 border-b border-border grid grid-cols-2 lg:grid-cols-4 gap-3 bg-surface-2/10">
+        {/* Card 1: Orphan Nights */}
+        <div className="border border-border bg-surface px-4 py-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Orphan Nights</div>
+          <div className="text-3xl font-serif font-bold text-text mt-2">
+            {cardStats ? cardStats.count : <span className="text-text-muted">—</span>}
+          </div>
+          <div className="text-[10px] text-text-muted mt-1 truncate">
+            {cardStats?.categories?.length
+              ? cardStats.categories.join(", ")
+              : "No categories affected"}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Categories</span>
-          {availableCategories.map((c) => {
-            const on = selectedCategories.includes(c);
-            return (
-              <button
-                key={c}
-                onClick={() => setSelectedCategories(prev => on ? prev.filter(x => x !== c) : [...prev, c])}
-                className={`text-[10px] font-bold uppercase tracking-widest border px-2.5 py-1 transition-colors ${
-                  on ? "bg-accent/10 border-accent/40 text-accent" : "bg-surface border-border text-text-muted hover:text-text"
-                }`}
-              >
-                {c}
-              </button>
-            );
-          })}
-          {availableCategories.length > 0 && (
-            <button
-              onClick={() => setSelectedCategories(availableCategories)}
-              className="text-[10px] font-bold uppercase tracking-widest border border-border px-2.5 py-1 text-text-muted hover:text-text hover:bg-surface transition-colors"
-            >
-              All
-            </button>
-          )}
+        {/* Card 2: Revenue Snapshot */}
+        <div className="border border-border bg-surface px-4 py-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Revenue Snapshot</div>
+          <div className="flex items-end gap-3 mt-2">
+            <div>
+              <div className="text-[9px] text-occured uppercase tracking-wider font-bold">At Risk</div>
+              <div className="text-lg font-serif font-bold text-occured">
+                ${cardStats ? Math.round(cardStats.revenueAtRisk).toLocaleString("en-US") : "—"}
+              </div>
+            </div>
+            <div className="text-text-muted text-xs pb-0.5">vs</div>
+            <div>
+              <div className="text-[9px] text-occugreen uppercase tracking-wider font-bold">On Books</div>
+              <div className="text-lg font-serif font-bold text-occugreen">
+                ${cardStats ? Math.round(cardStats.revenueOnBooks).toLocaleString("en-US") : "—"}
+              </div>
+            </div>
+          </div>
+          <div className="text-[10px] text-text-muted mt-1">
+            {cardStats?.unsoldRooms ?? "—"} unsold · {cardStats?.roomsDiscounted ?? "—"} discounted
+          </div>
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            className="text-[11px] uppercase tracking-widest font-bold border border-accent/30 text-accent px-4 py-2 hover:bg-accent/10 transition-colors flex items-center gap-1.5"
-            onClick={runSandwichRefresh}
-          >
-            <Wand2 className="w-3 h-3" />
-            Refresh Orphan-night Offers
-          </button>
-          {suggestedDiscounts.length > 0 && (
-            <button
-              className="text-[11px] uppercase tracking-widest font-bold border border-border text-text-muted px-4 py-2 hover:bg-surface transition-colors flex items-center gap-1.5"
-              onClick={acceptAllStrandedDiscounts}
-            >
-              <Sparkles className="w-3 h-3" />
-              Accept stranded discounts ({suggestedDiscounts.length})
-            </button>
+        {/* Card 3: Active Discounts */}
+        <div className="border border-border bg-surface px-4 py-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active Discounts</div>
+          <div className="text-3xl font-serif font-bold text-text mt-2">
+            {cardStats ? cardStats.roomsDiscounted : <span className="text-text-muted">—</span>}
+          </div>
+          <div className="text-[10px] text-text-muted mt-1">Rooms below base rate · {WINDOW_DAYS}d window</div>
+        </div>
+
+        {/* Card 4: Revenue Rescue */}
+        <div className={`border px-4 py-3 transition-colors ${
+          pricing ? "border-accent/30 bg-accent/[0.03]" : "border-border bg-surface"
+        }`}>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Revenue Rescue</div>
+          {pricing ? (
+            <>
+              <div className="text-3xl font-serif font-bold text-accent mt-2">
+                +${Math.round(pricing.rescue_potential).toLocaleString("en-US")}
+              </div>
+              <div className="text-[10px] text-text-muted mt-1">
+                Recoverable if {actionCounts.increases + actionCounts.discounts} recs committed
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-3xl font-serif font-bold text-text-muted mt-2">—</div>
+              <div className="text-[10px] text-text-muted mt-1">Run analysis to compute</div>
+            </>
           )}
         </div>
       </div>
 
-      {/* KPIs */}
-      <div className="px-6 py-4 border-b border-border grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">MinLOS orphan-night blocks</div>
-          <div className="text-2xl font-serif font-bold text-text mt-1">{minLosBlocks}</div>
-          <div className="text-[10px] text-text-muted mt-1">Blocked orphan nights in window</div>
-        </div>
-        <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active orphan-night offers</div>
-          <div className="text-2xl font-serif font-bold text-text mt-1">{sandwichOffers}</div>
-          <div className="text-[10px] text-text-muted mt-1">Discount markers in heatmap</div>
-        </div>
-        <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Stranded hotspots</div>
-          <div className="text-2xl font-serif font-bold text-text mt-1">{topStranded.length}</div>
-          <div className="text-[10px] text-text-muted mt-1">Top (category, date) combos</div>
-        </div>
-        <div className="border border-border bg-surface-2/40 px-4 py-3">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">High-demand increases</div>
-          <div className="text-2xl font-serif font-bold text-text mt-1">{suggestedIncreases.length}</div>
-          <div className="text-[10px] text-text-muted mt-1">Occ ≥ 80% and rate-up</div>
-        </div>
-      </div>
+      {/* Body */}
+      <div className="flex-1 overflow-hidden flex flex-col">
 
-      {/* body */}
-      <div className="flex-1 overflow-y-auto">
+        {/* Empty state */}
         {!pricing && !analysing && !committed && (
-          <div className="py-20 text-center px-6">
-            <DollarSign className="w-8 h-8 text-accent/30 mb-4 mx-auto" />
-            <div className="font-serif font-bold text-xl text-text mb-2">Fragmentation-aware pricing</div>
-            <div className="text-xs text-text-muted max-w-xl mx-auto leading-relaxed">
-              This tab links stranded inventory (short orphan gaps, MinLOS orphan-night blocks, and orphan-night offers)
-              to daily pricing actions so you can show “recovered usable capacity” + “pricing impact” in the demo.
+          <div className="flex-1 flex flex-col items-center justify-center py-20 text-center px-6">
+            <div className="w-12 h-12 rounded-full border border-border flex items-center justify-center mb-4">
+              <DollarSign className="w-5 h-5 text-text-muted" />
+            </div>
+            <div className="font-serif font-bold text-xl text-text mb-2">
+              Waiting for analysis
+            </div>
+            <div className="text-xs text-text-muted max-w-md leading-relaxed">
+              Click <span className="font-bold text-text">Run Analysis</span> to launch the multi-signal AI engine.
+              It will analyze weather, local events, market news, and occupancy patterns to
+              generate a 20-day pricing calendar per room category.
             </div>
           </div>
         )}
 
+        {/* Loading animation */}
+        {analysing && (
+          <div className="flex-1 flex flex-col items-center justify-center py-20">
+            <div className="flex items-center gap-3 mb-6">
+              <Loader2 className="w-5 h-5 animate-spin text-accent" />
+              <span className="text-sm font-bold text-text uppercase tracking-widest">RateIQ</span>
+            </div>
+            <div className="h-6 flex items-center justify-center">
+              <span
+                key={loadingMsgIdx}
+                className="text-sm text-text-muted animate-pulse transition-all"
+              >
+                {LOADING_MESSAGES[loadingMsgIdx]}
+              </span>
+            </div>
+            <div className="mt-8 flex gap-1">
+              {LOADING_MESSAGES.map((_, i) => (
+                <div
+                  key={i}
+                  className={`h-0.5 w-6 rounded transition-all duration-500 ${
+                    i === loadingMsgIdx ? "bg-accent" : "bg-border"
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="mt-6 text-[10px] text-text-muted uppercase tracking-widest">
+              Analyzing 5 signals · building 20-day calendar
+            </div>
+          </div>
+        )}
+
+        {/* Committed success */}
         {committed && (
           <div className="px-6 py-10 border-b border-border bg-occugreen/[0.03] flex items-center justify-between">
             <div>
@@ -441,294 +554,110 @@ export function PricingOptimizationTab() {
           </div>
         )}
 
-        {analysing && (
-          <div className="py-24 text-center text-text-muted text-sm">
-            <Loader2 className="w-5 h-5 animate-spin inline-block mr-2" />
-            Running RateIQ pricing analysis…
-          </div>
-        )}
-
-        {/* stranded hotspots */}
+        {/* Calendar view */}
         {pricing && !committed && (
-          <div className="border-b border-border">
-            <div className="px-6 py-3 bg-surface-2/60 border-b border-border/50 flex items-center gap-3">
-              <span className="text-[10px] font-bold uppercase tracking-widest border border-border px-2.5 py-1 bg-surface text-text">
-                Stranded inventory hotspots
-              </span>
-              <span className="text-xs text-text-muted">Where short gaps + MinLOS blocks concentrate</span>
+          <div className="flex-1 flex flex-col overflow-hidden">
+
+            {/* AI summary bar */}
+            <div className="px-6 py-3 bg-accent/5 border-b border-accent/20 flex items-start gap-2 shrink-0">
+              <Sparkles className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" />
+              <div className="text-xs text-text leading-relaxed">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-accent mr-2">Summary</span>
+                {pricing.summary}
+              </div>
             </div>
 
-            {topStranded.length === 0 ? (
-              <div className="px-6 py-10 text-sm text-text-muted">No stranded hotspots detected in the selected window.</div>
-            ) : (
-              <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {topStranded.map(h => {
-                  const key = `${h.category}::${h.date}`;
-                  const rec = activeRecs.find(r => r.category === h.category && r.date === h.date);
-                  const row = rows[key];
-                  const isAccepted = row?.decision === "accepted" || row?.decision === "override";
-                  const isRejected = row?.decision === "rejected";
-                  const hasDiscount = rec ? rec.change_pct < 0 : false;
-                  return (
-                    <div key={key} className={`border px-4 py-3 bg-surface ${isAccepted ? "border-occugreen/40 bg-occugreen/[0.03]" : "border-border"}`}>
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">{h.category}</div>
-                          <div className="font-mono text-xs text-text mt-1">{h.date}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">rooms impacted</div>
-                          <div className="text-lg font-serif font-bold text-text">{h.roomsImpacted}</div>
-                        </div>
-                      </div>
-
-                      {rec ? (
-                        <div className="mt-3 flex items-center justify-between text-xs">
-                          <div className="text-text-muted">
-                            Suggested:{" "}
-                            <span className={`font-mono font-bold ${hasDiscount ? "text-occured" : "text-occugreen"}`}>
-                              ${rec.suggested_rate.toLocaleString("en-US")}
-                            </span>
-                            <span className="text-text-muted"> ({rec.change_pct > 0 ? "+" : ""}{rec.change_pct}%)</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              className="p-1.5 hover:bg-occugreen/10 text-occugreen/60 hover:text-occugreen transition-colors rounded-sm disabled:opacity-30"
-                              title="Accept"
-                              onClick={() => setDecision(key, "accepted")}
-                              disabled={isRejected}
-                            >
-                              <CheckCircle2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              className={`p-1.5 rounded-sm transition-colors ${
-                                isRejected ? "text-occured bg-occured/10" : "text-text-muted hover:text-occured hover:bg-occured/10"
-                              }`}
-                              title={isRejected ? "Undo reject" : "Reject"}
-                              onClick={() => setDecision(key, isRejected ? null : "rejected")}
-                            >
-                              <XCircle className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="mt-3 text-xs text-text-muted">
-                          No AI recommendation for this date/category.
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+            {/* Calendar toolbar */}
+            <div className="px-4 py-2 border-b border-border flex items-center gap-3 shrink-0 bg-surface-2/20">
+              <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 bg-occugreen/30 border border-occugreen/50" />
+                  {actionCounts.increases} increases
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 bg-occured/20 border border-occured/40" />
+                  {actionCounts.discounts} discounts
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 bg-surface border border-border" />
+                  {actionCounts.maintain} maintain
+                </span>
               </div>
-            )}
-          </div>
-        )}
-
-        {/* AI summary + decision table */}
-        {pricing && !committed && (
-          <>
-            <div className="px-6 py-4 bg-accent/5 border-b border-accent/20 text-sm text-text leading-relaxed">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-accent mr-2">AI Summary</span>
-              {pricing.summary}
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  className="text-[10px] font-bold uppercase tracking-widest text-accent hover:text-accent/80 px-2 py-1 border border-accent/30 hover:bg-accent/5 transition-colors"
+                  onClick={selectAll}
+                >
+                  Select all
+                </button>
+                <button
+                  className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text px-2 py-1 border border-border hover:bg-surface transition-colors"
+                  onClick={deselectAll}
+                >
+                  <X className="w-3 h-3 inline mr-1" />
+                  Clear
+                </button>
+                <span className="text-[10px] text-text-muted">
+                  {selectedCount} selected
+                </span>
+              </div>
             </div>
 
-            {pricing.what_if && pricing.what_if.scenarios.length > 0 && (
-              <div className="px-6 py-5 border-b border-border bg-surface-2/30">
-                <div className="flex items-start gap-3 mb-4">
-                  <Wand2 className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-1">
-                      Predictive simulation · what-if discounts
-                    </div>
-                    <p className="text-sm text-text font-medium leading-snug">{pricing.what_if.headline}</p>
-                    <p className="text-xs text-text-muted mt-2 leading-relaxed">{pricing.what_if.methodology}</p>
-                  </div>
-                </div>
-                <div className="overflow-x-auto rounded border border-border/60 bg-surface">
-                  <table className="w-full text-sm min-w-[640px]">
-                    <thead>
-                      <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/50 bg-surface-2/80">
-                        <th className="px-4 py-2.5 text-left">Discount</th>
-                        <th className="px-4 py-2.5 text-right">Demand lift</th>
-                        <th className="px-4 py-2.5 text-right" title="Net ADR vs baseline (100)">
-                          Net price idx
+            {/* Scrollable calendar grid */}
+            <div className="flex-1 overflow-auto">
+              <table className="border-collapse text-xs" style={{ tableLayout: "fixed" }}>
+                <thead className="sticky top-0 z-20 bg-surface">
+                  <tr>
+                    {/* Category label column */}
+                    <th className="sticky left-0 z-30 bg-surface border-b border-r border-border px-3 py-2 text-left w-24 min-w-[96px]">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                        Category
+                      </span>
+                    </th>
+                    {pricing.dates.map(d => {
+                      const { day, date: dateNum, isWeekend } = formatDateHeader(d);
+                      return (
+                        <th
+                          key={d}
+                          className={`border-b border-border/50 px-1 py-1.5 text-center min-w-[88px] w-[88px] ${
+                            isWeekend ? "bg-accent/5" : ""
+                          }`}
+                        >
+                          <div className={`text-[9px] font-bold uppercase tracking-wider ${
+                            isWeekend ? "text-accent" : "text-text-muted"
+                          }`}>{day}</div>
+                          <div className="text-xs font-mono font-bold text-text">{dateNum}</div>
                         </th>
-                        <th className="px-4 py-2.5 text-right" title="Expected room revenue vs baseline (100)">
-                          Revenue idx
-                        </th>
-                        <th className="px-4 py-2.5 text-left">Rationale</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pricing.what_if.scenarios.map((row: PricingWhatIfScenario, idx: number) => {
-                        const isRec = idx === pricing.what_if!.recommended_index;
-                        return (
-                          <tr
-                            key={`${row.discount_pct}-${idx}`}
-                            className={`border-b border-border/30 last:border-0 ${
-                              isRec ? "bg-accent/[0.08]" : "hover:bg-surface-2/50"
-                            }`}
-                          >
-                            <td className="px-4 py-3">
-                              <span className="font-mono font-bold text-text">{row.discount_pct}%</span>
-                              {isRec && (
-                                <span className="ml-2 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/40 px-1.5 py-0.5 rounded">
-                                  Suggested
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-right font-mono text-xs">
-                              {row.demand_lift_pct > 0 ? "+" : ""}
-                              {row.demand_lift_pct}%
-                            </td>
-                            <td className="px-4 py-3 text-right font-mono text-xs text-text-muted">{row.net_price_index}</td>
-                            <td className="px-4 py-3 text-right font-mono text-xs font-bold text-text">{row.revenue_index}</td>
-                            <td className="px-4 py-3 text-xs text-text-muted max-w-md leading-relaxed">{row.rationale}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="text-[10px] text-text-muted mt-3 leading-relaxed">
-                  Indices are illustrative vs a no-discount baseline (100). Use alongside per-date recommendations above — not a substitute for floor rates or channel rules.
-                </p>
-              </div>
-            )}
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pricing.calendar_rows.map(row => (
+                    <tr key={row.category} className="border-b border-border/30">
+                      {/* Sticky category label */}
+                      <td className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-1 whitespace-nowrap">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-text">
+                          {row.category}
+                        </span>
+                      </td>
+                      {row.cells.map(cell => (
+                        <CalendarCellView
+                          key={cell.date}
+                          cell={cell}
+                          selected={selectedCells.has(`${row.category}::${cell.date}`)}
+                          onToggle={() => toggleCell(row.category, cell.date)}
+                        />
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-            {recsByCategory.length === 0 ? (
-              <div className="py-16 text-center text-sm text-text-muted">
-                No recommendations for selected categories.
-              </div>
-            ) : (
-              recsByCategory.map(([category, recs]) => (
-                <div key={category} className="border-b border-border last:border-0">
-                  <div className="px-6 py-3 bg-surface-2/60 border-b border-border/50 flex items-center gap-3 sticky top-0 z-10">
-                    <span className="text-[10px] font-bold uppercase tracking-widest border border-border px-2.5 py-1 bg-surface text-text">
-                      {category}
-                    </span>
-                    <span className="text-xs text-text-muted">{recs.length} date{recs.length !== 1 ? "s" : ""} flagged</span>
-                  </div>
-
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-[10px] uppercase tracking-widest text-text-muted font-bold border-b border-border/40">
-                        <th className="px-6 py-2.5 text-left">Date</th>
-                        <th className="px-4 py-2.5 text-right">Occ</th>
-                        <th className="px-4 py-2.5 text-right">Before</th>
-                        <th className="px-4 py-2.5 text-center w-10"></th>
-                        <th className="px-4 py-2.5 text-right">After</th>
-                        <th className="px-4 py-2.5 text-right">Hotspot</th>
-                        <th className="px-6 py-2.5 text-left">Reason</th>
-                        <th className="px-6 py-2.5 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recs.map(rec => {
-                        const key = `${rec.category}::${rec.date}`;
-                        const row = rows[key];
-                        if (!row) return null;
-                        const isOverride = row.decision === "override";
-                        const isAccepted = row.decision === "accepted" || isOverride;
-                        const isRejected = row.decision === "rejected";
-                        const isIncrease = rec.change_pct > 0;
-                        const hotspotRooms = strandedScores.get(key) ?? 0;
-                        return (
-                          <tr
-                            key={key}
-                            className={`border-b border-border/30 transition-colors ${
-                              isRejected ? "opacity-35" :
-                              isAccepted ? "bg-occugreen/[0.03]" :
-                              "hover:bg-surface-2/40"
-                            }`}
-                          >
-                            <td className="px-6 py-3 font-mono text-xs text-text whitespace-nowrap">{rec.date}</td>
-                            <td className="px-4 py-3 text-right">
-                              <span className={`text-xs font-bold ${
-                                rec.occupancy_pct > 80 ? "text-occugreen" :
-                                rec.occupancy_pct < 40 ? "text-occured" : "text-text-muted"
-                              }`}>
-                                {rec.occupancy_pct}%
-                              </span>
-                              <div className="text-[9px] text-text-muted">{rec.otb} OTB</div>
-                            </td>
-                            <td className="px-4 py-3 text-right font-mono text-xs text-text-muted line-through decoration-text-muted/40">
-                              ${rec.current_rate.toLocaleString("en-US")}
-                            </td>
-                            <td className="px-1 py-3 text-center">
-                              {isIncrease
-                                ? <TrendingUp className="w-3.5 h-3.5 text-occugreen mx-auto" />
-                                : <TrendingDown className="w-3.5 h-3.5 text-occured mx-auto" />}
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              {isOverride ? (
-                                <div className="flex items-center justify-end gap-1">
-                                  <span className="text-[10px] text-text-muted">$</span>
-                                  <input
-                                    type="number"
-                                    step="100"
-                                    value={row.overrideValue}
-                                    onChange={e => setOverride(key, e.target.value)}
-                                    className="w-24 bg-surface border border-accent text-text text-xs font-mono text-right px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
-                                  />
-                                </div>
-                              ) : (
-                                <span className={`font-mono text-xs font-bold ${isIncrease ? "text-occugreen" : "text-occured"}`}>
-                                  ${rec.suggested_rate.toLocaleString("en-US")}
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <span className={`text-[10px] font-bold px-1.5 py-0.5 ${
-                                hotspotRooms > 0 ? "bg-accent/10 text-accent" : "bg-surface-2 text-text-muted"
-                              }`}>
-                                {hotspotRooms > 0 ? `${hotspotRooms} rooms` : "—"}
-                              </span>
-                            </td>
-                            <td className="px-6 py-3 text-xs text-text-muted max-w-lg leading-relaxed">{rec.reason}</td>
-                            <td className="px-6 py-3">
-                              <div className="flex items-center justify-end gap-1">
-                                {!isAccepted && (
-                                  <button
-                                    title="Accept suggested rate"
-                                    className="p-1.5 hover:bg-occugreen/10 text-occugreen/50 hover:text-occugreen transition-colors rounded-sm"
-                                    onClick={() => setDecision(key, "accepted")}
-                                  >
-                                    <CheckCircle2 className="w-4 h-4" />
-                                  </button>
-                                )}
-                                <button
-                                  title={isOverride ? "Cancel override" : "Override rate"}
-                                  className={`p-1.5 rounded-sm transition-colors ${
-                                    isOverride ? "text-accent bg-accent/10" : "text-text-muted hover:text-accent hover:bg-accent/10"
-                                  }`}
-                                  onClick={() => setDecision(key, isOverride ? null : "override")}
-                                >
-                                  <Sparkles className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  title={isRejected ? "Undo reject" : "Reject"}
-                                  className={`p-1.5 rounded-sm transition-colors ${
-                                    isRejected ? "text-occured bg-occured/10" : "text-text-muted hover:text-occured hover:bg-occured/10"
-                                  }`}
-                                  onClick={() => setDecision(key, isRejected ? null : "rejected")}
-                                >
-                                  <XCircle className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ))
-            )}
-          </>
+          </div>
         )}
       </div>
     </div>
   );
 }
-

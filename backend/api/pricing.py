@@ -3,7 +3,7 @@ Pricing AI routes — dynamic rate recommendations for manager.
 
 Routes
 ------
-GET  /manager/pricing/analyse  — run AI analysis, return recommendations
+GET  /manager/pricing/analyse  — run multi-call AI analysis, return 20-day calendar
 POST /manager/pricing/commit   — apply manager-reviewed rate changes to slots
 """
 
@@ -25,12 +25,12 @@ router = APIRouter(prefix="/manager/pricing", tags=["pricing"])
 @router.get("/analyse", response_model=PricingAnalyseResponse)
 async def analyse_pricing():
     """
-    Run the pricing AI agent against live occupancy data.
+    Run the multi-call AI pricing analysis against live occupancy data.
 
-    Reads current slots/bookings, builds an occupancy snapshot, passes it to
-    AI, and returns a list of PricingRecommendations plus a narrative summary.
-
-    Nothing is written to the database — call POST /commit to apply changes.
+    Makes 4 parallel LLM calls (weather, events, market, historical) then a
+    synthesis call to produce a 20-day pricing calendar per room category.
+    Results are persisted to the pricing_recs table.
+    Nothing is written to slots — call POST /commit to apply changes.
     """
     return await ctrl.analyse()
 

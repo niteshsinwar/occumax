@@ -12,10 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, BlockType, RoomCategory, Channel, Offer, OfferType
+from core.models import Room, Slot, BlockType, RoomCategory, Offer
 from core.schemas import HeatmapCell, HeatmapRow, HeatmapResponse
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewResponse
-from core.schemas.sandwich_playbook import SandwichPlaybookResponse
 from core.schemas.manager import CommitRequest, CommitResult
 from controllers import manager as manager_ctrl
 from core.schemas.manager import SwapStep
@@ -27,9 +26,6 @@ from core.schemas.dashboard_scorecard import (
     CapacityScore,
     CapacityDelta,
 )
-from services.ai.orphan_offer_agent import recommend_orphan_offer_strategy
-
-
 def _apply_swap_plan_in_memory(
     slot_infos: list[SlotInfo],
     swap_plan: list[SwapStep] | None,
@@ -176,26 +172,6 @@ async def get_scorecard(
     slots = (await db.execute(slots_q)).scalars().all()
     slot_infos_before = _slots_to_slotinfo(slots, room_map)
 
-    # Orphan-night offer realization (live DB state only).
-    offer_ids = sorted({s.offer_id for s in slots if getattr(s, "offer_id", None)})
-    offer_map: dict[str, Offer] = {}
-    if offer_ids:
-        offer_rows = (await db.execute(select(Offer).where(Offer.id.in_(offer_ids)))).scalars().all()
-        offer_map = {o.id: o for o in offer_rows}
-
-    orphan_offer_nights_booked = 0
-    orphan_offer_revenue_booked = 0.0
-    for s in slots:
-        if s.block_type != BlockType.SOFT:
-            continue
-        if not s.offer_id:
-            continue
-        offer = offer_map.get(s.offer_id)
-        if not offer or offer.offer_type != OfferType.SANDWICH_ORPHAN:
-            continue
-        orphan_offer_nights_booked += 1
-        orphan_offer_revenue_booked += float(s.current_rate or 0.0)
-
     det_before = GapDetector(slot_infos_before, today)
     gaps_before = det_before.detect_gaps()
     before_k = {k: _count_k_night_windows(slot_infos_before, k) for k in ks}
@@ -204,8 +180,6 @@ async def get_scorecard(
         revenue_at_risk=_calc_revenue_at_risk(gaps_before),
         k_windows=before_k,
         revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_before),
-        orphan_offer_nights_booked=int(orphan_offer_nights_booked),
-        orphan_offer_revenue_booked=round(orphan_offer_revenue_booked, 2),
     )
 
     if not swap_plan:
@@ -228,8 +202,6 @@ async def get_scorecard(
         revenue_at_risk=_calc_revenue_at_risk(gaps_after),
         k_windows=after_k,
         revenue_weighted_fill_pct=_revenue_weighted_fill_pct(gaps_after),
-        orphan_offer_nights_booked=int(orphan_offer_nights_booked),
-        orphan_offer_revenue_booked=round(orphan_offer_revenue_booked, 2),
     )
 
     delta = CapacityDelta(
@@ -441,276 +413,6 @@ async def optimise_k_night_preview(
         shuffle_count=len(swap_plan),
         swap_plan=swap_plan,
     )
-
-
-async def apply_sandwich_playbook(
-    db: AsyncSession,
-    start: date,
-    end: date,
-    categories: list[RoomCategory],
-    discount_pct: float | None = None,
-) -> SandwichPlaybookResponse:
-    """
-    Apply the sandwich-night playbook for the given slice:
-    - Finds single-night EMPTY slots bounded by non-EMPTY on both sides in the same room.
-    - For those dates, relax MinLOS to 1 night (min_stay_active=True, min_stay_nights=1).
-    """
-    cats = list(dict.fromkeys(categories))  # stable dedupe
-
-    rooms_q = select(Room).where(Room.is_active == True)
-    if cats:
-        rooms_q = rooms_q.where(Room.category.in_(cats))
-    rooms_q = rooms_q.order_by(Room.category, Room.id)
-    rooms = (await db.execute(rooms_q)).scalars().all()
-    room_map = {r.id: r for r in rooms}
-    if not room_map:
-        return SandwichPlaybookResponse(
-            start=start,
-            end=end,
-            categories=cats,
-            orphan_slots_found=0,
-            slots_updated=0,
-        )
-
-    slots_q = (
-        select(Slot)
-        .where(
-            Slot.date >= start,
-            Slot.date < end,
-            Slot.room_id.in_(list(room_map.keys())),
-        )
-    )
-    slots = (await db.execute(slots_q)).scalars().all()
-    slot_by_id: dict[str, Slot] = {s.id: s for s in slots}
-
-    orphan_slot_ids: list[str] = []
-    slots_updated = 0
-    has_writes = False
-
-    scan_dates = []
-    cur = start
-    while cur < end:
-        scan_dates.append(cur)
-        cur += timedelta(days=1)
-
-    # Discount is usually AI-driven; default to 50% to match existing demo behavior.
-    discount_pct = float(discount_pct) if discount_pct is not None else 0.50
-    discount_pct = max(0.05, min(0.80, discount_pct))
-
-    for room_id in room_map.keys():
-        # Build per-date block_type for this room; missing slot = EMPTY
-        room_cells: list[tuple[date, BlockType]] = []
-        for d in scan_dates:
-            sid = f"{room_id}_{d}"
-            s = slot_by_id.get(sid)
-            room_cells.append((d, s.block_type if s else BlockType.EMPTY))
-
-        # Detect sandwich single nights: EMPTY bounded on both sides
-        for i in range(1, len(room_cells) - 1):
-            d, bt = room_cells[i]
-            if bt != BlockType.EMPTY:
-                continue
-            before_bt = room_cells[i - 1][1]
-            after_bt = room_cells[i + 1][1]
-            if before_bt == BlockType.EMPTY or after_bt == BlockType.EMPTY:
-                continue
-
-            sid = f"{room_id}_{d}"
-            orphan_slot_ids.append(sid)
-
-            slot = slot_by_id.get(sid)
-            if not slot:
-                room = room_map[room_id]
-                original_rate = float(room.base_rate)
-                discounted_rate = round(original_rate * (1 - discount_pct), 2)
-                offer = Offer(
-                    offer_type=OfferType.SANDWICH_ORPHAN,
-                    category=room.category,
-                    offer_date=d,
-                    discount_pct=discount_pct,
-                    original_rate=original_rate,
-                    discounted_rate=discounted_rate,
-                    reason="Auto playbook: sandwich orphan night",
-                )
-                db.add(offer)
-                await db.flush()
-                slot = Slot(
-                    id=sid,
-                    room_id=room_id,
-                    date=d,
-                    block_type=BlockType.EMPTY,
-                    booking_id=None,
-                    current_rate=discounted_rate,
-                    channel=Channel.DIRECT,
-                    channel_partner=None,
-                    min_stay_active=True,
-                    min_stay_nights=1,
-                    offer_id=offer.id,
-                )
-                db.add(slot)
-                slot_by_id[sid] = slot
-                slots_updated += 1
-                has_writes = True
-                continue
-
-            # Only update if not already relaxed
-            if (not slot.min_stay_active) or (slot.min_stay_nights != 1):
-                slot.min_stay_active = True
-                slot.min_stay_nights = 1
-                slots_updated += 1
-                has_writes = True
-
-            # Apply (or refresh) discount offer for this slot if it's empty
-            if slot.block_type == BlockType.EMPTY:
-                # Treat base_rate as the pre-offer "rack" rate for this playbook.
-                original_rate = float(room_map[room_id].base_rate)
-                discounted_rate = round(original_rate * (1 - discount_pct), 2)
-
-                if slot.offer_id:
-                    offer = await db.get(Offer, slot.offer_id)
-                    if offer:
-                        prev = (
-                            offer.offer_type,
-                            offer.discount_pct,
-                            offer.original_rate,
-                            offer.discounted_rate,
-                            offer.offer_date,
-                        )
-                        offer.offer_type = OfferType.SANDWICH_ORPHAN
-                        offer.category = room_map[room_id].category
-                        offer.offer_date = d
-                        offer.discount_pct = discount_pct
-                        offer.original_rate = original_rate
-                        offer.discounted_rate = discounted_rate
-                        offer.reason = "Auto playbook: sandwich orphan night"
-                        if prev != (
-                            offer.offer_type,
-                            offer.discount_pct,
-                            offer.original_rate,
-                            offer.discounted_rate,
-                            offer.offer_date,
-                        ):
-                            has_writes = True
-                else:
-                    offer = Offer(
-                        offer_type=OfferType.SANDWICH_ORPHAN,
-                        category=room_map[room_id].category,
-                        offer_date=d,
-                        discount_pct=discount_pct,
-                        original_rate=original_rate,
-                        discounted_rate=discounted_rate,
-                        reason="Auto playbook: sandwich orphan night",
-                    )
-                    db.add(offer)
-                    await db.flush()
-                    slot.offer_id = offer.id
-                    has_writes = True
-
-                if slot.current_rate != discounted_rate:
-                    slot.current_rate = discounted_rate
-                    slots_updated += 1
-                    has_writes = True
-
-    if has_writes:
-        await db.commit()
-
-    return SandwichPlaybookResponse(
-        start=start,
-        end=end,
-        categories=cats,
-        orphan_slots_found=len(orphan_slot_ids),
-        slots_updated=slots_updated,
-    )
-
-
-async def get_recovery_estimate(
-    db: AsyncSession,
-    start: date,
-    end: date,
-    categories: list[RoomCategory],
-    swap_plan: list[SwapStep] | None = None,
-):
-    """
-    Return a demo-friendly recovery estimate breakdown:
-    - deterministic shuffle recovery (scorecard delta)
-    - AI-assisted orphan-night offer discount + incremental recovery estimate
-    """
-    cats = list(dict.fromkeys(categories or []))
-
-    # Deterministic shuffle recovery (USD recovered = reduced revenue_at_risk)
-    score = await get_scorecard(
-        db=db,
-        start=start,
-        end=end,
-        categories=cats,
-        k_nights=[2, 3],
-        swap_plan=swap_plan,
-    )
-    shuffle_recovered = 0.0
-    if score.delta:
-        shuffle_recovered = max(0.0, round(-float(score.delta.revenue_at_risk), 2))
-
-    # Build SlotInfo for "after" (if swap_plan exists) to estimate remaining orphan single nights.
-    today = date.today()
-    rooms_q = select(Room).where(Room.is_active == True)
-    if cats:
-        rooms_q = rooms_q.where(Room.category.in_(cats))
-    rooms_q = rooms_q.order_by(Room.category, Room.id)
-    rooms = (await db.execute(rooms_q)).scalars().all()
-    room_map = {r.id: r for r in rooms}
-
-    slots_q = (
-        select(Slot)
-        .where(
-            Slot.date >= start,
-            Slot.date < end,
-            Slot.room_id.in_(list(room_map.keys())) if room_map else False,
-        )
-    )
-    slots = (await db.execute(slots_q)).scalars().all()
-    slot_infos = _slots_to_slotinfo(slots, room_map)
-    slot_infos_after = _apply_swap_plan_in_memory(list(slot_infos), swap_plan) if swap_plan else slot_infos
-
-    det_after = GapDetector(slot_infos_after, today)
-    gaps_after = det_after.detect_gaps()
-    single_orphans = [g for g in gaps_after if int(getattr(g, "gap_length", 0)) == 1]
-    orphan_single_nights = len(single_orphans)
-
-    # Estimate average base rate for these orphan nights (fallback to overall avg base rate in slice)
-    base_rates = [float(getattr(s, "base_rate", 0) or 0) for s in slot_infos_after]
-    avg_base_rate = (sum(base_rates) / len(base_rates)) if base_rates else 0.0
-
-    fill_prob_before = float(_fill_prob(1))
-    ai = await recommend_orphan_offer_strategy({
-        "slice": {"start": start.isoformat(), "end": end.isoformat(), "categories": [c.value for c in cats]},
-        "orphan_single_nights": orphan_single_nights,
-        "avg_base_rate": round(avg_base_rate, 2),
-        "fill_prob_before": fill_prob_before,
-        "currency": "USD",
-    })
-    offer_discount_pct = float(ai.get("discount_pct", 0.30))
-    offer_discount_pct = max(0.05, min(0.80, offer_discount_pct))
-    offer_fill_prob_before = max(0.0, min(1.0, float(ai.get("fill_prob_before", fill_prob_before))))
-    offer_fill_prob_after = max(offer_fill_prob_before, min(1.0, float(ai.get("fill_prob_after", offer_fill_prob_before))))
-
-    discounted_rate = round(avg_base_rate * (1 - offer_discount_pct), 2)
-    offer_recovered_estimated = max(
-        0.0,
-        round(orphan_single_nights * (offer_fill_prob_after - offer_fill_prob_before) * discounted_rate, 2),
-    )
-
-    return {
-        "start": start,
-        "end": end,
-        "categories": cats,
-        "shuffle_recovered": shuffle_recovered,
-        "offer_discount_pct": offer_discount_pct,
-        "offer_fill_prob_before": offer_fill_prob_before,
-        "offer_fill_prob_after": offer_fill_prob_after,
-        "offer_recovered_estimated": offer_recovered_estimated,
-        "total_recovered_projected": round(shuffle_recovered + offer_recovered_estimated, 2),
-        "notes": ai.get("notes"),
-    }
 
 
 async def commit_shuffle(body: CommitRequest, db: AsyncSession) -> CommitResult:

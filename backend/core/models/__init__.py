@@ -5,6 +5,7 @@ from core.models.room import Room
 from core.models.slot import Slot
 from core.models.booking import Booking
 from core.models.offer import Offer
+from core.models.pricing_recommendation import PricingRec
 
 __all__ = [
     "RoomCategory",
@@ -15,4 +16,5 @@ __all__ = [
     "Slot",
     "Booking",
     "Offer",
+    "PricingRec",
 ]

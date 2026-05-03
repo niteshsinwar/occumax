@@ -182,43 +182,35 @@ export interface OptimiseResult {
 
 // ── Pricing AI types ───────────────────────────────────────────────────────
 
-export interface PricingRecommendation {
-  category: string;
+export interface PricingCalendarCell {
   date: string;
   current_rate: number;
   suggested_rate: number;
   change_pct: number;
+  action: "INCREASE" | "DISCOUNT" | "MAINTAIN";
   confidence: "HIGH" | "MEDIUM" | "LOW";
   reason: string;
   occupancy_pct: number;
   otb: number;
   floor_rate: number;
+  is_orphan: boolean;
+  weather_factor: string;
+  event_factor: string;
+  news_factor: string;
 }
 
-/** One row in the predictive discount ladder (baseline indices = 100 where applicable). */
-export interface PricingWhatIfScenario {
-  discount_pct: number;
-  demand_lift_pct: number;
-  net_price_index: number;
-  revenue_index: number;
-  rationale: string;
-}
-
-/** AI what-if discount simulation bundled with pricing analyse. */
-export interface PricingWhatIfAnalysis {
-  headline: string;
-  methodology: string;
-  scenarios: PricingWhatIfScenario[];
-  recommended_index: number;
+export interface PricingCalendarRow {
+  category: string;
+  cells: PricingCalendarCell[];
 }
 
 export interface PricingAnalyseResponse {
   hotel_name: string;
   analysis_date: string;
-  recommendations: PricingRecommendation[];
   summary: string;
-  /** Present when backend runs the discount what-if ladder with analyse. */
-  what_if?: PricingWhatIfAnalysis | null;
+  calendar_rows: PricingCalendarRow[];
+  dates: string[];
+  rescue_potential: number;
 }
 
 export interface PricingCommitItem {
