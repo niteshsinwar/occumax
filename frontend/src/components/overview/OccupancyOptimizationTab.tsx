@@ -1,13 +1,7 @@
 import { useMemo, useState } from "react";
-import type { HeatmapResponse, HeatmapRow, RoomCategory, SwapStep } from "../../types";
+import type { HeatmapResponse, HeatmapRow, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  RefreshCw,
-} from "lucide-react";
-import { BirdseyeFilters, type BirdseyeWeekSpan } from "../BirdseyeFilters";
-import { Info } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw, Info } from "lucide-react";
 
 type RunMetrics = {
   orphanGaps: number;
@@ -115,15 +109,10 @@ function topFragmentedRooms(rows: HeatmapRow[], maxDays: number): Array<{ roomId
  */
 export type OccupancyOptimizationTabProps = {
   heatmap: HeatmapResponse | null;
-  weekSpan: BirdseyeWeekSpan;
-  onWeekSpanChange: (v: BirdseyeWeekSpan) => void;
-  availableCategories: RoomCategory[];
-  selectedCategories: RoomCategory[];
-  onToggleCategory: (c: RoomCategory) => void;
 
-  /** Days visible in the current slice (weekSpan * 7 bounded by heatmap length). */
+  /** Days visible in the current heatmap window. */
   spanDays: number;
-  /** Slice of rows limited to selected categories (and potentially other filters). */
+  /** All heatmap rows. */
   filteredRows: HeatmapRow[];
   /** Optional “projected” rows if a preview plan is active. */
   simulatedRows: HeatmapRow[] | null;
@@ -136,7 +125,6 @@ export type OccupancyOptimizationTabProps = {
   refreshAllData: () => void;
   runOptimisePreview: () => Promise<void>;
   clearOptimisePreview: () => void;
-  runSandwichPlaybook: () => Promise<void>;
   commitSwapShuffle: () => Promise<void>;
 
   /** Optional k-night optimizer controls (advanced). */
@@ -152,11 +140,6 @@ export type OccupancyOptimizationTabProps = {
 export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
   const {
     heatmap,
-    weekSpan,
-    onWeekSpanChange,
-    availableCategories,
-    selectedCategories,
-    onToggleCategory,
     spanDays,
     filteredRows,
     simulatedRows,
@@ -165,7 +148,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
     refreshAllData,
     runOptimisePreview,
     clearOptimisePreview,
-    runSandwichPlaybook,
     commitSwapShuffle,
     kNightNights,
     onKNightNightsChange,
@@ -244,7 +226,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
             <div className="text-xs tracking-widest text-text-muted uppercase font-bold">Occupancy</div>
             <div className="font-serif font-bold text-2xl text-text">Capacity recovery workspace</div>
             <div className="text-[11px] text-text-muted mt-2 max-w-2xl leading-relaxed">
-              Slice first (dates + room types), then run recovery actions and validate the impact in the grid.
+              Run recovery actions and validate the impact in the grid.
             </div>
           </div>
           <button
@@ -257,19 +239,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
           </button>
         </div>
 
-        {/* Slice controls (match Dashboard flow) */}
-        {heatmap && (
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-            <BirdseyeFilters
-              weekSpan={weekSpan}
-              onWeekSpanChange={onWeekSpanChange}
-              availableCategories={availableCategories}
-              selectedCategories={selectedCategories}
-              onToggleCategory={onToggleCategory}
-            />
-          </div>
-        )}
-
         {/* Primary actions (most used) */}
         <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
           <div className="flex flex-wrap gap-2 items-center">
@@ -281,15 +250,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
               title="Generate a room-rearrangement preview plan and projected deltas"
             >
               Preview Recovery Shuffle
-            </button>
-            <button
-              type="button"
-              className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-              onClick={() => runSandwichPlaybook()}
-              disabled={!heatmap}
-              title="Relaxes MinLOS on orphan-night gaps and refreshes offers"
-            >
-              Apply Orphan Night Offers
             </button>
             {swapPlan && swapPlan.length > 0 && (
               <button
@@ -478,7 +438,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
               <div>
                 <h3 className="font-serif font-bold text-lg text-text">Inventory Heatmap</h3>
                 <p className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-1">
-                  Filtered to selected room types · visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
+                  Visible window ({spanDays} night{spanDays === 1 ? "" : "s"})
                 </p>
               </div>
               <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold">

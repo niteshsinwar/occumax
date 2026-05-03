@@ -53,6 +53,28 @@ export interface DashboardOptimisePreviewResponse {
   swap_plan: SwapStep[];
 }
 
+export interface DashboardKNightPreviewResponse {
+  target_nights: number;
+  shuffle_count: number;
+  swap_plan: SwapStep[];
+}
+
+export interface LosBucket {
+  nights: number;
+  count: number;
+}
+
+export interface EventInsightsResponse {
+  start: string;
+  end: string;
+  as_of: string;
+  category: RoomCategory | null;
+  most_common_los_nights: number | null;
+  los_histogram: LosBucket[];
+  most_common_arrival_weekday: number | null;
+  arrival_weekday_histogram: number[];
+}
+
 // ── Hackathon scorecard (before/after capacity recovery) ─────────────────────
 
 export interface DashboardScorecardRequest {
@@ -67,12 +89,7 @@ export interface CapacityScore {
   orphan_nights: number;
   revenue_at_risk: number;
   k_windows: Record<number, number>;
-  /** 0–100: risk-weighted implied fill % for gaps that drive revenue_at_risk */
   revenue_weighted_fill_pct?: number | null;
-  /** Nights booked on slots tagged as orphan-night offers (OfferType.SANDWICH_ORPHAN) in this slice. */
-  orphan_offer_nights_booked?: number;
-  /** Sum of slot.current_rate for those booked orphan-offer nights (USD). */
-  orphan_offer_revenue_booked?: number;
 }
 
 export interface CapacityDelta {
@@ -204,11 +221,25 @@ export interface PricingCalendarRow {
   cells: PricingCalendarCell[];
 }
 
+export interface PricingRecommendation {
+  category: string;
+  date: string;
+  current_rate: number;
+  suggested_rate: number;
+  change_pct: number;
+  action: string;
+  confidence: string;
+  reason: string;
+  occupancy_pct: number;
+  otb: number;
+}
+
 export interface PricingAnalyseResponse {
   hotel_name: string;
   analysis_date: string;
   summary: string;
   calendar_rows: PricingCalendarRow[];
+  recommendations: PricingRecommendation[];
   dates: string[];
   rescue_potential: number;
 }

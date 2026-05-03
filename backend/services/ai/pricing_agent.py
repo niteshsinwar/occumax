@@ -382,7 +382,7 @@ async def _persist_recs(
 
 async def run_pricing_agent(
     snapshot: dict,
-    context_text: str,  # kept for API compatibility; multi-call strategy builds its own context
+    context_text: str,  # noqa: ARG001 — kept for API compat; multi-call strategy builds its own
     today: date,
     session_factory: async_sessionmaker,
 ) -> dict:
@@ -404,29 +404,40 @@ async def run_pricing_agent(
 
     llm_synthesis = _make_llm(max_tokens=10000)
 
-    # Phase 1: parallel factor analyses
+    # Phase 1a: weather + events (larger output — run together first)
     try:
-        weather_analysis, events_analysis, market_analysis, history_analysis = await asyncio.wait_for(
+        weather_analysis, events_analysis = await asyncio.wait_for(
             asyncio.gather(
                 _call_weather_agent(llm, weather),
                 _call_events_agent(llm, events, today),
+            ),
+            timeout=240,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Weather/events calls timed out — using defaults")
+        weather_analysis, events_analysis = {}, {}
+
+    # Phase 1b: market + history (compact output — run after Phase 1a)
+    try:
+        market_analysis, history_analysis = await asyncio.wait_for(
+            asyncio.gather(
                 _call_market_agent(llm, news),
                 _call_history_agent(llm, history, today),
             ),
-            timeout=120,
+            timeout=180,
         )
     except asyncio.TimeoutError:
-        logger.warning("Factor analysis calls timed out — using defaults")
-        weather_analysis, events_analysis, market_analysis, history_analysis = {}, {}, {}, {}
+        logger.warning("Market/history calls timed out — using defaults")
+        market_analysis, history_analysis = {}, {}
 
-    # Phase 2: synthesis (higher token limit — full 20-day calendar output)
+    # Phase 2: synthesis — combines all 4 factor analyses + live occupancy
     try:
         result = await asyncio.wait_for(
             _call_synthesis_agent(
                 llm_synthesis, snapshot, today,
                 weather_analysis, events_analysis, market_analysis, history_analysis,
             ),
-            timeout=180,
+            timeout=300,
         )
     except asyncio.TimeoutError:
         logger.error("Synthesis call timed out")

@@ -25,11 +25,26 @@ class PricingCalendarRow(BaseModel):
     cells: list[PricingCalendarCell]
 
 
+class PricingRecommendation(BaseModel):
+    """Flat per-category-per-date record for the pricing review table."""
+    category: str
+    date: str
+    current_rate: float
+    suggested_rate: float
+    change_pct: float
+    action: str
+    confidence: str
+    reason: str
+    occupancy_pct: float
+    otb: int
+
+
 class PricingAnalyseResponse(BaseModel):
     hotel_name: str
     analysis_date: str
     summary: str
     calendar_rows: list[PricingCalendarRow]
+    recommendations: list[PricingRecommendation]  # flat list for review table (INCREASE/DISCOUNT only)
     dates: list[str]          # 20-day window ISO date strings
     rescue_potential: float   # $ recoverable if all AI recs committed
 

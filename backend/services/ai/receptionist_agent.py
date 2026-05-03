@@ -823,7 +823,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
     # The AI only recommends. All DB writes go through the receptionist's
     # confirm button in the UI — never triggered by the AI itself.
 
-    tools = [check_availability, suggest_upgrade, get_room_inventory, get_revenue_intelligence]
+    tools = [check_availability, check_room_availability, suggest_upgrade, get_room_inventory, get_revenue_intelligence]
 
     # ── LLM ───────────────────────────────────────────────────────────────────
 

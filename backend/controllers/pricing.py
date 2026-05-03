@@ -26,6 +26,7 @@ from core.schemas.pricing import (
     PricingCalendarRow,
     PricingCommitRequest,
     PricingCommitResult,
+    PricingRecommendation,
 )
 from services.ai.pricing_agent import WINDOW_DAYS, run_pricing_agent
 from services.database import AsyncSessionLocal
@@ -290,11 +291,31 @@ async def analyse() -> PricingAnalyseResponse:
 
     rescue_potential = _compute_rescue_potential(calendar_map, snapshot)
 
+    # Flat list for the review table — only actionable days (INCREASE or DISCOUNT)
+    recommendations: list[PricingRecommendation] = [
+        PricingRecommendation(
+            category=row.category,
+            date=cell.date,
+            current_rate=cell.current_rate,
+            suggested_rate=cell.suggested_rate,
+            change_pct=cell.change_pct,
+            action=cell.action,
+            confidence=cell.confidence,
+            reason=cell.reason,
+            occupancy_pct=cell.occupancy_pct,
+            otb=cell.otb,
+        )
+        for row in calendar_rows
+        for cell in row.cells
+        if cell.action != "MAINTAIN"
+    ]
+
     return PricingAnalyseResponse(
         hotel_name=settings.HOTEL_NAME,
         analysis_date=today.isoformat(),
         summary=result.get("summary", ""),
         calendar_rows=calendar_rows,
+        recommendations=recommendations,
         dates=dates,
         rescue_potential=rescue_potential,
     )

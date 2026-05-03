@@ -4,8 +4,6 @@ import {
   dashboardOptimiseKNightPreview,
   getHeatmap,
   dashboardOptimisePreview,
-  dashboardSandwichPlaybook,
-  dashboardRecoveryEstimate,
   dashboardScorecard,
   patchSlot,
   getEventInsights,
@@ -299,27 +297,10 @@ export function Dashboard() {
   const [scorecardError, setScorecardError] = useState<string | null>(null);
   const [showAdvancedActions, setShowAdvancedActions] = useState(false);
   const [showInsights, setShowInsights] = useState(true);
-  const [offerEstimate, setOfferEstimate] = useState<{
-    offer_discount_pct: number;
-    offer_recovered_estimated: number;
-    shuffle_recovered: number;
-    total_recovered_projected: number;
-    offer_fill_prob_before: number;
-    offer_fill_prob_after: number;
-    notes?: string | null;
-  } | null>(null);
-  const [offerEstimateStatus, setOfferEstimateStatus] = useState<{
-    state: "idle" | "loading" | "error";
-    message?: string;
-  }>({ state: "idle" });
-  const [offerApplyStatus, setOfferApplyStatus] = useState<{
-    state: "idle" | "loading" | "error";
-    message?: string;
-  }>({ state: "idle" });
   const { show, Toasts } = useToast();
 
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const [eventInsights, setEventInsights] = useState<any | null>(null);
+  const [eventInsights, setEventInsights] = useState<import("../types").EventInsightsResponse | null>(null);
   const [pace, setPace] = useState<PaceResponse | null>(null);
   const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
 
@@ -476,8 +457,8 @@ export function Dashboard() {
     const best = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
     const out: string[] = [];
     // 1) Booking pattern prediction (AI summary from bookings, when available)
-    if (eventInsights?.booking_pattern?.most_common_los != null) {
-      out.push(`Most likely duration of stay: ${eventInsights.booking_pattern.most_common_los} night stays.`);
+    if (eventInsights?.most_common_los_nights != null) {
+      out.push(`Most likely duration of stay: ${eventInsights.most_common_los_nights} night stays.`);
     } else if (mostCommonLosFallback != null) {
       out.push(`Most likely duration of stay: ${mostCommonLosFallback} night stays (from current bookings in this slice).`);
     } else if (best.n > 0) {
@@ -671,97 +652,6 @@ export function Dashboard() {
     }
   }, [kNightSwapPlan, loadHeatmap, show, refreshScorecard]);
 
-  const runSandwichPlaybook = useCallback(async () => {
-    if (!heatmap || spanDays === 0) return;
-    setOfferApplyStatus({ state: "loading" });
-    try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-
-      // Apply should be explicit: reuse previewed discount (no AI call here).
-      const discountPct = offerEstimate?.offer_discount_pct;
-      if (discountPct == null) {
-        setOfferApplyStatus({
-          state: "error",
-          message: "Preview the orphan-night offer first to select a discount, then apply.",
-        });
-        show("Preview the orphan-night offer first, then apply.", "info");
-        return;
-      }
-
-      const res = await dashboardSandwichPlaybook({
-        start: startStr,
-        end: endStr,
-        categories: selectedCategories,
-        discount_pct: discountPct,
-      });
-      const body = res.data as { orphan_slots_found: number; slots_updated: number };
-      if (body.slots_updated > 0) {
-        show(
-          `Offers applied (${Math.round(discountPct * 100)}% off) on ${body.slots_updated} slot(s)`,
-          "success",
-        );
-      } else if (body.orphan_slots_found > 0) {
-        show("Orphan nights found, but no rule/offer changes were needed in this slice.", "info");
-      } else {
-        show("No orphan-night gaps found in this slice.", "info");
-      }
-      await loadHeatmap();
-      setOfferApplyStatus({ state: "idle" });
-    } catch (err: unknown) {
-      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
-      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
-      const msg =
-        typeof detail === "string"
-          ? detail
-          : "Could not apply orphan-night offers. Please try again.";
-      setOfferApplyStatus({ state: "error", message: msg });
-      show("Failed to apply orphan-night offers", "error");
-    }
-  }, [heatmap, loadHeatmap, selectedCategories, show, spanDays, weekSpan, offerEstimate?.offer_discount_pct]);
-
-  const runOfferPreview = useCallback(async () => {
-    if (!heatmap || spanDays === 0) return;
-    setOfferEstimateStatus({ state: "loading" });
-    setOfferApplyStatus({ state: "idle" });
-    try {
-      const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
-      const startStr = formatISO(start, { representation: "date" });
-      const endStr = formatISO(end, { representation: "date" });
-
-      const est = await dashboardRecoveryEstimate({
-        start: startStr,
-        end: endStr,
-        categories: selectedCategories,
-        swap_plan: swapPlan ?? null,
-      });
-      const estBody = est.data as {
-        offer_discount_pct: number;
-        offer_recovered_estimated: number;
-        shuffle_recovered: number;
-        total_recovered_projected: number;
-        offer_fill_prob_before: number;
-        offer_fill_prob_after: number;
-        notes?: string | null;
-      };
-      setOfferEstimate(estBody);
-      setOfferEstimateStatus({ state: "idle" });
-      show(`Offer preview ready (${Math.round(estBody.offer_discount_pct * 100)}% off)`, "success");
-    } catch (err: unknown) {
-      const e = err as { response?: { status?: number; data?: { detail?: string; error?: string } } };
-      const detail = e?.response?.data?.detail ?? e?.response?.data?.error;
-      const msg =
-        typeof detail === "string"
-          ? detail
-          : "Could not reach the AI model to generate an offer preview. Please try again.";
-      setOfferEstimateStatus({ state: "error", message: msg });
-      show("Offer preview failed", "error");
-    }
-  }, [heatmap, spanDays, weekSpan, selectedCategories, swapPlan, show]);
-
   const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
     if (!slotModal) return;
     try {
@@ -811,20 +701,14 @@ export function Dashboard() {
       {activeTab === "occupancy" && (
         <OccupancyOptimizationTab
           heatmap={heatmap}
-          weekSpan={weekSpan}
-          onWeekSpanChange={setWeekSpan}
-          availableCategories={heatmapCategories}
-          selectedCategories={selectedCategories}
-          onToggleCategory={handleToggleCategory}
-          spanDays={spanDays}
-          filteredRows={filteredRows}
+          spanDays={heatmap ? heatmap.dates.length : 0}
+          filteredRows={heatmap ? heatmap.rows : []}
           simulatedRows={simulatedRows}
           swapPlan={swapPlan}
           swapCommitLoading={swapCommitLoading}
           refreshAllData={refreshAllData}
           runOptimisePreview={runOptimisePreview}
           clearOptimisePreview={clearOptimisePreview}
-          runSandwichPlaybook={runSandwichPlaybook}
           commitSwapShuffle={commitSwapShuffle}
           kNightNights={kNightNights}
           onKNightNightsChange={setKNightNights}
@@ -1015,30 +899,6 @@ export function Dashboard() {
                 title={!swapPlan || (swapPlan.length ?? 0) === 0 ? "Preview a shuffle first, then apply it" : "Apply the preview shuffle to the DB for this slice"}
               >
                 {swapCommitLoading ? "Applying…" : `Apply Recovery Shuffle${swapPlan && swapPlan.length > 0 ? ` (${swapPlan.length})` : ""}`}
-              </button>
-              <button
-                type="button"
-                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runOfferPreview()}
-                disabled={!heatmap || isOptimiseLoading || offerEstimateStatus.state === "loading"}
-                title="Preview AI discount + uplift estimate (no DB writes)"
-              >
-                {offerEstimateStatus.state === "loading" ? "Calculating offer…" : "Preview Orphan Night Offers"}
-              </button>
-              <button
-                type="button"
-                className="bg-surface text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runSandwichPlaybook()}
-                disabled={
-                  !heatmap ||
-                  isOptimiseLoading ||
-                  offerApplyStatus.state === "loading" ||
-                  offerEstimateStatus.state === "loading" ||
-                  !offerEstimate
-                }
-                title={!offerEstimate ? "Preview the offer first, then apply" : "Apply orphan-night offers to the DB for this slice"}
-              >
-                {offerApplyStatus.state === "loading" ? "Applying offers…" : "Apply Orphan Night Offers"}
               </button>
               <button
                 type="button"
@@ -1234,27 +1094,6 @@ export function Dashboard() {
               <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
               <div className="text-text-muted">Calculated in Channels (YieldIQ). Placeholder here until partner optimization is finalized.</div>
             </div>
-            <div className="text-text-muted">
-              {offerEstimateStatus.state === "loading"
-                ? "Calculating AI orphan-night offer uplift for this slice…"
-                : offerEstimateStatus.state === "error"
-                  ? (
-                    <span className="text-occured">
-                      {offerEstimateStatus.message ?? "AI prediction is currently unavailable."}
-                    </span>
-                  )
-                  : offerEstimate
-                    ? (
-                      <>
-                        Orphan Night Offers (AI): est{" "}
-                        <span className="font-bold text-text">
-                          +${Math.round(offerEstimate.offer_recovered_estimated).toLocaleString("en-US")}
-                        </span>{" "}
-                        at {Math.round(offerEstimate.offer_discount_pct * 100)}% off
-                      </>
-                    )
-                    : "Run Preview Orphan Night Offers to estimate uplift and pick a discount."}
-            </div>
           </div>
         </div>
       </div>
@@ -1347,40 +1186,6 @@ export function Dashboard() {
             </div>
           </div>
 
-          {/* Reconcile projected orphan-offer recovery with scorecard */}
-          {(offerEstimate || (scorecard?.before && ((scorecard.before.orphan_offer_nights_booked ?? 0) > 0 || (scorecard.before.orphan_offer_revenue_booked ?? 0) > 0))) && (
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3">
-              <div className="bg-surface border border-border p-4">
-                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Nights recovered (shuffle)</div>
-                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
-                  {scorecard?.after ? Math.max(0, (scorecard.before.orphan_nights ?? 0) - (scorecard.after.orphan_nights ?? 0)) : "—"}
-                </div>
-                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  Deterministic: orphan nights reduced by preview plan.
-                </div>
-              </div>
-
-              <div className="bg-surface border border-border p-4">
-                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer nights (actual)</div>
-                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
-                  {scorecardLoading ? "…" : (scorecard?.before.orphan_offer_nights_booked ?? 0)}
-                </div>
-                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  Booked nights where an orphan-night offer was applied.
-                </div>
-              </div>
-
-              <div className="bg-surface border border-border p-4">
-                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan-offer revenue (actual)</div>
-                <div className="mt-1 text-2xl font-serif font-bold text-text tabular-nums">
-                  {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.orphan_offer_revenue_booked ?? 0).toLocaleString("en-US")}`}
-                </div>
-                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  Sum of rates on booked orphan-offer nights in this slice.
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

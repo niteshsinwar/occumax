@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
@@ -96,7 +96,6 @@ interface CellProps {
 
 function CalendarCellView({ cell, selected, onToggle }: CellProps) {
   const [showTooltip, setShowTooltip] = useState(false);
-  const tooltipRef = useRef<HTMLDivElement>(null);
 
   const cellBg =
     cell.is_orphan
@@ -157,7 +156,6 @@ function CalendarCellView({ cell, selected, onToggle }: CellProps) {
       {/* Tooltip */}
       {showTooltip && !cell.is_orphan && (
         <div
-          ref={tooltipRef}
           className="absolute z-50 bottom-full left-0 mb-1 w-64 bg-surface border border-border shadow-lg p-3 pointer-events-none"
           style={{ minWidth: 256 }}
         >
