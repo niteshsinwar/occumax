@@ -1,13 +1,13 @@
 """
 Pricing AI Agent — Multi-call strategy with Poly AI
 
-Strategy (6 sequential + parallel LLM calls):
-  1. Parallel: weather analysis, events analysis, market/news analysis, historical analysis
-  2. Sequential: synthesis call combining all 4 factor analyses + live occupancy snapshot
-  3. Persist results to pricing_recs table for caching / 8AM scheduler
+Strategy:
+  Phase 1 (parallel): 4 focused factor calls — weather, events, market, historical
+  Phase 2 (12 parallel): 3 categories × 4 date-windows of 5 days each = 12 micro-synthesis calls
+    Each call covers 1 category + 5 specific days — output fits in Poly AI's 400-token cap
+  Phase 3: merge 12 results, derive reasons from factor data, persist to pricing_recs
 
-Each call is a focused single-shot LLM invocation (no tools, no graph) — fast and reliable.
-The synthesis call aggregates all signals into a 20-day calendar per room category.
+Categories priced: ECONOMY, STANDARD, STUDIO  (extend SYNTHESIS_CATEGORIES to add more)
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 20
 CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
+SYNTHESIS_CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO"]  # categories priced by AI
+WINDOW_SIZE = 5   # days per micro-synthesis shard
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
@@ -212,71 +214,173 @@ async def _call_history_agent(llm: ChatOpenAI, history: dict, today: date) -> di
     return _parse_json(text, default)
 
 
-# ── Call 5: Synthesis (final calendar) ───────────────────────────────────────
+# ── Call 5: Synthesis (micro-shards, 1 category each) ────────────────────────
+#
+# Each shard covers exactly 1 category across all 20 days.
+# Output schema is ultra-compact (no reason/factor text) to stay under the
+# Poly AI 400-token completion cap. Reasons are derived from factor analyses
+# in Python after all shards complete.
 
-_SYNTHESIS_SYSTEM = """\
-You are RateIQ, the Revenue Management AI for {hotel_name} (New Jersey, USA). Today: {today}.
+_SHARD_SYSTEM = """\
+You are a hotel revenue manager for {hotel_name} (New Jersey, USA). Today: {today}.
+Price {category} rooms for the next 20 days using the occupancy data and demand signals provided.
 
-You have received 4 factor analyses: weather, events, market news, and historical trends.
-Combined with the live occupancy snapshot, generate actionable pricing recommendations for the next 20 days.
+Output ONLY a raw JSON array — no fences, no extra text:
+[{{"date":"YYYY-MM-DD","rate":149,"action":"INCREASE","conf":"HIGH"}}, ...]
 
-Output ONLY valid JSON (no markdown fences):
-{{
-  "summary": "2-3 sentence market summary covering key events, occupancy outlook, and priority action",
-  "calendar": {{
-    "STANDARD": [
-      {{
-        "date": "YYYY-MM-DD",
-        "suggested_rate": 179,
-        "change_pct": 20.1,
-        "action": "INCREASE",
-        "confidence": "HIGH",
-        "reason": "15-30 word market-aware reason referencing specific NJ demand driver",
-        "weather_factor": "brief sentence",
-        "event_factor": "brief sentence or empty string",
-        "news_factor": "brief sentence"
-      }}
-    ],
-    "DELUXE": [...],
-    "SUITE": [...],
-    "ECONOMY": [...],
-    "STUDIO": [...],
-    "PREMIUM": [...]
-  }}
-}}
-
-Coverage goal: Aim to include 15-18 of the 20 dates per category. Only truly unremarkable mid-week days with no signals should be omitted.
-
-Action rules (apply the FIRST matching rule):
-- INCREASE: any event day or lead-in day (graduation, concert, holiday, conference) — always increase regardless of occupancy
-- INCREASE: Friday, Saturday, Sunday — weekend demand always warrants a rate adjustment
-- INCREASE: occ >= 55% on any day
-- INCREASE: positive weather (sunny/warm) on a weekend
-- DISCOUNT: occ < 40% AND no event AND weekday AND lead_days > 1
-- DISCOUNT: occ < 55% AND weekday AND no event AND market sentiment bearish
-- MAINTAIN (omit): only flat mid-week with occ 40-55%, no event, neutral weather — skip these
-
-Pricing guidance by category tier:
-- ECONOMY/STANDARD: ±5-15% from base; ECONOMY is rate-sensitive, discount aggressively when empty
-- STUDIO/DELUXE: ±10-25% from base; event-driven, hold rate during demand spikes
-- SUITE/PREMIUM: ±15-40% from base; graduation/concerts = premium pricing; never discount below floor
-
-suggested_rate rules:
-- MUST be >= floor_rate
-- Round to nearest $5
-- Change must be meaningful: INCREASE >= +3%, DISCOUNT <= -3%
-
-Confidence:
-- HIGH: occ >80% or <25%, or named event (graduation, concert, holiday)
-- MEDIUM: occ 55-80% or 25-40%, or weather signal
-- LOW: occ 40-55%, mild signal only
-
-reason: MUST name the specific NJ driver (event, weekday, weather, market) — 15-30 words
-event_factor, weather_factor, news_factor: each under 12 words; empty string if not applicable
-
-Skip categories with 0 total rooms.
-Output ONLY the JSON object — no text before or after.
+Rules:
+- action: INCREASE or DISCOUNT only — omit dates where rate should hold flat
+- INCREASE when: event day/lead-in OR weekend (Fri/Sat/Sun) OR occ >= 55%
+- DISCOUNT when: occ < 40% AND weekday AND no event signal
+- rate: integer, must be >= floor_rate, rounded to nearest $5
+- INCREASE: rate >= base_rate * 1.05; DISCOUNT: rate <= base_rate * 0.95
+- conf: HIGH (occ>80% or <25% or named event), MEDIUM (occ 55-80% or 25-40%), LOW otherwise
+- Aim for 12-16 actionable dates out of 20
+- Output ONLY the JSON array
 """
+
+_SUMMARY_SYSTEM = """\
+You are RateIQ, the Revenue Management AI for {hotel_name} (NJ, USA). Today: {today}.
+Given the market signals below, write a 2-3 sentence revenue outlook summary.
+Mention specific upcoming events (concert, graduation, holiday), current demand trend, and one priority action.
+Output ONLY the summary text — no JSON, no headings.
+"""
+
+
+def _derive_reason(
+    date_str: str,
+    cat: str,
+    events_analysis: dict,
+    weather_analysis: dict,
+    market_analysis: dict,
+    snap_day: dict,
+) -> tuple[str, str, str, str]:
+    """Return (reason, weather_factor, event_factor, news_factor) from factor data."""
+    ev = events_analysis.get(date_str, {})
+    wx = weather_analysis.get(date_str, {})
+    occ = snap_day.get("occ_pct", 50)
+
+    event_factor = ev.get("brief", "") or ""
+    weather_factor = wx.get("brief", "") or ""
+    news_factor = market_analysis.get("key_insight", "")[:80] if market_analysis.get("key_insight") else ""
+
+    # Build reason from strongest signal
+    if ev.get("demand_boost_pct", 0) > 0 and ev.get("event"):
+        reason = f"{ev['event']} drives {cat} demand — {event_factor[:60]}" if event_factor else f"{ev['event']} boosts NJ hotel demand; rate increase warranted."
+    elif wx.get("impact") == "positive" and weather_factor:
+        reason = f"Favorable NJ weekend weather — {weather_factor[:80]}"
+    elif wx.get("impact") == "negative" and weather_factor:
+        reason = f"Adverse weather dampens leisure demand — {weather_factor[:80]}"
+    elif occ >= 70:
+        reason = f"{cat} occupancy at {occ:.0f}% — strong on-books demand supports rate increase."
+    elif occ < 35:
+        reason = f"{cat} occupancy at {occ:.0f}% — rate support needed to drive advance bookings."
+    else:
+        insight = market_analysis.get("key_insight", "")
+        reason = (insight[:120] + " — rate adjustment warranted.") if insight else f"Day-of-week demand pattern for {cat} warrants pricing action."
+
+    return reason[:200], weather_factor[:80], event_factor[:80], news_factor[:80]
+
+
+async def _synthesis_shard(
+    llm: ChatOpenAI,
+    category: str,
+    dates_window: list[str],
+    snap_cat: dict,
+    weather_analysis: dict,
+    events_analysis: dict,
+    market_analysis: dict,
+    history_analysis: dict,
+    today: date,
+) -> tuple[str, list]:
+    """Price one category across all 20 days. Returns (category, cells_list)."""
+    if not snap_cat:
+        return category, []
+
+    # Build compact per-day context for this category
+    day_rows = []
+    for d in dates_window:
+        b = snap_cat.get(d, {})
+        ev = events_analysis.get(d, {})
+        wx = weather_analysis.get(d, {})
+        day_rows.append({
+            "date": d,
+            "occ_pct": b.get("occ_pct", 0),
+            "otb": b.get("otb", 0),
+            "total": b.get("total", 0),
+            "avg_rate": b.get("avg_rate", 0),
+            "floor_rate": b.get("floor_rate", 0),
+            "base_rate": b.get("base_rate", 0),
+            "event": ev.get("event") or None,
+            "event_boost": ev.get("demand_boost_pct", 0),
+            "weather": wx.get("impact", "neutral"),
+            "is_weekend": date.fromisoformat(d).weekday() >= 4,
+        })
+
+    context = json.dumps({
+        "days": day_rows,
+        "seasonal_multiplier": history_analysis.get("seasonal_multipliers", {}).get(category, 1.0),
+        "market_rate_pressure": market_analysis.get("rate_pressure", "flat"),
+    }, ensure_ascii=False)
+
+    system = _SHARD_SYSTEM.format(
+        hotel_name=settings.HOTEL_NAME,
+        today=today.isoformat(),
+        category=category,
+    )
+
+    text = await _safe_call(
+        llm,
+        [SystemMessage(content=system), HumanMessage(content=context)],
+        f"synthesis[{category}]",
+    )
+
+    # Parse compact array output
+    raw = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw, re.IGNORECASE)
+    if fence:
+        raw = fence.group(1).strip()
+    arr_match = re.search(r"\[[\s\S]*\]", raw)
+    if arr_match:
+        try:
+            cells = json.loads(arr_match.group(0))
+            if isinstance(cells, list):
+                return category, cells
+        except json.JSONDecodeError:
+            pass
+    logger.debug("Shard parse failed for %s", category)
+    return category, []
+
+
+async def _call_summary_agent(
+    llm: ChatOpenAI,
+    events_analysis: dict,
+    weather_analysis: dict,
+    market_analysis: dict,
+    today: date,
+) -> str:
+    """Single call to produce the 2-3 sentence market summary."""
+    top_events = [
+        f"{v['event']} on {d} (boost +{v.get('demand_boost_pct', 0)}%)"
+        for d, v in sorted(events_analysis.items())
+        if v.get("event") and v.get("demand_boost_pct", 0) > 0
+    ][:4]
+    top_weather = [
+        f"{d}: {v.get('brief', '')}"
+        for d, v in sorted(weather_analysis.items())
+        if v.get("impact") in ("positive", "negative")
+    ][:4]
+    context = json.dumps({
+        "top_events": top_events,
+        "notable_weather": top_weather,
+        "market_sentiment": market_analysis.get("sentiment", "neutral"),
+        "rate_pressure": market_analysis.get("rate_pressure", "flat"),
+        "market_insight": market_analysis.get("key_insight", ""),
+    }, ensure_ascii=False)
+    system = _SUMMARY_SYSTEM.format(hotel_name=settings.HOTEL_NAME, today=today.isoformat())
+    text = await _safe_call(llm, [SystemMessage(content=system), HumanMessage(content=context)], "summary")
+    return (text or "").strip() or "Analysis complete."
+
 
 async def _call_synthesis_agent(
     llm: ChatOpenAI,
@@ -289,7 +393,6 @@ async def _call_synthesis_agent(
 ) -> dict:
     dates_window = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
 
-    # Compact snapshot for synthesis context (only categories that exist)
     compact_snapshot = {
         cat: {
             d: {
@@ -306,27 +409,72 @@ async def _call_synthesis_agent(
         if snapshot.get(cat)
     }
 
-    context = json.dumps({
-        "dates_window": dates_window,
-        "occupancy_snapshot": compact_snapshot,
-        "weather_impact": weather_analysis,
-        "events_impact": events_analysis,
-        "market_outlook": market_analysis,
-        "historical_multipliers": history_analysis.get("seasonal_multipliers", {}),
-        "historical_note": history_analysis.get("week_note", ""),
-    }, ensure_ascii=False)
-
-    system = _SYNTHESIS_SYSTEM.format(
-        hotel_name=settings.HOTEL_NAME,
-        today=today.isoformat(),
+    # 1 shard per category (ECONOMY, STANDARD, STUDIO) + 1 summary call — all parallel
+    shard_args = dict(
+        dates_window=dates_window,
+        weather_analysis=weather_analysis,
+        events_analysis=events_analysis,
+        market_analysis=market_analysis,
+        history_analysis=history_analysis,
+        today=today,
     )
 
-    text = await _safe_call(
-        llm,
-        [SystemMessage(content=system), HumanMessage(content=context)],
-        "synthesis",
-    )
-    return _parse_json(text, {"summary": "Analysis complete.", "calendar": {}})
+    tasks = [
+        _synthesis_shard(llm, cat, snap_cat=compact_snapshot.get(cat, {}), **shard_args)
+        for cat in SYNTHESIS_CATEGORIES
+        if compact_snapshot.get(cat)
+    ]
+    tasks.append(_call_summary_agent(llm, events_analysis, weather_analysis, market_analysis, today))  # type: ignore[arg-type]
+
+    results = await asyncio.gather(*tasks)
+
+    # Last result is the summary string
+    summary_result = results[-1]
+    summary = summary_result if isinstance(summary_result, str) else "Analysis complete."
+
+    # Build calendar — expand compact cells and attach derived reasons
+    merged_calendar: dict = {}
+    for cat_result in results[:-1]:
+        if not isinstance(cat_result, tuple):
+            continue
+        cat, cells = cat_result
+        snap_cat = compact_snapshot.get(cat, {})
+        expanded = []
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            d = cell.get("date", "")
+            if not d:
+                continue
+            snap_day = snap_cat.get(d, {})
+            avg_rate = snap_day.get("avg_rate", 0.0)
+            suggested = float(cell.get("rate", avg_rate))
+            action_raw = cell.get("action", "").upper()
+            conf_raw = cell.get("conf", "MEDIUM").upper()
+
+            # Expand abbreviated confidence
+            conf_map = {"H": "HIGH", "M": "MEDIUM", "L": "LOW", "HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW"}
+            confidence = conf_map.get(conf_raw, "MEDIUM")
+
+            reason, weather_factor, event_factor, news_factor = _derive_reason(
+                d, cat, events_analysis, weather_analysis, market_analysis, snap_day
+            )
+
+            expanded.append({
+                "date": d,
+                "suggested_rate": suggested,
+                "change_pct": round((suggested - avg_rate) / avg_rate * 100, 1) if avg_rate else 0.0,
+                "action": action_raw if action_raw in ("INCREASE", "DISCOUNT") else "MAINTAIN",
+                "confidence": confidence,
+                "reason": reason,
+                "weather_factor": weather_factor,
+                "event_factor": event_factor,
+                "news_factor": news_factor,
+            })
+        if expanded:
+            merged_calendar[cat] = expanded
+
+    return {"summary": summary, "calendar": merged_calendar}
 
 
 # ── Persist to DB ─────────────────────────────────────────────────────────────
@@ -422,9 +570,7 @@ async def run_pricing_agent(
     news = get_market_news()
     history = get_historical_trends()
 
-    llm_synthesis = _make_llm(max_tokens=10000)
-
-    # Phase 1a: weather + events (larger output — run together first)
+    # Phase 1a: weather + events (parallel)
     try:
         weather_analysis, events_analysis = await asyncio.wait_for(
             asyncio.gather(
@@ -437,7 +583,7 @@ async def run_pricing_agent(
         logger.warning("Weather/events calls timed out — using defaults")
         weather_analysis, events_analysis = {}, {}
 
-    # Phase 1b: market + history (compact output — run after Phase 1a)
+    # Phase 1b: market + history (parallel)
     try:
         market_analysis, history_analysis = await asyncio.wait_for(
             asyncio.gather(
@@ -450,17 +596,18 @@ async def run_pricing_agent(
         logger.warning("Market/history calls timed out — using defaults")
         market_analysis, history_analysis = {}, {}
 
-    # Phase 2: synthesis — combines all 4 factor analyses + live occupancy
+    # Phase 2: 1 micro-shard per category + 1 summary — all parallel
+    # Each shard covers 1 category × 20 days with compact output (fits Poly AI 400-token cap)
     try:
         result = await asyncio.wait_for(
             _call_synthesis_agent(
-                llm_synthesis, snapshot, today,
+                llm, snapshot, today,
                 weather_analysis, events_analysis, market_analysis, history_analysis,
             ),
             timeout=300,
         )
     except asyncio.TimeoutError:
-        logger.error("Synthesis call timed out")
+        logger.error("Synthesis shards timed out")
         result = {"summary": "Analysis timed out — try again.", "calendar": {}}
 
     # Phase 3: persist
