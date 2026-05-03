@@ -68,11 +68,24 @@ Direct booking — 0% commission; works best when demand already exists or for
 Business logic:
   • PUSH to OTA when occupancy < 50% for weekday, < 65% for weekend — fill the gap.
   • HOLD for Direct when occupancy > 70% — retain full margin on high-demand nights.
-  • Weekend gaps (Fri/Sat) → Expedia/Booking.com first (highest leisure volume in NJ).
-  • Weekday gaps → Amadeus/Sabre for pharma/finance corporate; else Expedia.
   • Never allocate OTA for a date that is already > 80% occupied — diminishing returns.
   • Suite/Deluxe gaps with < 30 days lead: consider Direct + NYC overflow rate offer.
   • Standard gaps: OTA almost always better — high volume, price-sensitive segment.
+
+  Partner selection — work through this cascade for every gap, skipping PENALIZE/AVOID:
+  • Weekend gaps (Fri/Sat leisure):
+      1st choice → Booking.com   (drive-to leisure, NJ tri-state audience)
+      2nd choice → Expedia        (highest NJ/NYC-metro volume)
+      3rd choice → Priceline      (flash deals fill remaining leisure gaps)
+      4th choice → Agoda          (Asia-Pacific weekend travelers transiting NYC)
+  • Weekday gaps (Mon–Thu corporate):
+      1st choice → Amadeus/Sabre  (pharma/finance corporate TMCs)
+      2nd choice → Expedia         (broadest corporate reach if GDS unavailable)
+      3rd choice → Priceline       (opaque deals for Standard low-occ weekday)
+      4th choice → Booking.com     (business traveler segment on Booking for Work)
+  • High-occ or event-adjacent nights → Direct first, then 1st-choice OTA above.
+  • Spread recommendations across AT LEAST 3 different partners per analysis run.
+    Do not assign more than 40% of total recommendations to any single partner.
 
 ── Tools ─────────────────────────────────────────────────────────────────────
 get_occupancy_gaps(category, look_ahead_days)
