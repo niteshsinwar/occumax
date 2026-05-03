@@ -372,160 +372,131 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
         </div>
       )}
 
-      {/* ── Inventory Heatmap — flagship, full width ───────────────────────────── */}
+      {/* ── Main workspace: heatmap (left) + analytics sidebar (right) ─────────── */}
       {heatmap && (
-        <div className="bg-surface border border-border p-5 mb-4">
-          <div className="mb-4 pb-3 border-b border-border/60 flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Inventory</div>
-              <div className="font-serif font-bold text-xl text-text mt-0.5">Heatmap</div>
-              <div className="text-[9px] text-text-muted mt-1 uppercase tracking-widest font-bold">
-                {spanDays}-night window · orphan gaps outlined
+        <div className="grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-4 items-start">
+
+          {/* Left: Inventory heatmap — flagship */}
+          <div className="bg-surface border border-border p-5">
+            <div className="mb-4 pb-3 border-b border-border/60 flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Inventory</div>
+                <div className="font-serif font-bold text-xl text-text mt-0.5">Heatmap</div>
+                <div className="text-[9px] text-text-muted mt-1 uppercase tracking-widest font-bold">
+                  {spanDays}-night window · orphan gaps outlined
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
               {simulatedRows && (
-                <div className="text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 bg-occugreen/8 text-occugreen border border-occugreen/25">
+                <div className="text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 bg-occugreen/8 text-occugreen border border-occugreen/25 self-start">
                   Preview active
                 </div>
               )}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/55 inline-block border border-occugreen/20" /> Guest</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-accent/40 inline-block border border-accent/20" /> Channel</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 inline-block border border-border" /> Blocked</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-surface-2 inline-block border border-border" /> Available</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occuorange/20 inline-block border border-occuorange/40" /> Orphan gap</span>
-              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <HeatmapGrid
+                dates={heatmap.dates}
+                rows={simulatedRows ?? rowsInView}
+                maxDays={spanDays}
+                highlightSandwichGaps
+              />
+            </div>
+            <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap gap-x-5 gap-y-1 text-[9px] font-bold uppercase tracking-widest text-text-muted">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/55 inline-block border border-occugreen/20" /> Guest booking</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-accent/40 inline-block border border-accent/20" /> Channel booking</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 inline-block border border-border" /> Blocked</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-surface-2 inline-block border border-border" /> Available</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occuorange/20 inline-block border border-occuorange/40" /> Empty gaps</span>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <HeatmapGrid
-              dates={heatmap.dates}
-              rows={simulatedRows ?? rowsInView}
-              maxDays={spanDays}
-              highlightSandwichGaps
-            />
-          </div>
-        </div>
-      )}
 
-      {/* ── Analytics panels — below heatmap, 3-column ─────────────────────────── */}
-      {heatmap && kpis && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Right: Analytics sidebar — k-windows · top offenders · distribution */}
+          {kpis && (
+            <div className="bg-surface border border-border divide-y divide-border/60">
 
-          {/* Panel 1: Gap metrics */}
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Gap metrics</div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-surface-2/60 border border-border p-3">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Orphan gaps</div>
-                <div className="text-xl font-serif font-bold text-text tabular-nums mt-1">{kpis.orphanGaps}</div>
-                <div className="text-[10px] text-text-muted mt-0.5">{kpis.orphanNights} nights (≤5)</div>
-              </div>
-              <div className="bg-surface-2/60 border border-border p-3">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Hard to fill</div>
-                <div className="text-xl font-serif font-bold text-occuorange tabular-nums mt-1">{kpis.hardToFill}</div>
-                <div className="text-[10px] text-text-muted mt-0.5">1–3 night gaps</div>
-              </div>
-              <div className="bg-surface-2/60 border border-border p-3">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Easy to sell</div>
-                <div className="text-xl font-serif font-bold text-occugreen tabular-nums mt-1">{kpis.easyToSell}</div>
-                <div className="text-[10px] text-text-muted mt-0.5">4+ night runs</div>
-              </div>
-              <div className="bg-surface-2/60 border border-border p-3">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">MinLOS blocks</div>
-                <div className="text-xl font-serif font-bold text-text tabular-nums mt-1">{kpis.minlosBlocks}</div>
-                <div className="text-[10px] text-text-muted mt-0.5">orphan-night locks</div>
-              </div>
-            </div>
-
-            {/* Gap distribution inline */}
-            <div className="mt-4 pt-3 border-t border-border/60">
-              <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Distribution</div>
-              {(() => {
-                const bars = [
-                  { label: "1-night",   count: kpis.runDist.n1,   color: "bg-occuorange",    note: "hardest to sell" },
-                  { label: "2–3",       count: kpis.runDist.n2_3, color: "bg-occuorange/50", note: "hard to fill" },
-                  { label: "4–7",       count: kpis.runDist.n4_7, color: "bg-text/25",       note: "convertible" },
-                  { label: "8+",        count: kpis.runDist.n8p,  color: "bg-occugreen/45",  note: "easy to sell" },
-                ];
-                const maxCount = Math.max(...bars.map(b => b.count), 1);
-                return (
-                  <div className="space-y-1.5">
-                    {bars.map(({ label, count, color, note }) => (
-                      <div key={label} className="grid grid-cols-[40px_1fr_20px] gap-1.5 items-center">
-                        <div className="text-[9px] font-bold text-text-muted text-right uppercase tracking-widest">{label}</div>
-                        <div className="h-2.5 bg-surface-2 border border-border/40 overflow-hidden relative group">
-                          <div className={`h-full ${color} transition-all`} style={{ width: `${count > 0 ? Math.max((count / maxCount) * 100, 5) : 0}%` }} />
-                          <span className="absolute right-1 top-0 h-full hidden group-hover:flex items-center text-[8px] text-text-muted">{note}</span>
-                        </div>
-                        <div className="text-[10px] font-bold text-text tabular-nums">{count}</div>
+              {/* Section 1: k-night windows */}
+              {kWindowBars && (
+                <div className="p-5">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k-night windows</div>
+                    {simulatedRows && (
+                      <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-3">
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 border border-border/60 inline-block" /> Now</span>
+                        <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/50 border border-occugreen/30 inline-block" /> After</span>
                       </div>
-                    ))}
+                    )}
                   </div>
-                );
-              })()}
-            </div>
-          </div>
-
-          {/* Panel 2: Top offenders */}
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-2">
-              <AlertTriangle className="w-3 h-3 text-occuorange" /> Top offenders
-            </div>
-            <div className="text-[10px] text-text-muted mb-3">Rooms with most 1–3 night gaps</div>
-            <div className="space-y-1.5">
-              {kpis.topFrag.map(r => (
-                <div key={r.roomId} className="flex items-center justify-between bg-surface-2/50 border border-border/50 px-3 py-2">
-                  <div className="font-mono font-bold text-text text-xs">Room {r.roomId}</div>
-                  <div className="text-text-muted text-[10px] uppercase tracking-widest">{r.category}</div>
-                  <div className="text-occuorange font-bold text-xs">{r.shortGaps} gap{r.shortGaps !== 1 ? "s" : ""}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Panel 3: k-night windows */}
-          {kWindowBars ? (
-            <div className="bg-surface border border-border p-4">
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k-night windows</div>
-                {simulatedRows && (
-                  <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-3">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 border border-border/60 inline-block" /> Now</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/50 border border-occugreen/30 inline-block" /> After</span>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-3">
-                {kWindowBars.ks.map((kk, idx) => {
-                  const cur = kWindowBars.current[idx]!;
-                  const proj = kWindowBars.projected ? kWindowBars.projected[idx]! : null;
-                  const pct = Math.max((cur / kWindowBars.maxVal) * 100, cur > 0 ? 5 : 0);
-                  const pctProj = proj !== null ? Math.max((proj / kWindowBars.maxVal) * 100, proj > 0 ? 5 : 0) : 0;
-                  return (
-                    <div key={kk} className="grid grid-cols-[36px_1fr] gap-2 items-center">
-                      <div className="text-[10px] font-bold text-text-muted text-right">k={kk}</div>
-                      <div className="space-y-1">
-                        <div className="h-5 bg-surface-2 border border-border/50 relative overflow-hidden">
-                          <div className="h-full bg-text/20" style={{ width: `${pct}%` }} />
-                          <div className="absolute left-2 top-0 h-full flex items-center text-[9px] font-bold text-text">{cur}</div>
-                        </div>
-                        {proj !== null && (
-                          <div className="h-5 bg-occugreen/5 border border-occugreen/20 relative overflow-hidden">
-                            <div className="h-full bg-occugreen/50" style={{ width: `${pctProj}%` }} />
-                            <div className="absolute left-2 top-0 h-full flex items-center text-[9px] font-bold text-occugreen">{proj}</div>
+                  <div className="space-y-2">
+                    {kWindowBars.ks.map((kk, idx) => {
+                      const cur = kWindowBars.current[idx]!;
+                      const proj = kWindowBars.projected ? kWindowBars.projected[idx]! : null;
+                      const pct = Math.max((cur / kWindowBars.maxVal) * 100, cur > 0 ? 5 : 0);
+                      const pctProj = proj !== null ? Math.max((proj / kWindowBars.maxVal) * 100, proj > 0 ? 5 : 0) : 0;
+                      return (
+                        <div key={kk} className="grid grid-cols-[36px_1fr] gap-2 items-center">
+                          <div className="text-[10px] font-bold text-text-muted text-right">k={kk}</div>
+                          <div className="space-y-1">
+                            <div className="h-5 bg-surface-2 border border-border/50 relative overflow-hidden">
+                              <div className="h-full bg-text/20" style={{ width: `${pct}%` }} />
+                              <div className="absolute left-2 top-0 h-full flex items-center text-[9px] font-bold text-text">{cur}</div>
+                            </div>
+                            {proj !== null && (
+                              <div className="h-5 bg-occugreen/5 border border-occugreen/20 relative overflow-hidden">
+                                <div className="h-full bg-occugreen/50" style={{ width: `${pctProj}%` }} />
+                                <div className="absolute left-2 top-0 h-full flex items-center text-[9px] font-bold text-occugreen">{proj}</div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Section 2: Top offenders */}
+              <div className="p-5">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-2">
+                  <AlertTriangle className="w-3 h-3 text-occuorange" /> Top offenders
+                </div>
+                <div className="text-[10px] text-text-muted mb-3">Rooms with most 1–3 night gaps</div>
+                <div className="space-y-1.5">
+                  {kpis.topFrag.map(r => (
+                    <div key={r.roomId} className="flex items-center justify-between bg-surface-2/50 border border-border/50 px-3 py-2">
+                      <div className="font-mono font-bold text-text text-xs">Room {r.roomId}</div>
+                      <div className="text-text-muted text-[10px] uppercase tracking-widest">{r.category}</div>
+                      <div className="text-occuorange font-bold text-xs">{r.shortGaps} gap{r.shortGaps !== 1 ? "s" : ""}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Section 3: Gap distribution */}
+              <div className="p-5">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Distribution</div>
+                {(() => {
+                  const bars = [
+                    { label: "1-night",   count: kpis.runDist.n1,   color: "bg-occuorange",    note: "hardest to sell" },
+                    { label: "2–3 night", count: kpis.runDist.n2_3, color: "bg-occuorange/50", note: "hard to fill" },
+                    { label: "4–7 night", count: kpis.runDist.n4_7, color: "bg-text/25",       note: "convertible" },
+                    { label: "8+ night",  count: kpis.runDist.n8p,  color: "bg-occugreen/45",  note: "easy to sell" },
+                  ];
+                  const maxCount = Math.max(...bars.map(b => b.count), 1);
+                  return (
+                    <div className="space-y-2">
+                      {bars.map(({ label, count, color, note }) => (
+                        <div key={label} className="grid grid-cols-[52px_1fr_24px] gap-2 items-center">
+                          <div className="text-[9px] font-bold text-text-muted text-right uppercase tracking-widest">{label}</div>
+                          <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden relative group">
+                            <div className={`h-full ${color} transition-all`} style={{ width: `${count > 0 ? Math.max((count / maxCount) * 100, 5) : 0}%` }} />
+                            <span className="absolute right-1 top-0 h-full hidden group-hover:flex items-center text-[8px] text-text-muted">{note}</span>
+                          </div>
+                          <div className="text-[10px] font-bold text-text tabular-nums">{count}</div>
+                        </div>
+                      ))}
                     </div>
                   );
-                })}
+                })()}
               </div>
-            </div>
-          ) : (
-            <div className="bg-surface border border-border p-4 flex items-center justify-center text-[10px] text-text-muted uppercase tracking-widest">
-              No data
             </div>
           )}
         </div>
