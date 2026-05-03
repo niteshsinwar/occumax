@@ -377,7 +377,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
         <div className="grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-4 items-start">
 
           {/* Left: Inventory heatmap — flagship */}
-          <div className="bg-surface border border-border p-5">
+          <div className="bg-surface border border-border p-5 min-w-0">
             <div className="mb-4 pb-3 border-b border-border/60 flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Inventory</div>
