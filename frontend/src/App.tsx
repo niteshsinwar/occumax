@@ -3,7 +3,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { DashboardV2 } from "./pages/DashboardV2";
 import { ReceptionistView } from "./pages/ReceptionistView";
 import { AdminPanel } from "./pages/AdminPanel";
-import { Users, Settings, Grid3x3, Sparkles } from "lucide-react";
+import { Users, Settings, Grid3x3 } from "lucide-react";
 
 /** Top Level Application Shell */
 export default function App() {
@@ -31,14 +31,6 @@ function AppLayout() {
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
                   <Grid3x3 className="w-4 h-4" /> Overview
-                </NavLink>
-                <NavLink
-                  to="/dashboard-v2"
-                  className={({ isActive }) => `flex items-center gap-1.5 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Overview</span>
-                  <span className="text-[8px] font-black tracking-widest px-1 py-0.5 bg-accent/15 text-accent border border-accent/30 rounded-sm">V2</span>
                 </NavLink>
                 <NavLink
                   to="/receptionist"
