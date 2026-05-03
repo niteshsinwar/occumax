@@ -148,11 +148,11 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o ConnectTimeout=15 ubuntu@${{ secrets.HOST }} \
             "sudo tee /etc/nginx/conf.d/occumax-timeouts.conf > /dev/null << 'EOF'
           # AI endpoints (pricing/analyse, channel-recommend, ai/chat) can take
-          # 60-120s for multi-turn AI agent loops. Raise timeouts to 300s so
-          # Nginx does not kill the connection mid-run with a 504.
-          proxy_read_timeout    300s;
-          proxy_connect_timeout  15s;
-          proxy_send_timeout     30s;
+          # up to 300s per step; raise all proxy timeouts to 600s so Nginx never
+          # kills a long-running AI request mid-stream with a 504.
+          proxy_read_timeout    600s;
+          proxy_connect_timeout  30s;
+          proxy_send_timeout    600s;
           EOF
           sudo nginx -t"
 

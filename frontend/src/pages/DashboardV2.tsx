@@ -158,7 +158,6 @@ export function DashboardV2() {
   const [isHeatmapLoading, setIsHeatmapLoading] = useState(false);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
-  const [isOptimiseLoading, setIsOptimiseLoading] = useState(false);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [swapCommitLoading, setSwapCommitLoading] = useState(false);
   const [kNightNights, setKNightNights] = useState(2);
@@ -234,7 +233,6 @@ export function DashboardV2() {
 
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
-    setIsOptimiseLoading(true);
     try {
       const start = parseISO(String(heatmap.dates[0]));
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
@@ -245,8 +243,7 @@ export function DashboardV2() {
       if ((body.swap_plan?.length ?? 0) === 0) {
         show(body.fully_clean ? "No orphan gaps in this window." : "No improvements found (converged).", "info");
       } else { show(`Preview ready: ${body.shuffle_count} optimisation steps`, "success"); }
-    } catch { show("Failed to run optimisation preview", "error"); setSwapPlan(null); void refreshScorecard(null);
-    } finally { setIsOptimiseLoading(false); }
+    } catch { show("Failed to run optimisation preview", "error"); setSwapPlan(null); void refreshScorecard(null); }
   }, [heatmap, weekSpan, heatmapCategories, show, refreshScorecard]);
 
   const clearOptimisePreview = useCallback(() => { setSwapPlan(null); void refreshScorecard(null); }, [refreshScorecard]);
@@ -355,7 +352,7 @@ export function DashboardV2() {
     else if (losFromSlice != null)
       out.push(`Most likely length of stay: ${losFromSlice} nights (inferred from current bookings in this window).`);
 
-    if (channelPerf?.channels?.length > 0) {
+    if (channelPerf?.channels && channelPerf.channels.length > 0) {
       const best = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
       const partner = best.partners?.length ? [...best.partners].sort((a, b) => b.room_nights - a.room_nights)[0] : null;
       out.push(partner
@@ -738,7 +735,7 @@ export function DashboardV2() {
                         <span className="font-bold text-text">{topCh.channel} · {topCh.sharePct}%</span>
                       </div>
                     )}
-                    {channelPerf?.channels?.length > 0 && (() => {
+                    {channelPerf?.channels && channelPerf.channels.length > 0 && (() => {
                       const best = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
                       const partner = best.partners?.length ? [...best.partners].sort((a, b) => b.room_nights - a.room_nights)[0] : null;
                       return partner ? (
