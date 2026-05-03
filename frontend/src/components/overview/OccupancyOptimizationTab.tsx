@@ -322,7 +322,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
 
       {/* ── KPI strip ─────────────────────────────────────────────────────────── */}
       {kpis && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3 mb-6">
           <div className="bg-surface border border-border p-4">
             <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-1">Tonight occupancy</div>
             <div className="text-2xl font-serif font-bold text-text tabular-nums">
@@ -368,6 +368,26 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
               )}
             </div>
             <div className="text-[10px] text-text-muted mt-0.5">3-night bookable windows</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-1">Orphan gaps</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">{kpis.orphanGaps}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">{kpis.orphanNights} nights · ≤5 each</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-1">Hard to fill</div>
+            <div className="text-2xl font-serif font-bold text-occuorange tabular-nums">{kpis.hardToFill}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">1–3 night gaps</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-1">Easy to sell</div>
+            <div className="text-2xl font-serif font-bold text-occugreen tabular-nums">{kpis.easyToSell}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">4+ night runs</div>
+          </div>
+          <div className="bg-surface border border-border p-4">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-1">MinLOS blocks</div>
+            <div className="text-2xl font-serif font-bold text-text tabular-nums">{kpis.minlosBlocks}</div>
+            <div className="text-[10px] text-text-muted mt-0.5">orphan-night locks</div>
           </div>
         </div>
       )}
