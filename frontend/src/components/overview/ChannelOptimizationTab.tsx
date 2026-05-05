@@ -16,6 +16,7 @@ import { useToast } from "../shared/Toast";
 import { AiTag } from "../shared/AiTag";
 import {
   AlertTriangle,
+  ArrowRight,
   BarChart2,
   CheckCircle2,
   RefreshCw,
@@ -304,6 +305,9 @@ export function ChannelOptimizationTab() {
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap mb-2">
+                            <span className="text-[9px] font-bold uppercase tracking-widest text-accent border border-accent/30 bg-accent/5 px-1.5 py-0.5 flex items-center gap-0.5">
+                              <Sparkles className="w-2 h-2" /> AI Suggestion
+                            </span>
                             <span className="font-bold text-sm text-text">{rec.booking_source}</span>
                             <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border ${typeColor}`}>{rec.channel_type}</span>
                             <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 border ${confColor}`}>{rec.confidence}</span>
@@ -333,15 +337,15 @@ export function ChannelOptimizationTab() {
                             <>
                               <button
                                 onClick={() => handleCommitRec(rec, idx)}
-                                className="bg-text text-surface text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 hover:opacity-90 active:scale-95 flex items-center gap-1 transition-all"
+                                className="bg-accent text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 hover:brightness-110 active:scale-95 flex items-center gap-1 transition-all"
                               >
-                                <CheckCircle2 className="w-3 h-3" /> Commit
+                                <ArrowRight className="w-3 h-3" /> Take Action
                               </button>
                               <button
                                 onClick={() => setSkippedRecs(prev => new Set(prev).add(idx))}
                                 className="bg-surface border border-border text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 hover:bg-surface-2 active:scale-95 flex items-center gap-1 transition-all text-text-muted"
                               >
-                                <XCircle className="w-3 h-3" /> Skip
+                                Dismiss
                               </button>
                             </>
                           )}

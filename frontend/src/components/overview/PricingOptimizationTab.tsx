@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
@@ -11,8 +12,10 @@ import { useToast } from "../shared/Toast";
 import {
   AlertTriangle,
   CheckCircle2,
+  Clock,
   DollarSign,
   Loader2,
+  Pencil,
   RefreshCw,
   Sparkles,
   TrendingDown,
@@ -21,6 +24,8 @@ import {
 } from "lucide-react";
 import { AiTag } from "../shared/AiTag";
 import { format, parseISO } from "date-fns";
+
+const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
 // ── Loading animation messages ────────────────────────────────────────────────
 
@@ -92,19 +97,33 @@ interface CellProps {
   cell: PricingCalendarCell;
   selected: boolean;
   onToggle: () => void;
+  customRate?: number;
+  onCustomRate: (rate: number | null) => void;
 }
 
-function CalendarCellView({ cell, selected, onToggle }: CellProps) {
-  const [showTooltip, setShowTooltip] = useState(false);
+function CalendarCellView({ cell, selected, onToggle, customRate, onCustomRate }: CellProps) {
+  const cellRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [tipPos, setTipPos] = useState<{ x: number; y: number } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+
+  const displayRate = customRate ?? cell.suggested_rate;
+  const isCustom = customRate !== undefined;
+
+  const effectiveChangePct = cell.current_rate > 0
+    ? ((displayRate - cell.current_rate) / cell.current_rate) * 100
+    : cell.change_pct;
+  const effectiveAction = effectiveChangePct > 2 ? "INCREASE" : effectiveChangePct < -2 ? "DISCOUNT" : "MAINTAIN";
 
   const cellBg =
     cell.is_orphan
       ? "bg-text/10 border-text/20 opacity-60"
-      : cell.action === "INCREASE"
+      : effectiveAction === "INCREASE"
       ? selected
         ? "bg-occugreen/20 border-occugreen/60"
         : "bg-occugreen/10 border-occugreen/30"
-      : cell.action === "DISCOUNT"
+      : effectiveAction === "DISCOUNT"
       ? selected
         ? "bg-occured/20 border-occured/50"
         : "bg-occured/10 border-occured/25"
@@ -112,34 +131,83 @@ function CalendarCellView({ cell, selected, onToggle }: CellProps) {
       ? "bg-surface-2 border-border"
       : "bg-surface border-border/50";
 
-  const ringClass = selected ? "ring-1 ring-accent/50" : "";
+  const handleMouseEnter = () => {
+    if (cellRef.current && !isEditing) {
+      const r = cellRef.current.getBoundingClientRect();
+      setTipPos({ x: r.left, y: r.top });
+    }
+  };
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+    setTipPos(null);
+    setEditValue(String(Math.round(displayRate)));
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const confirmEdit = () => {
+    const parsed = parseInt(editValue);
+    if (!isNaN(parsed) && parsed > 0) {
+      onCustomRate(Math.round(parsed / 5) * 5);
+    }
+    setIsEditing(false);
+  };
 
   return (
-    <td className="p-0.5 relative">
+    <td className="p-0.5">
       <div
-        className={`border cursor-pointer px-2 py-1.5 min-w-[88px] transition-all hover:opacity-90 ${cellBg} ${ringClass}`}
-        onClick={onToggle}
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
+        ref={cellRef}
+        className={`border cursor-pointer px-2 py-1.5 min-w-[88px] transition-all hover:opacity-90 relative group ${cellBg} ${selected ? "ring-1 ring-accent/50" : ""}`}
+        onClick={!isEditing ? onToggle : undefined}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={() => setTipPos(null)}
       >
         {cell.is_orphan ? (
           <div className="flex items-center justify-center h-8">
             <AlertTriangle className="w-3 h-3 text-text-muted" />
             <span className="text-[9px] text-text-muted ml-1 uppercase tracking-wide">Orphan</span>
           </div>
+        ) : isEditing ? (
+          <div className="flex flex-col gap-0.5" onClick={e => e.stopPropagation()}>
+            <input
+              ref={inputRef}
+              autoFocus
+              type="number"
+              value={editValue}
+              onChange={e => setEditValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") confirmEdit();
+                if (e.key === "Escape") setIsEditing(false);
+              }}
+              onBlur={confirmEdit}
+              className="w-full text-xs font-mono font-bold bg-surface border border-accent px-1 py-0.5 text-text outline-none"
+            />
+            <div className="text-[8px] text-text-muted text-center">↵ confirm · esc cancel</div>
+          </div>
         ) : (
           <>
-            <div className="text-xs font-mono font-bold text-text">
-              ${cell.suggested_rate.toLocaleString("en-US")}
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-mono font-bold text-text">
+                ${displayRate.toLocaleString("en-US")}
+                {isCustom && <span className="ml-0.5 text-accent text-[8px]">✎</span>}
+              </div>
+              <button
+                onClick={startEdit}
+                className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5 text-text-muted hover:text-accent"
+                title="Edit rate"
+              >
+                <Pencil className="w-2.5 h-2.5" />
+              </button>
             </div>
             <div className={`text-[9px] font-bold flex items-center gap-0.5 ${
-              cell.action === "INCREASE" ? "text-occugreen"
-              : cell.action === "DISCOUNT" ? "text-occured"
+              effectiveAction === "INCREASE" ? "text-occugreen"
+              : effectiveAction === "DISCOUNT" ? "text-occured"
               : "text-text-muted"
             }`}>
-              {cell.action === "INCREASE" ? <TrendingUp className="w-2.5 h-2.5" /> : null}
-              {cell.action === "DISCOUNT" ? <TrendingDown className="w-2.5 h-2.5" /> : null}
-              {cell.change_pct > 0 ? "+" : ""}{cell.change_pct.toFixed(1)}%
+              {effectiveAction === "INCREASE" ? <TrendingUp className="w-2.5 h-2.5" /> : null}
+              {effectiveAction === "DISCOUNT" ? <TrendingDown className="w-2.5 h-2.5" /> : null}
+              {effectiveChangePct > 0 ? "+" : ""}{effectiveChangePct.toFixed(1)}%
             </div>
             <div className="mt-0.5 flex items-center gap-1">
               <span className={`inline-block w-1.5 h-1.5 rounded-full ${
@@ -153,14 +221,17 @@ function CalendarCellView({ cell, selected, onToggle }: CellProps) {
         )}
       </div>
 
-      {/* Tooltip */}
-      {showTooltip && !cell.is_orphan && (
+      {/* Tooltip — rendered into body via portal to escape any overflow clipping */}
+      {tipPos && !cell.is_orphan && !isEditing && createPortal(
         <div
-          className="absolute z-50 bottom-full left-0 mb-1 w-64 bg-surface border border-border shadow-lg p-3 pointer-events-none"
-          style={{ minWidth: 256 }}
+          className="fixed z-[9999] w-64 bg-surface border border-border shadow-xl p-3 pointer-events-none"
+          style={{
+            left: Math.min(tipPos.x, window.innerWidth - 272),
+            bottom: window.innerHeight - tipPos.y + 6,
+          }}
         >
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-1">
-            {cell.action} · {cell.confidence} confidence
+            {effectiveAction} · {cell.confidence} confidence
           </div>
           <div className="text-xs text-text leading-relaxed mb-2">{cell.reason}</div>
           {cell.weather_factor && (
@@ -179,10 +250,11 @@ function CalendarCellView({ cell, selected, onToggle }: CellProps) {
             </div>
           )}
           <div className="mt-2 pt-2 border-t border-border/40 flex items-center justify-between text-[9px] text-text-muted">
-            <span>${cell.current_rate.toLocaleString()} → ${cell.suggested_rate.toLocaleString()}</span>
+            <span>${cell.current_rate.toLocaleString()} → ${displayRate.toLocaleString()}{isCustom ? " (custom)" : ""}</span>
             <span>{cell.otb} OTB</span>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </td>
   );
@@ -200,9 +272,9 @@ export function PricingOptimizationTab() {
   const [committing, setCommitting] = useState(false);
   const [committed, setCommitted] = useState<{ updated: number; skipped: number } | null>(null);
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
-
-  // selected cells for commit: Set of "CATEGORY::date"
+  const [hasCached, setHasCached] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  const [customRates, setCustomRates] = useState<Record<string, number>>({});
 
   const WINDOW_DAYS = 20;
 
@@ -220,7 +292,10 @@ export function PricingOptimizationTab() {
     }
   }, [show]);
 
-  useEffect(() => { void refreshHeatmap(); }, []);
+  useEffect(() => {
+    void refreshHeatmap();
+    setHasCached(!!localStorage.getItem(PRICING_CACHE_KEY));
+  }, []);
 
   // ── Loading message cycling ────────────────────────────────────────────────
 
@@ -244,32 +319,51 @@ export function PricingOptimizationTab() {
 
   // ── Run analysis ──────────────────────────────────────────────────────────
 
+  const applyAnalysis = useCallback((data: PricingAnalyseResponse) => {
+    setPricing(data);
+    setCustomRates({});
+    setCommitted(null);
+    const preSelected = new Set<string>();
+    for (const row of data.calendar_rows) {
+      for (const cell of row.cells) {
+        if (cell.action !== "MAINTAIN" && !cell.is_orphan) {
+          preSelected.add(`${row.category}::${cell.date}`);
+        }
+      }
+    }
+    setSelectedCells(preSelected);
+  }, []);
+
+  const loadCached = useCallback(() => {
+    const raw = localStorage.getItem(PRICING_CACHE_KEY);
+    if (!raw) return;
+    try {
+      applyAnalysis(JSON.parse(raw) as PricingAnalyseResponse);
+      show("Loaded previous analysis", "success");
+    } catch {
+      show("Could not load cached analysis", "error");
+    }
+  }, [applyAnalysis, show]);
+
   const runAnalysis = useCallback(async () => {
     setAnalysing(true);
     setPricing(null);
     setCommitted(null);
     setSelectedCells(new Set());
+    setCustomRates({});
     try {
       const res = await analysePricing();
       const data = res.data as PricingAnalyseResponse;
-      setPricing(data);
-      // Pre-select all non-MAINTAIN cells for commit
-      const preSelected = new Set<string>();
-      for (const row of data.calendar_rows) {
-        for (const cell of row.cells) {
-          if (cell.action !== "MAINTAIN" && !cell.is_orphan) {
-            preSelected.add(`${row.category}::${cell.date}`);
-          }
-        }
-      }
-      setSelectedCells(preSelected);
+      applyAnalysis(data);
+      try { localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify(data)); } catch { /* quota */ }
+      setHasCached(true);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       show(detail ?? "Pricing analysis failed", "error");
     } finally {
       setAnalysing(false);
     }
-  }, [show]);
+  }, [applyAnalysis, show]);
 
   // ── Toggle cell selection ─────────────────────────────────────────────────
 
@@ -306,8 +400,9 @@ export function PricingOptimizationTab() {
     for (const row of pricing.calendar_rows) {
       for (const cell of row.cells) {
         const key = `${row.category}::${cell.date}`;
-        if (selectedCells.has(key) && cell.suggested_rate > 0) {
-          items.push({ category: row.category, date: cell.date, new_rate: cell.suggested_rate });
+        const rate = customRates[key] ?? cell.suggested_rate;
+        if (selectedCells.has(key) && rate > 0) {
+          items.push({ category: row.category, date: cell.date, new_rate: rate });
         }
       }
     }
@@ -322,7 +417,7 @@ export function PricingOptimizationTab() {
     } finally {
       setCommitting(false);
     }
-  }, [pricing, selectedCells, show]);
+  }, [pricing, selectedCells, customRates, show]);
 
   // ── Derived counts ────────────────────────────────────────────────────────
 
@@ -375,6 +470,15 @@ export function PricingOptimizationTab() {
         </div>
 
         <div className="flex items-center gap-2">
+          {hasCached && !pricing && (
+            <button
+              className="text-[11px] uppercase tracking-widest font-bold text-accent border border-accent/30 px-3 py-2 hover:bg-accent/5 transition-colors flex items-center gap-1.5"
+              onClick={loadCached}
+            >
+              <Clock className="w-3 h-3" /> Previous Analysis
+            </button>
+          )}
+
           <button
             className="text-[11px] uppercase tracking-widest font-bold text-text-muted hover:text-text border border-border px-3 py-2 hover:bg-surface-2 transition-colors flex items-center gap-1.5 disabled:opacity-40"
             onClick={refreshHeatmap}
@@ -639,14 +743,26 @@ export function PricingOptimizationTab() {
                           {row.category}
                         </span>
                       </td>
-                      {row.cells.map(cell => (
-                        <CalendarCellView
-                          key={cell.date}
-                          cell={cell}
-                          selected={selectedCells.has(`${row.category}::${cell.date}`)}
-                          onToggle={() => toggleCell(row.category, cell.date)}
-                        />
-                      ))}
+                      {row.cells.map(cell => {
+                        const key = `${row.category}::${cell.date}`;
+                        return (
+                          <CalendarCellView
+                            key={cell.date}
+                            cell={cell}
+                            selected={selectedCells.has(key)}
+                            onToggle={() => toggleCell(row.category, cell.date)}
+                            customRate={customRates[key]}
+                            onCustomRate={rate => {
+                              setCustomRates(prev => {
+                                const next = { ...prev };
+                                if (rate === null) delete next[key];
+                                else next[key] = rate;
+                                return next;
+                              });
+                            }}
+                          />
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
