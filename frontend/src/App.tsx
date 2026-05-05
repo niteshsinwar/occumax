@@ -3,7 +3,8 @@ import { Dashboard } from "./pages/Dashboard";
 import { DashboardV2 } from "./pages/DashboardV2";
 import { ReceptionistView } from "./pages/ReceptionistView";
 import { AdminPanel } from "./pages/AdminPanel";
-import { Users, Settings, Grid3x3 } from "lucide-react";
+import { Optimizer } from "./pages/Optimizer";
+import { Users, Settings, Grid3x3, Sparkles } from "lucide-react";
 
 /** Top Level Application Shell */
 export default function App() {
@@ -39,6 +40,12 @@ function AppLayout() {
                   <Users className="w-4 h-4" /> Front Desk
                 </NavLink>
                 <NavLink
+                  to="/optimizer"
+                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
+                >
+                  <Sparkles className="w-4 h-4" /> Optimizer
+                </NavLink>
+                <NavLink
                   to="/admin"
                   className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
                 >
@@ -65,6 +72,7 @@ function AppLayout() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/dashboard-v2" element={<DashboardV2 />} />
             <Route path="/receptionist" element={<ReceptionistView />} />
+            <Route path="/optimizer" element={<Optimizer />} />
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
