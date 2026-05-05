@@ -106,7 +106,8 @@ function topFragmentedRooms(rows: HeatmapRow[], maxDays: number): Array<{ roomId
 }
 
 /**
- * Occupancy tab (hackathon): usable capacity KPIs + before/after preview + playbooks.
+ * Occupancy tab (hackathon): KPI strip, full-width before/after heatmaps, then a horizontal
+ * analytics band (k-night windows · top offenders · gap distribution).
  */
 export type OccupancyOptimizationTabProps = {
   heatmap: HeatmapResponse | null;
@@ -506,12 +507,10 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
         </div>
       )}
 
-      {/* ── Main workspace: heatmap (left) + analytics sidebar (right) ─────────── */}
+      {/* ── Full-width heatmap; analytics band below ───────────────────────────── */}
       {heatmap && (
-        <div className="grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-4 items-start">
-
-          {/* Left: Inventory heatmap — flagship */}
-          <div className="bg-surface border border-border p-5 min-w-0">
+        <div className="w-full max-w-none space-y-4">
+          <div className="bg-surface border border-border p-5 min-w-0 w-full">
             <div className="mb-4 pb-3 border-b border-border/60 flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Inventory</div>
@@ -527,8 +526,8 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 </div>
               )}
             </div>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 overflow-x-auto">
-              <div className="min-w-0 border border-border/60 bg-surface-2/20 p-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 w-full min-w-0 overflow-x-auto">
+              <div className="min-w-0 border border-border/60 bg-surface-2/20 p-3 lg:min-w-0">
                 <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted mb-2">Before (live slice)</div>
                 <HeatmapGrid
                   dates={heatmap.dates}
@@ -538,7 +537,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                   hideLegend
                 />
               </div>
-              <div className="min-w-0 border border-border/60 bg-occugreen/5 p-3">
+              <div className="min-w-0 border border-border/60 bg-occugreen/5 p-3 lg:min-w-0">
                 <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted mb-2">After (preview)</div>
                 <HeatmapGrid
                   dates={heatmap.dates}
@@ -561,23 +560,21 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
             </div>
           </div>
 
-          {/* Right: Analytics sidebar — k-windows · top offenders · distribution */}
+          {/* Bottom band: k-night windows · top offenders · distribution (horizontal on lg+) */}
           {kpis && (
-            <div className="bg-surface border border-border divide-y divide-border/60">
-
-              {/* Section 1: k-night windows */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch w-full">
               {kWindowBars && (
-                <div className="p-5">
-                  <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="bg-surface border border-border p-5 min-w-0 flex flex-col">
+                  <div className="flex items-center justify-between gap-3 mb-3 shrink-0">
                     <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k-night windows</div>
                     {simulatedRows && (
-                      <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-3">
+                      <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-3 shrink-0">
                         <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 border border-border/60 inline-block" /> Now</span>
                         <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/50 border border-occugreen/30 inline-block" /> After</span>
                       </div>
                     )}
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-2 flex-1">
                     {kWindowBars.ks.map((kk, idx) => {
                       const cur = kWindowBars.current[idx]!;
                       const proj = kWindowBars.projected ? kWindowBars.projected[idx]! : null;
@@ -586,7 +583,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                       return (
                         <div key={kk} className="grid grid-cols-[36px_1fr] gap-2 items-center">
                           <div className="text-[10px] font-bold text-text-muted text-right">k={kk}</div>
-                          <div className="space-y-1">
+                          <div className="space-y-1 min-w-0">
                             <div className="h-5 bg-surface-2 border border-border/50 relative overflow-hidden">
                               <div className="h-full bg-text/20" style={{ width: `${pct}%` }} />
                               <div className="absolute left-2 top-0 h-full flex items-center text-[9px] font-bold text-text">{cur}</div>
@@ -605,26 +602,24 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 </div>
               )}
 
-              {/* Section 2: Top offenders */}
-              <div className="p-5">
-                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-2">
+              <div className="bg-surface border border-border p-5 min-w-0 flex flex-col">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-2 shrink-0">
                   <AlertTriangle className="w-3 h-3 text-occuorange" /> Top offenders
                 </div>
-                <div className="text-[10px] text-text-muted mb-3">Rooms with most 1–3 night gaps</div>
-                <div className="space-y-1.5">
+                <div className="text-[10px] text-text-muted mb-3 shrink-0">Rooms with most 1–3 night gaps</div>
+                <div className="space-y-1.5 flex-1">
                   {kpis.topFrag.map(r => (
-                    <div key={r.roomId} className="flex items-center justify-between bg-surface-2/50 border border-border/50 px-3 py-2">
-                      <div className="font-mono font-bold text-text text-xs">Room {r.roomId}</div>
-                      <div className="text-text-muted text-[10px] uppercase tracking-widest">{r.category}</div>
-                      <div className="text-occuorange font-bold text-xs">{r.shortGaps} gap{r.shortGaps !== 1 ? "s" : ""}</div>
+                    <div key={r.roomId} className="flex items-center justify-between gap-2 bg-surface-2/50 border border-border/50 px-3 py-2">
+                      <div className="font-mono font-bold text-text text-xs truncate">Room {r.roomId}</div>
+                      <div className="text-text-muted text-[10px] uppercase tracking-widest shrink-0">{r.category}</div>
+                      <div className="text-occuorange font-bold text-xs shrink-0">{r.shortGaps} gap{r.shortGaps !== 1 ? "s" : ""}</div>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Section 3: Gap distribution */}
-              <div className="p-5">
-                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Distribution</div>
+              <div className="bg-surface border border-border p-5 min-w-0 flex flex-col">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3 shrink-0">Distribution</div>
                 {(() => {
                   const bars = [
                     { label: "1-night",   count: kpis.runDist.n1,   color: "bg-occuorange",    note: "hardest to sell" },
@@ -634,11 +629,11 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                   ];
                   const maxCount = Math.max(...bars.map(b => b.count), 1);
                   return (
-                    <div className="space-y-2">
+                    <div className="space-y-2 flex-1">
                       {bars.map(({ label, count, color, note }) => (
                         <div key={label} className="grid grid-cols-[52px_1fr_24px] gap-2 items-center">
                           <div className="text-[9px] font-bold text-text-muted text-right uppercase tracking-widest">{label}</div>
-                          <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden relative group">
+                          <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden relative group min-w-0">
                             <div className={`h-full ${color} transition-all`} style={{ width: `${count > 0 ? Math.max((count / maxCount) * 100, 5) : 0}%` }} />
                             <span className="absolute right-1 top-0 h-full hidden group-hover:flex items-center text-[8px] text-text-muted">{note}</span>
                           </div>
