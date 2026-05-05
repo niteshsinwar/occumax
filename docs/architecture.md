@@ -80,6 +80,7 @@ Key endpoint groups:
 | `POST /receptionist/confirm-split` | Confirm a split-stay — creates one Booking per segment with shared stay_group_id |
 | `GET /receptionist/bookings` | Last 50 bookings ordered by created_at desc |
 | `GET /dashboard/heatmap` | Full occupancy matrix for all rooms and dates |
+| `POST /dashboard/predict-optimal-los` | Poly AI recommendation for demand-aligned target LOS (nights); mixes analytics pace, overlapping booking LOS histogram, and deterministic demo overlays (Occupancy tab) |
 | `GET /analytics/occupancy-forecast` | Forward occupancy forecast with Y-2 comparison |
 | `GET /analytics/pace` | Booking pace analytics (pickup lead-day curves) |
 | `GET /analytics/event-insights` | AI-generated demand event commentary for a date range |

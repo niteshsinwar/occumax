@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import type { HeatmapResponse, HeatmapRow, SwapStep } from "../../types";
+import type { HeatmapResponse, HeatmapRow, PredictOptimalLosResponse, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
-import { AlertTriangle, CheckCircle2, RefreshCw, Info } from "lucide-react";
+import { AiTag } from "../shared/AiTag";
+import { AlertTriangle, CheckCircle2, RefreshCw, Info, Sparkles } from "lucide-react";
 
 type RunMetrics = {
   orphanGaps: number;
@@ -135,6 +136,19 @@ export type OccupancyOptimizationTabProps = {
   kNightSwapPlan: SwapStep[] | null;
   runKNightPreview: () => Promise<void>;
   commitKNightShuffle: () => Promise<void>;
+
+  /** Occupancy pillar — predictive LOS layer + aligned shuffle preview (optional). */
+  occupancyHeatmapDays?: number;
+  predictiveLos?: PredictOptimalLosResponse | null;
+  predictiveLosLoading?: boolean;
+  predictiveLosError?: string | null;
+  /** False until the first Poly AI insight fetch completes (gates Preview Recovery Shuffle when LOS preview is enabled). */
+  predictiveLosReady?: boolean;
+  onReloadPredictiveLos?: () => void;
+  /** When set, “Preview Recovery Shuffle” maximizes k-night windows for Poly AI LOS instead of orphan-gap DFS preview. */
+  runOccupancyRecoveryShufflePreview?: () => Promise<void>;
+  /** Clears both orphan-gap preview and k-night preview for this workspace. */
+  clearOccupancyRecoveryShufflePreview?: () => void;
 };
 
 export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
@@ -156,9 +170,18 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
     kNightSwapPlan,
     runKNightPreview,
     commitKNightShuffle,
+    occupancyHeatmapDays,
+    predictiveLos,
+    predictiveLosLoading,
+    predictiveLosError,
+    predictiveLosReady = true,
+    onReloadPredictiveLos,
+    runOccupancyRecoveryShufflePreview,
+    clearOccupancyRecoveryShufflePreview,
   } = props;
 
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const gridDays = Math.min(spanDays, occupancyHeatmapDays ?? spanDays);
 
   function KpiInfo({ label, text }: { label: string; text: string }) {
     return (
@@ -240,17 +263,106 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
           </button>
         </div>
 
+        {runOccupancyRecoveryShufflePreview && (
+          <div className={`border p-5 ${predictiveLosLoading ? "bg-accent/5 border-accent/25" : "bg-surface border-border"}`}>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-4 h-4 text-accent" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-1 flex items-center gap-2 flex-wrap">
+                    Predictive constraint layer
+                    <AiTag title="Poly AI blends analytics pace + on-books LOS histogram with deterministic demo overlays (weather / convention / flight disruption). Refresh reloads the recommendation." />
+                  </div>
+                  <div className="text-sm text-text leading-relaxed">
+                    {predictiveLosLoading && (
+                      <span className="text-text-muted">Computing optimal demand-aligned length of stay…</span>
+                    )}
+                    {!predictiveLosLoading && predictiveLosError && (
+                      <span className="text-occured font-semibold">{predictiveLosError}</span>
+                    )}
+                    {!predictiveLosLoading && !predictiveLosError && !predictiveLos && (
+                      <span className="text-text-muted">
+                        Fetching Poly AI recommendation for this {occupancyHeatmapDays ?? gridDays}-night occupancy window…
+                      </span>
+                    )}
+                    {!predictiveLosLoading && !predictiveLosError && predictiveLos && (
+                      <>
+                        Recommended target LOS for reshaping inventory:{" "}
+                        <span className="font-black tabular-nums text-text">{predictiveLos.recommended_los_nights}</span> night
+                        {predictiveLos.recommended_los_nights !== 1 ? "s" : ""}{" "}
+                        <span className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+                          ({predictiveLos.confidence} confidence)
+                        </span>
+                        <div className="mt-2 text-[11px] text-text-muted leading-relaxed">{predictiveLos.rationale}</div>
+                      </>
+                    )}
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] text-text-muted uppercase tracking-widest font-bold border border-border/60 divide-y sm:divide-y-0 sm:divide-x divide-border/60">
+                    <div className="px-3 py-2 bg-surface-2/40">
+                      Past 2yr baseline
+                      <div className="text-[9px] font-normal normal-case tracking-normal text-text-muted mt-1 leading-relaxed">
+                        Pace vs same calendar windows (−1yr / −2yr) from analytics (hotel rollup).
+                      </div>
+                    </div>
+                    <div className="px-3 py-2 bg-surface-2/40">
+                      Demo overlays
+                      <div className="text-[9px] font-normal normal-case tracking-normal text-text-muted mt-1 leading-relaxed">
+                        Weather pattern · Dreamforce-scale convention · Hub airport disruption narrative (mock).
+                      </div>
+                    </div>
+                    <div className="px-3 py-2 bg-surface-2/40">
+                      FLIGHT / DEMAND
+                      <div className="text-[9px] font-normal normal-case tracking-normal text-text-muted mt-1 leading-relaxed">
+                        Overlapping booking LOS histogram in-window (live bookings; informs AI prior).
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {onReloadPredictiveLos && (
+                <button
+                  type="button"
+                  className="text-[10px] font-bold uppercase tracking-widest px-4 py-2 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors shrink-0 disabled:opacity-50"
+                  onClick={() => onReloadPredictiveLos()}
+                  disabled={predictiveLosLoading || !heatmap}
+                >
+                  Refresh AI insight
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
           <div className="flex flex-wrap gap-2 items-center">
             <button
               type="button"
               className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-              onClick={() => runOptimisePreview()}
-              disabled={!heatmap}
+              onClick={() =>
+                runOccupancyRecoveryShufflePreview ? void runOccupancyRecoveryShufflePreview() : void runOptimisePreview()
+              }
+              disabled={
+                !heatmap ||
+                !!predictiveLosLoading ||
+                !!kNightLoading ||
+                (!!runOccupancyRecoveryShufflePreview && !predictiveLosReady)
+              }
             >
-              Preview Recovery Shuffle
+              {kNightLoading ? "Previewing…" : "Preview Recovery Shuffle"}
             </button>
-            {swapPlan && swapPlan.length > 0 && (
+            {(kNightSwapPlan?.length ?? 0) > 0 && (
+              <button
+                type="button"
+                className="bg-occugreen text-white font-semibold hover:bg-occugreen/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
+                onClick={() => commitKNightShuffle()}
+                disabled={kNightCommitLoading}
+              >
+                {kNightCommitLoading ? "Applying…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Apply Shuffle ({kNightSwapPlan!.length})</>}
+              </button>
+            )}
+            {(kNightSwapPlan?.length ?? 0) === 0 && swapPlan && swapPlan.length > 0 && (
               <button
                 type="button"
                 className="bg-occugreen text-white font-semibold hover:bg-occugreen/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-occugreen/40 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -260,11 +372,13 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 {swapCommitLoading ? "Applying…" : <><CheckCircle2 className="w-3.5 h-3.5" /> Apply Shuffle ({swapPlan.length})</>}
               </button>
             )}
-            {swapPlan && (
+            {(swapPlan || (kNightSwapPlan?.length ?? 0) > 0) && (
               <button
                 type="button"
                 className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
-                onClick={() => clearOptimisePreview()}
+                onClick={() =>
+                  clearOccupancyRecoveryShufflePreview ? clearOccupancyRecoveryShufflePreview() : clearOptimisePreview()
+                }
               >
                 Clear preview
               </button>
@@ -403,7 +517,8 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Inventory</div>
                 <div className="font-serif font-bold text-xl text-text mt-0.5">Heatmap</div>
                 <div className="text-[9px] text-text-muted mt-1 uppercase tracking-widest font-bold">
-                  {spanDays}-night window · orphan gaps outlined
+                  {gridDays}-night window · orphan gaps outlined
+                  {occupancyHeatmapDays ? ` · pillar view (${occupancyHeatmapDays} columns)` : ""}
                 </div>
               </div>
               {simulatedRows && (
@@ -412,13 +527,30 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 </div>
               )}
             </div>
-            <div className="overflow-x-auto">
-              <HeatmapGrid
-                dates={heatmap.dates}
-                rows={simulatedRows ?? rowsInView}
-                maxDays={spanDays}
-                highlightSandwichGaps
-              />
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 overflow-x-auto">
+              <div className="min-w-0 border border-border/60 bg-surface-2/20 p-3">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted mb-2">Before (live slice)</div>
+                <HeatmapGrid
+                  dates={heatmap.dates}
+                  rows={rowsInView}
+                  maxDays={gridDays}
+                  highlightSandwichGaps
+                  hideLegend
+                />
+              </div>
+              <div className="min-w-0 border border-border/60 bg-occugreen/5 p-3">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted mb-2">After (preview)</div>
+                <HeatmapGrid
+                  dates={heatmap.dates}
+                  rows={simulatedRows ?? rowsInView}
+                  maxDays={gridDays}
+                  highlightSandwichGaps
+                  hideLegend
+                />
+                {!simulatedRows && (
+                  <div className="mt-2 text-[10px] text-text-muted italic">Matches live until you run Preview Recovery Shuffle.</div>
+                )}
+              </div>
             </div>
             <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap gap-x-5 gap-y-1 text-[9px] font-bold uppercase tracking-widest text-text-muted">
               <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/55 inline-block border border-occugreen/20" /> Guest booking</span>

@@ -14,6 +14,9 @@ export const dashboardOptimisePreview = (body: { start: string; end: string; cat
 export const dashboardCommitShuffle = (swapPlan: any[]) => api.post("/dashboard/commit-shuffle", { swap_plan: swapPlan });
 export const dashboardOptimiseKNightPreview = (body: { start: string; end: string; categories: string[]; target_nights: number }) =>
   api.post("/dashboard/optimise-k-night-preview", body);
+
+export const dashboardPredictOptimalLos = (body: { start: string; end: string; categories: string[] }) =>
+  api.post("/dashboard/predict-optimal-los", body);
 export const dashboardScorecard = (body: {
   start: string;
   end: string;

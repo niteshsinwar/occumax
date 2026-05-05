@@ -11,6 +11,7 @@ from core.schemas import (
 )
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewRequest, DashboardOptimisePreviewResponse
 from core.schemas.dashboard_k_optimise import DashboardKNightPreviewRequest, DashboardKNightPreviewResponse
+from core.schemas.dashboard_predict_los import PredictOptimalLosRequest, PredictOptimalLosResponse
 from core.schemas.manager import CommitRequest, CommitResult
 from controllers import dashboard as ctrl
 
@@ -30,6 +31,21 @@ async def optimise_preview(body: DashboardOptimisePreviewRequest, db: AsyncSessi
     Nothing is written to the database.
     """
     return await ctrl.optimise_preview(db=db, start=body.start, end=body.end, categories=body.categories)
+
+
+@router.post("/predict-optimal-los", response_model=PredictOptimalLosResponse)
+async def predict_optimal_los(body: PredictOptimalLosRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Poly AI recommendation for demand-aligned target length-of-stay (nights).
+
+    Used by the Occupancy tab predictive layer; mixes analytics pace + booking LOS histogram + demo overlays.
+    """
+    return await ctrl.predict_optimal_los(
+        db=db,
+        start=body.start,
+        end=body.end,
+        categories=body.categories,
+    )
 
 
 @router.post("/optimise-k-night-preview", response_model=DashboardKNightPreviewResponse)

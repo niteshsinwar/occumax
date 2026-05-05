@@ -59,6 +59,13 @@ export interface DashboardKNightPreviewResponse {
   swap_plan: SwapStep[];
 }
 
+/** Poly AI occupancy predictive layer — optimal demand-aligned length of stay (nights). */
+export interface PredictOptimalLosResponse {
+  recommended_los_nights: number;
+  confidence: string;
+  rationale: string;
+}
+
 export interface LosBucket {
   nights: number;
   count: number;
