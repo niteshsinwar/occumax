@@ -6,26 +6,30 @@ No recommendation or trigger_run tables involved.
 """
 
 from __future__ import annotations
+from collections import Counter
 from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from core.models import Room, Slot, BlockType, RoomCategory, Offer
-from core.schemas import HeatmapCell, HeatmapRow, HeatmapResponse
+from controllers import analytics as analytics_ctrl
+from core.models import Booking, Room, Slot, BlockType, RoomCategory, Offer
+from core.schemas import HeatmapCell, HeatmapRow, HeatmapResponse, PaceResponse
 from core.schemas.dashboard_optimise import DashboardOptimisePreviewResponse
 from core.schemas.manager import CommitRequest, CommitResult
 from controllers import manager as manager_ctrl
 from core.schemas.manager import SwapStep
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 from core.schemas.dashboard_k_optimise import DashboardKNightPreviewResponse
+from core.schemas.dashboard_predict_los import PredictOptimalLosResponse
 from services.algorithm.k_night_optimiser import KNightWindowOptimiser
 from core.schemas.dashboard_scorecard import (
     DashboardScorecardResponse,
     CapacityScore,
     CapacityDelta,
 )
+from services.ai.occupancy_predictive_los import run_predict_optimal_los_llm
 def _apply_swap_plan_in_memory(
     slot_infos: list[SlotInfo],
     swap_plan: list[SwapStep] | None,
@@ -317,6 +321,96 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
             "total_orphan_nights": orphan_nights,
             "estimated_lost_revenue": est_lost,
         },
+    )
+
+
+def _summarize_pace_for_los(pace: PaceResponse) -> str:
+    """Compress PaceResponse rollup into one sentence for LLM context."""
+    rollup = next((s for s in pace.series if s.category is None), None)
+    if not rollup or not rollup.points:
+        return "Pace rollup unavailable — insufficient analytics series."
+    pts = rollup.points[:12]
+    deltas = [p.on_books_occ_pct - p.expected_on_books_occ_pct for p in pts]
+    avg_delta = sum(deltas) / max(len(deltas), 1)
+    return (
+        f"Hotel-wide booking pace vs two-year same-calendar-window baseline: average Δ occupancy "
+        f"(on-books minus expected) ≈ {avg_delta:.1f} pts across lead_days 0–{len(pts) - 1} "
+        f"for stay window {rollup.stay_start} → {rollup.stay_end}."
+    )
+
+
+async def _booking_los_histogram(db: AsyncSession, start: date, end: date) -> dict[int, int]:
+    """
+    Count overlapping bookings by overlapping night-span inside [start, end).
+
+    Does **not** filter `Booking.is_live` — that flag is not authoritative in current flows.
+    """
+    q = select(Booking).where(Booking.check_out > start, Booking.check_in < end)
+    bookings = (await db.execute(q)).scalars().all()
+    hist: Counter[int] = Counter()
+    for b in bookings:
+        seg_start = max(start, b.check_in)
+        seg_end = min(end, b.check_out)
+        nights = max(0, (seg_end - seg_start).days)
+        if nights <= 0:
+            continue
+        hist[nights] += 1
+    return dict(sorted(hist.items()))
+
+
+async def predict_optimal_los(
+    db: AsyncSession,
+    start: date,
+    end: date,
+    categories: list[RoomCategory],
+) -> PredictOptimalLosResponse:
+    """
+    Poly AI–backed optimal length-of-stay recommendation for Occupancy pillar demos.
+
+    Context mixes analytics pace summaries + overlapping booking LOS histogram + deterministic mock overlays.
+    """
+    cats = list(dict.fromkeys(categories))
+    today = date.today()
+    lead_span = max(1, min(14, (end - start).days))
+    pace = await analytics_ctrl.get_pace(db, start, end, today, max_lead_days=lead_span)
+    pace_summary = _summarize_pace_for_los(pace)
+    los_hist = await _booking_los_histogram(db, start, end)
+
+    context = {
+        "stay_window": {"start": str(start), "end": str(end)},
+        "filtered_room_categories": [c.value for c in cats] if cats else "ALL_ACTIVE",
+        "historical_signals": {
+            "pace_vs_two_year_baseline_summary": pace_summary,
+            "booking_length_histogram_overlapping_stays_nights_to_count": los_hist,
+        },
+        "mock_predictive_inputs": {
+            "weather_pattern": (
+                "15-day outlook: weekend warm/clear (+drive-market leisure compression); "
+                "midweek unsettled showers (corporate relatively inelastic)."
+            ),
+            "citywide_events": (
+                "Major weekday convention footprint (Dreamforce-scale tech forum Tue–Thu) "
+                "with corporate Tue/Wed arrivals stretching Thu shoulder nights."
+            ),
+            "air_travel": (
+                "Hub metro airport disruption headline risk — cancellations clustering "
+                "peak inbound nights (+volatile ultra-short stays layered atop convention blocks)."
+            ),
+        },
+        "instruction": (
+            "Choose ONE recommended_los_nights integer aligned with blended leisure+corporate+disruption patterns "
+            "so reshuffling SOFT bookings can open more contiguous EMPTY runs near that length."
+        ),
+    }
+    raw = await run_predict_optimal_los_llm(context)
+    k = int(raw.get("recommended_los_nights", 3))
+    k = max(1, min(14, k))
+    confidence = str(raw.get("confidence", "MEDIUM"))
+    rationale = str(raw.get("rationale", "")).strip() or "No rationale returned."
+    return PredictOptimalLosResponse(
+        recommended_los_nights=k,
+        confidence=confidence,
+        rationale=rationale,
     )
 
 

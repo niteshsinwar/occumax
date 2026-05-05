@@ -27,6 +27,7 @@ import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
+import { OCCUPANCY_HEATMAP_VISIBLE_DAYS, useOccupancyPredictiveLos } from "../hooks/useOccupancyPredictiveLos";
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
@@ -435,6 +436,28 @@ export function Dashboard() {
     return simulateRows(filteredRows, plan);
   }, [heatmap, filteredRows, kNightSwapPlan, swapPlan]);
 
+  const occupancySpanDays = useMemo(() => {
+    if (!heatmap) return 0;
+    return Math.min(OCCUPANCY_HEATMAP_VISIBLE_DAYS, heatmap.dates.length);
+  }, [heatmap]);
+
+  const occupancyPredictive = useOccupancyPredictiveLos({
+    heatmap,
+    selectedCategories,
+    kNightNights,
+    setKNightNights,
+    setKNightSwapPlan,
+    setSwapPlan,
+    refreshScorecard,
+    show,
+    setKNightLoading,
+  });
+
+  useEffect(() => {
+    if (activeTab !== "occupancy" || !heatmap || selectedCategories.length === 0) return;
+    void occupancyPredictive.reloadPredictiveLos();
+  }, [activeTab, heatmap?.dates?.[0], selectedCategories.join("|"), occupancyPredictive.reloadPredictiveLos]);
+
   const refreshAllData = useCallback(async () => {
     await loadHeatmap();
   }, [loadHeatmap]);
@@ -820,7 +843,8 @@ export function Dashboard() {
       {activeTab === "occupancy" && (
         <OccupancyOptimizationTab
           heatmap={heatmap}
-          spanDays={heatmap ? heatmap.dates.length : 0}
+          spanDays={occupancySpanDays}
+          occupancyHeatmapDays={OCCUPANCY_HEATMAP_VISIBLE_DAYS}
           filteredRows={heatmap ? heatmap.rows : []}
           simulatedRows={simulatedRows}
           swapPlan={swapPlan}
@@ -836,6 +860,13 @@ export function Dashboard() {
           kNightSwapPlan={kNightSwapPlan}
           runKNightPreview={runKNightPreview}
           commitKNightShuffle={commitKNightShuffle}
+          predictiveLos={occupancyPredictive.predictiveLos}
+          predictiveLosLoading={occupancyPredictive.predictiveLosLoading}
+          predictiveLosError={occupancyPredictive.predictiveLosError}
+          predictiveLosReady={occupancyPredictive.predictiveLosReady}
+          onReloadPredictiveLos={occupancyPredictive.reloadPredictiveLos}
+          runOccupancyRecoveryShufflePreview={occupancyPredictive.runOccupancyShufflePreview}
+          clearOccupancyRecoveryShufflePreview={occupancyPredictive.clearOccupancyShufflePreview}
         />
       )}
       {activeTab === "pricing" && <PricingOptimizationTab />}
