@@ -4,7 +4,7 @@ import { dashboardOptimiseKNightPreview, dashboardPredictOptimalLos } from "../a
 import type { HeatmapResponse, PredictOptimalLosResponse, RoomCategory, SwapStep } from "../types";
 
 /** Visible columns on the Occupancy heatmap (pillar 1 UX). */
-export const OCCUPANCY_HEATMAP_VISIBLE_DAYS = 10;
+export const OCCUPANCY_HEATMAP_VISIBLE_DAYS = 15;
 
 type ToastVariant = "success" | "error" | "info";
 
