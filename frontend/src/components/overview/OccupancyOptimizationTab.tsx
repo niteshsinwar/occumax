@@ -290,7 +290,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                     )}
                     {!predictiveLosLoading && !predictiveLosError && predictiveLos && (
                       <>
-                        Recommended target LOS for reshaping inventory:{" "}
+                        Recommended target Length of Stay (LOS) for optimizing inventory:{" "}
                         <span className="font-black tabular-nums text-text">{predictiveLos.recommended_los_nights}</span> night
                         {predictiveLos.recommended_los_nights !== 1 ? "s" : ""}{" "}
                         <span className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
@@ -308,7 +308,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                       </div>
                     </div>
                     <div className="px-3 py-2 bg-surface-2/40">
-                      Demo overlays
+                      Exogenous demand signals
                       <div className="text-[9px] font-normal normal-case tracking-normal text-text-muted mt-1 leading-relaxed">
                         Weather pattern · Dreamforce-scale convention · Hub airport disruption narrative (mock).
                       </div>
