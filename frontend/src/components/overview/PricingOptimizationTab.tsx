@@ -25,6 +25,9 @@ import {
 import { AiTag } from "../shared/AiTag";
 import { format, parseISO } from "date-fns";
 import { contextFeed, getPrimaryShockTrigger } from "../../mock/contextFeed";
+import type { ContextFeedItem } from "../../mock/contextFeed";
+import { ContextFeedPanel } from "../shared/ContextFeedPanel";
+import { scoreContextWithAi } from "../../mock/aiContextScoring";
 
 const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
@@ -154,6 +157,17 @@ function findSandwichNights(rows: HeatmapRow[], maxDays: number): SandwichNight[
 
 function roundTo5(n: number): number {
   return Math.round(n / 5) * 5;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function computeCompositeFromFactors(factors: ContextFeedItem["factors"]): number {
+  const ws = factors.reduce((s, f) => s + (f.weight ?? 0), 0);
+  if (ws <= 0) return 0;
+  const weighted = factors.reduce((s, f) => s + clamp(f.score ?? 0, 0, 100) * (f.weight ?? 0), 0);
+  return Math.round(weighted / ws);
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -340,16 +354,23 @@ export function PricingOptimizationTab() {
   const [hasCached, setHasCached] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [customRates, setCustomRates] = useState<Record<string, number>>({});
-  const [shockTriggered, setShockTriggered] = useState(false);
+  const [simulationActive, setSimulationActive] = useState(false);
   const [activeFeedId, setActiveFeedId] = useState(getPrimaryShockTrigger().id);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiRationale, setAiRationale] = useState<string | null>(null);
+  const [aiConfidence, setAiConfidence] = useState<"LOW" | "MEDIUM" | "HIGH" | null>(null);
+  const [scoredFactors, setScoredFactors] = useState<ContextFeedItem["factors"] | null>(null);
+  const aiCacheRef = useRef<Record<string, { factors: ContextFeedItem["factors"]; rationale: string; confidence: "LOW" | "MEDIUM" | "HIGH" }>>({});
 
   const WINDOW_DAYS = 20;
   const shock = useMemo(() => getPrimaryShockTrigger(), []);
-  const operationalCost = 40;
   const activeFeedItem = useMemo(
     () => contextFeed.find(i => i.id === activeFeedId) ?? shock,
     [activeFeedId, shock],
   );
+
+  const activeFactors = scoredFactors ?? activeFeedItem.factors;
+  const activeCompositeScore = useMemo(() => computeCompositeFromFactors(activeFactors), [activeFactors]);
 
   // ── Load heatmap on mount ──────────────────────────────────────────────────
 
@@ -401,23 +422,79 @@ export function PricingOptimizationTab() {
   }, [heatmap]);
 
   const logicalChoices = useMemo(() => {
-    const floorFactor = 0.6;
-    const discountFactor = 0.7;
+    const getScore = (t: "WEATHER" | "EVENT" | "FLIGHT" | "MARKET") =>
+      activeFactors.find(f => f.type === t)?.score ?? 0;
+
+    const weather = getScore("WEATHER");
+    const flight = getScore("FLIGHT");
+    const event = getScore("EVENT");
+    const market = getScore("MARKET");
+
+    const disruption = clamp((weather * 0.5 + flight * 0.5) / 100, 0, 1);
+    const compression = clamp((event * 0.7 + market * 0.3) / 100, 0, 1);
+
+    // Discount: deeper when disruption dominates, shallower when compression dominates.
+    const discountFactor = clamp(0.75 + 0.10 * disruption - 0.18 * compression, 0.55, 0.88);
+    // Floor protection: stronger when compression dominates.
+    const floorFactor = clamp(0.58 + 0.22 * compression - 0.05 * disruption, 0.50, 0.85);
+
+    const tcoUplift = 1 + 0.15 * disruption;
+
+    const baseTcoByCategory: Record<string, number> = {
+      ECONOMY: 28,
+      STANDARD: 32,
+      DELUXE: 36,
+      PREMIUM: 40,
+      SUITE: 48,
+    };
+
     return sandwichNights.map(s => {
       const floorRate = roundTo5(Math.max(50, s.baseRate * floorFactor));
       const discounted = roundTo5(Math.min(s.currentRate, Math.max(floorRate, s.currentRate * discountFactor)));
-      const netProfit = Math.max(0, discounted - operationalCost);
-      return { ...s, floorRate, discountedRate: discounted, netProfit };
+
+      const baseTco = baseTcoByCategory[s.category] ?? 40;
+      const tco = roundTo5(baseTco * tcoUplift);
+      const netProfit = Math.max(0, discounted - tco);
+
+      return { ...s, floorRate, discountedRate: discounted, tco, netProfit };
     });
-  }, [sandwichNights, operationalCost]);
+  }, [sandwichNights, activeFactors]);
 
   const clearanceScenario = useMemo(() => {
     const discountedRate = 110;
+    const operationalCost = 40;
     const netProfit = discountedRate - operationalCost;
     const gaugeMax = 120;
     const profitPct = Math.max(0, Math.min(100, (netProfit / gaugeMax) * 100));
     return { discountedRate, netProfit, profitPct, gaugeMax };
-  }, [operationalCost]);
+  }, []);
+
+  const runSmartClearance = useCallback(async () => {
+    const item = activeFeedItem;
+    setAiLoading(true);
+    setAiRationale(null);
+    setAiConfidence(null);
+    try {
+      const cached = aiCacheRef.current[item.id];
+      if (cached) {
+        setScoredFactors(cached.factors);
+        setAiRationale(cached.rationale);
+        setAiConfidence(cached.confidence);
+      } else {
+        const res = await scoreContextWithAi({ item });
+        aiCacheRef.current[item.id] = { factors: res.factors, rationale: res.rationale, confidence: res.confidence };
+        setScoredFactors(res.factors);
+        setAiRationale(res.rationale);
+        setAiConfidence(res.confidence);
+      }
+      setSimulationActive(true);
+      show("Smart Clearance simulation updated", "success");
+    } catch {
+      show("Could not score context with AI", "error");
+    } finally {
+      setAiLoading(false);
+    }
+  }, [activeFeedItem, show]);
 
   // ── Run analysis ──────────────────────────────────────────────────────────
 
@@ -573,61 +650,32 @@ export function PricingOptimizationTab() {
 
         <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
           {/* Context Trigger / News Feed */}
-          <div className="border border-border bg-surface p-5">
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Context trigger</div>
-            <div className="space-y-2">
-              {contextFeed.map(item => {
-                const selected = item.id === activeFeedId;
-                const isAlert = item.severity === "ALERT";
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => { setActiveFeedId(item.id); setShockTriggered(isAlert); }}
-                    className={`w-full text-left p-4 border transition-colors ${
-                      selected ? "border-accent/40 bg-accent/10" : "border-border bg-surface-2/40 hover:bg-surface-2"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                          News feed {isAlert ? "· Alert" : "· Signal"}
-                        </div>
-                        <div className="font-bold text-text mt-1">{item.title}</div>
-                        <div className="text-[11px] text-text-muted mt-1 leading-relaxed">{item.detail}</div>
-                      </div>
-                      <div className={`shrink-0 text-[9px] font-black uppercase tracking-widest px-2 py-1 border ${
-                        isAlert ? "border-occuorange/40 bg-occuorange/10 text-occuorange" : "border-border bg-surface text-text-muted"
-                      }`}>
-                        {item.kind}
-                      </div>
-                    </div>
-                    {item.factors?.length ? (
-                      <div className="mt-3 grid grid-cols-1 gap-1.5 text-[10px] text-text-muted">
-                        {item.factors.map((f, idx) => (
-                          <div key={`${item.id}-${idx}`} className="flex items-center justify-between gap-3">
-                            <span className="uppercase tracking-widest font-bold">{f.type}</span>
-                            <span className="text-right">{f.label}: {f.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="mt-4 flex items-center justify-between gap-2">
+          <div className="space-y-3">
+            <ContextFeedPanel
+              items={contextFeed}
+              activeId={activeFeedId}
+              onSelect={id => {
+                setActiveFeedId(id);
+                setSimulationActive(false);
+                setScoredFactors(null);
+                setAiRationale(null);
+                setAiConfidence(null);
+              }}
+              header="Context trigger (shared)"
+              subheader="Select a context trigger, then run Smart Clearance. The AI produces weighted factor scores; pricing decisions remain deterministic and auditable."
+            />
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 border ${
-                shockTriggered ? "border-accent/30 bg-accent/5 text-accent" : "border-border bg-surface-2/30 text-text-muted"
+                simulationActive ? "border-occugreen/30 bg-occugreen/5 text-occugreen" : "border-border bg-surface-2/30 text-text-muted"
               }`}>
-                {shockTriggered ? "Trigger active" : "Waiting"}
+                {simulationActive ? "Simulation active" : "Not calculated"}
               </div>
               <button
                 type="button"
-                onClick={() => setShockTriggered(false)}
+                onClick={() => { setSimulationActive(false); setScoredFactors(null); setAiRationale(null); setAiConfidence(null); }}
                 className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
               >
-                Reset
+                Clear
               </button>
             </div>
           </div>
@@ -646,10 +694,32 @@ export function PricingOptimizationTab() {
                     : "No sandwich night found in the current 20-day slice (refresh heatmap and retry)."}
                 </div>
               </div>
-              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
-                <AiTag title="Demo panel: uses shared mock context triggers and a fixed cost model to show decision logic and profit, independent of RateIQ calendar recommendations." />
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => void runSmartClearance()}
+                  disabled={aiLoading}
+                  className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:bg-text/90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
+                  title="Scores the selected context (AI) and recalculates offer/TCO/net across all sandwich nights"
+                >
+                  {aiLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                  Run Smart Clearance
+                </button>
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
+                  <AiTag title="AI produces weighted factor scores; the offer calculation is deterministic: floor protection + discount depth + category-aware TCO." />
+                </div>
               </div>
             </div>
+
+            {(aiRationale || aiConfidence) && (
+              <div className="mb-4 p-4 border border-accent/25 bg-accent/5">
+                <div className="text-[9px] font-bold uppercase tracking-widest text-accent mb-1">
+                  AI scoring {aiConfidence ? `· ${aiConfidence} confidence` : ""}
+                  {" · "}composite {activeCompositeScore}/100
+                </div>
+                {aiRationale && <div className="text-[11px] text-text-muted leading-relaxed">{aiRationale}</div>}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="bg-surface-2/40 border border-border p-4">
@@ -661,21 +731,25 @@ export function PricingOptimizationTab() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-text-muted font-medium">Discounted offer (Last Minute)</span>
-                    <span className="font-mono font-bold tabular-nums">${clearanceScenario.discountedRate}</span>
+                    <span className="font-mono font-bold tabular-nums">
+                      {simulationActive ? `$${logicalChoices[0]?.discountedRate ?? clearanceScenario.discountedRate}` : "—"}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-text-muted font-medium">TCO (Operational cost)</span>
-                    <span className="font-mono font-bold tabular-nums">-${operationalCost}</span>
+                    <span className="font-mono font-bold tabular-nums">
+                      {simulationActive ? `-$${logicalChoices[0]?.tco ?? 40}` : "—"}
+                    </span>
                   </div>
                   <div className="pt-2 mt-2 border-t border-border flex items-center justify-between">
                     <span className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Net profit</span>
-                    <span className={`font-mono font-black tabular-nums ${shockTriggered ? "text-occugreen" : "text-text"}`}>
-                      {shockTriggered ? `$${clearanceScenario.netProfit}` : "—"}
+                    <span className={`font-mono font-black tabular-nums ${simulationActive ? "text-occugreen" : "text-text-muted"}`}>
+                      {simulationActive ? `$${logicalChoices[0]?.netProfit ?? clearanceScenario.netProfit}` : "—"}
                     </span>
                   </div>
                 </div>
                 <div className="mt-3 text-[11px] text-text-muted leading-relaxed">
-                  A/B trade-off sim: clearance only activates on a shock trigger and still respects the price floor (demo rule).
+                  Uses weighted context scores (weather/event/flight/market) to tune floor protection, discount depth, and TCO uplift.
                 </div>
               </div>
 
@@ -684,12 +758,16 @@ export function PricingOptimizationTab() {
                 <div className="h-3.5 bg-surface border border-border overflow-hidden">
                   <div
                     className="h-full bg-occugreen/70 transition-all duration-700"
-                    style={{ width: shockTriggered ? `${clearanceScenario.profitPct}%` : "0%" }}
+                    style={{
+                      width: simulationActive
+                        ? `${clamp(((logicalChoices[0]?.netProfit ?? clearanceScenario.netProfit) / clearanceScenario.gaugeMax) * 100, 0, 100)}%`
+                        : "0%",
+                    }}
                   />
                 </div>
                 <div className="mt-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted">
                   <span>$0 (empty)</span>
-                  <span>{shockTriggered ? `$${clearanceScenario.netProfit} net` : "$—"}</span>
+                  <span>{simulationActive ? `$${logicalChoices[0]?.netProfit ?? clearanceScenario.netProfit} net` : "$—"}</span>
                 </div>
                 <div className="mt-3 text-[11px] text-text-muted leading-relaxed">
                   Converts a 100% loss into net profit while explaining cost, not just discount depth.
@@ -724,7 +802,7 @@ export function PricingOptimizationTab() {
                     <div
                       key={`${c.roomId}-${c.date}-${idx}`}
                       className={`grid grid-cols-[120px_90px_1fr_90px_90px_90px] gap-2 px-3 py-2 border-b border-border/40 text-xs ${
-                        shockTriggered ? "bg-occugreen/[0.03]" : "bg-surface"
+                        simulationActive ? "bg-occugreen/[0.03]" : "bg-surface"
                       }`}
                     >
                       <div className="font-mono font-bold text-text">{c.date}</div>
@@ -736,13 +814,13 @@ export function PricingOptimizationTab() {
                         </span>
                       </div>
                       <div className="text-right font-mono font-bold text-text">
-                        {shockTriggered ? `$${c.discountedRate}` : "—"}
+                        {simulationActive ? `$${c.discountedRate}` : "—"}
                       </div>
                       <div className="text-right font-mono font-bold text-text-muted">
-                        {shockTriggered ? `-$${operationalCost}` : "—"}
+                        {simulationActive ? `-$${c.tco}` : "—"}
                       </div>
-                      <div className={`text-right font-mono font-black ${shockTriggered ? "text-occugreen" : "text-text-muted"}`}>
-                        {shockTriggered ? `$${c.netProfit}` : "—"}
+                      <div className={`text-right font-mono font-black ${simulationActive ? "text-occugreen" : "text-text-muted"}`}>
+                        {simulationActive ? `$${c.netProfit}` : "—"}
                       </div>
                     </div>
                   ))}

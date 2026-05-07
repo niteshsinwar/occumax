@@ -9,6 +9,10 @@ export type ContextFeedItem = {
     type: "WEATHER" | "EVENT" | "FLIGHT" | "MARKET";
     label: string;
     value: string;
+    /** 0-100 intensity score for this factor (demo/AI-derived). */
+    score: number;
+    /** 0-1 importance weight for the composite score. */
+    weight: number;
   }>;
 };
 
@@ -26,9 +30,9 @@ export const contextFeed: ContextFeedItem[] = [
       "External shock detected → last-minute demand spike likely (disrupted arrivals re-book locally). Trigger clearance simulation.",
     location: "Chicago, IL",
     factors: [
-      { type: "FLIGHT", label: "Flight disruption", value: "50+ cancellations (hub) · rebooking pressure ↑" },
-      { type: "WEATHER", label: "Weather pattern", value: "Severe storm band · ground stops likely" },
-      { type: "MARKET", label: "Elasticity", value: "Same-day demand volatility ↑ · short-LOS preference ↑" },
+      { type: "FLIGHT", label: "Flight disruption", value: "50+ cancellations (hub) · rebooking pressure ↑", score: 92, weight: 0.45 },
+      { type: "WEATHER", label: "Weather pattern", value: "Severe storm band · ground stops likely", score: 78, weight: 0.25 },
+      { type: "MARKET", label: "Elasticity", value: "Same-day demand volatility ↑ · short-LOS preference ↑", score: 70, weight: 0.30 },
     ],
   },
   {
@@ -40,8 +44,8 @@ export const contextFeed: ContextFeedItem[] = [
       "Storm risk increases same-day booking volatility; last-minute travelers shift to flexible rates and shorter LOS.",
     location: "Metro area",
     factors: [
-      { type: "WEATHER", label: "Forecast", value: "Thunderstorms (48h) · rain probability 70–90%" },
-      { type: "MARKET", label: "Demand behavior", value: "Late pickup ↑ · cancellation risk ↑" },
+      { type: "WEATHER", label: "Forecast", value: "Thunderstorms (48h) · rain probability 70–90%", score: 76, weight: 0.55 },
+      { type: "MARKET", label: "Demand behavior", value: "Late pickup ↑ · cancellation risk ↑", score: 58, weight: 0.45 },
     ],
   },
   {
@@ -53,11 +57,18 @@ export const contextFeed: ContextFeedItem[] = [
       "Compression nights expected. Maintain price floor; discount only stranded sandwich gaps with targeted channels.",
     location: "Downtown",
     factors: [
-      { type: "EVENT", label: "Event", value: "Citywide conference · compression nights likely" },
-      { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only" },
+      { type: "EVENT", label: "Event", value: "Citywide conference · compression nights likely", score: 88, weight: 0.65 },
+      { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only", score: 72, weight: 0.35 },
     ],
   },
 ];
+
+export function computeCompositeScore(item: ContextFeedItem): number {
+  const ws = item.factors.reduce((s, f) => s + (f.weight ?? 0), 0);
+  if (ws <= 0) return 0;
+  const weighted = item.factors.reduce((s, f) => s + (Math.max(0, Math.min(100, f.score ?? 0)) * (f.weight ?? 0)), 0);
+  return Math.round(weighted / ws);
+}
 
 export function getPrimaryShockTrigger(): ContextFeedItem {
   return contextFeed.find(i => i.severity === "ALERT") ?? contextFeed[0]!;
