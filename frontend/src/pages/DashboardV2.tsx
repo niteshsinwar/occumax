@@ -30,6 +30,8 @@ import { OCCUPANCY_HEATMAP_VISIBLE_DAYS, useOccupancyPredictiveLos } from "../ho
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
+import { ExogenousDemandSignals } from "../components/overview/ExogenousDemandSignals";
+import { OverviewSignalsProvider } from "../context/overviewSignals";
 import { AiTag } from "../components/shared/AiTag";
 import {
   BarChart2,
@@ -436,6 +438,9 @@ export function DashboardV2() {
   return (
     <div>
       <Toasts />
+
+      <OverviewSignalsProvider>
+        <ExogenousDemandSignals />
 
       {/* ── Tab bar ─────────────────────────────────────────────────────────── */}
       <div className="flex items-end justify-between mb-8 border-b border-border/50">
@@ -924,6 +929,7 @@ export function DashboardV2() {
           )}
         </div>
       )}
+      </OverviewSignalsProvider>
     </div>
   );
 }

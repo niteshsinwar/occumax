@@ -49,3 +49,53 @@ export async function scoreContextWithAi(args: {
   return { factors, rationale, confidence };
 }
 
+/**
+ * Option B: score a bundle of 4 signals (Event + Weather + Travel + Market).
+ * Returns a merged factor set that downstream logic can consume deterministically.
+ */
+export async function scoreContextBundleWithAi(args: {
+  items: Array<ContextFeedItem | null>;
+}): Promise<AiContextScoreResult> {
+  const items = args.items.filter(Boolean) as ContextFeedItem[];
+  if (items.length === 0) {
+    return { factors: [], rationale: "No context signals provided.", confidence: "LOW" };
+  }
+
+  // Simulate latency deterministically from all ids.
+  const key = items.map(i => i.id).sort().join("|");
+  const baseDelayMs = 520 + (key.length % 7) * 90;
+  await new Promise<void>(resolve => setTimeout(resolve, baseDelayMs));
+
+  // Score each item and merge factors by type.
+  const scored = await Promise.all(items.map(item => scoreContextWithAi({ item })));
+  const factorAgg = new Map<AiScoredFactor["type"], { scoreSum: number; weightSum: number; label: string; value: string }>();
+
+  for (const r of scored) {
+    for (const f of r.factors) {
+      const w = Math.max(0.01, Math.min(0.9, f.weight ?? 0.25));
+      const s = Math.max(0, Math.min(100, f.score ?? 0));
+      const prev = factorAgg.get(f.type);
+      if (!prev) {
+        factorAgg.set(f.type, { scoreSum: s * w, weightSum: w, label: f.label, value: f.value });
+      } else {
+        prev.scoreSum += s * w;
+        prev.weightSum += w;
+      }
+    }
+  }
+
+  const factors: AiScoredFactor[] = [...factorAgg.entries()].map(([type, a]) => ({
+    type,
+    label: a.label,
+    value: a.value,
+    score: Math.round(a.scoreSum / Math.max(0.0001, a.weightSum)),
+    weight: Math.max(0.05, Math.min(0.9, a.weightSum / items.length)),
+  })) as AiScoredFactor[];
+
+  const confidence: AiContextScoreResult["confidence"] = items.length >= 3 ? "HIGH" : "MEDIUM";
+  const rationale =
+    "AI scored a bundle of exogenous signals (Event, Weather, Travel, Market) and merged weighted factor intensities for Smart Clearance decisioning.";
+
+  return { factors, rationale, confidence };
+}
+

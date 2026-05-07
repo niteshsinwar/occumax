@@ -3,8 +3,7 @@ import type { HeatmapResponse, HeatmapRow, PredictOptimalLosResponse, SwapStep }
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
 import { AiTag } from "../shared/AiTag";
 import { AlertTriangle, CheckCircle2, RefreshCw, Info, Sparkles } from "lucide-react";
-import { contextFeed, getPrimaryShockTrigger } from "../../mock/contextFeed";
-import { ContextFeedPanel } from "../shared/ContextFeedPanel";
+// Exogenous Demand Signals are rendered once at the top of the Overview page.
 
 type RunMetrics = {
   orphanGaps: number;
@@ -184,7 +183,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
   } = props;
 
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [activeFeedId, setActiveFeedId] = useState(getPrimaryShockTrigger().id);
   const gridDays = Math.min(spanDays, occupancyHeatmapDays ?? spanDays);
 
   function KpiInfo({ label, text }: { label: string; text: string }) {
@@ -338,27 +336,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
             </div>
           </div>
         )}
-
-        {/* Shared context feed (used by Pricing too) */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <ContextFeedPanel
-            items={contextFeed}
-            activeId={activeFeedId}
-            onSelect={setActiveFeedId}
-            header="Exogenous context feed (shared)"
-            subheader="Same mock context triggers as Pricing. In Occupancy, this feed informs the narrative around demand shifts and why recovery actions matter."
-          />
-          <div className="border border-border bg-surface p-5">
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">How Occupancy uses this</div>
-            <div className="text-[11px] text-text-muted leading-relaxed">
-              Occupancy recovery focuses on manufacturing bookable windows and reducing fragmentation. The context feed provides
-              the demand story (weather, flights, events) that explains why certain windows are more valuable to recover.
-            </div>
-            <div className="mt-4 text-[10px] font-bold uppercase tracking-widest text-text-muted border border-border/60 bg-surface-2/40 px-3 py-2">
-              Selected trigger: <span className="text-text">{contextFeed.find(i => i.id === activeFeedId)?.kind ?? "—"}</span>
-            </div>
-          </div>
-        </div>
 
         <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
           <div className="flex flex-wrap gap-2 items-center">
