@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { AiTag } from "../shared/AiTag";
 import { format, parseISO } from "date-fns";
-import { getPrimaryShockTrigger } from "../../mock/contextFeed";
+import { contextFeed, getPrimaryShockTrigger } from "../../mock/contextFeed";
 
 const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
@@ -118,6 +118,42 @@ function findFirstSandwichNight(rows: HeatmapRow[], maxDays: number): {
     }
   }
   return null;
+}
+
+type SandwichNight = {
+  roomId: string;
+  category: string;
+  date: string;
+  currentRate: number;
+  baseRate: number;
+};
+
+function findSandwichNights(rows: HeatmapRow[], maxDays: number): SandwichNight[] {
+  const out: SandwichNight[] = [];
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (let i = 1; i < cells.length - 1; i++) {
+      const c = cells[i];
+      const before = cells[i - 1];
+      const after = cells[i + 1];
+      if (!c || !before || !after) continue;
+      if (c.block_type !== "EMPTY") continue;
+      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
+      out.push({
+        roomId: String(row.room_id),
+        category: String(row.category),
+        date: String(c.date),
+        currentRate: Number(c.current_rate ?? row.base_rate),
+        baseRate: Number(row.base_rate),
+      });
+    }
+  }
+  out.sort((a, b) => (a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date)));
+  return out;
+}
+
+function roundTo5(n: number): number {
+  return Math.round(n / 5) * 5;
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -305,10 +341,15 @@ export function PricingOptimizationTab() {
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [customRates, setCustomRates] = useState<Record<string, number>>({});
   const [shockTriggered, setShockTriggered] = useState(false);
+  const [activeFeedId, setActiveFeedId] = useState(getPrimaryShockTrigger().id);
 
   const WINDOW_DAYS = 20;
   const shock = useMemo(() => getPrimaryShockTrigger(), []);
   const operationalCost = 40;
+  const activeFeedItem = useMemo(
+    () => contextFeed.find(i => i.id === activeFeedId) ?? shock,
+    [activeFeedId, shock],
+  );
 
   // ── Load heatmap on mount ──────────────────────────────────────────────────
 
@@ -353,6 +394,22 @@ export function PricingOptimizationTab() {
     if (!heatmap) return null;
     return findFirstSandwichNight(heatmap.rows, WINDOW_DAYS);
   }, [heatmap]);
+
+  const sandwichNights = useMemo(() => {
+    if (!heatmap) return [];
+    return findSandwichNights(heatmap.rows, WINDOW_DAYS);
+  }, [heatmap]);
+
+  const logicalChoices = useMemo(() => {
+    const floorFactor = 0.6;
+    const discountFactor = 0.7;
+    return sandwichNights.map(s => {
+      const floorRate = roundTo5(Math.max(50, s.baseRate * floorFactor));
+      const discounted = roundTo5(Math.min(s.currentRate, Math.max(floorRate, s.currentRate * discountFactor)));
+      const netProfit = Math.max(0, discounted - operationalCost);
+      return { ...s, floorRate, discountedRate: discounted, netProfit };
+    });
+  }, [sandwichNights, operationalCost]);
 
   const clearanceScenario = useMemo(() => {
     const discountedRate = 110;
@@ -518,17 +575,47 @@ export function PricingOptimizationTab() {
           {/* Context Trigger / News Feed */}
           <div className="border border-border bg-surface p-5">
             <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Context trigger</div>
-            <button
-              type="button"
-              onClick={() => setShockTriggered(true)}
-              className={`w-full text-left p-4 border transition-colors ${
-                shockTriggered ? "border-accent/40 bg-accent/10" : "border-border bg-surface-2/40 hover:bg-surface-2"
-              }`}
-            >
-              <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">News feed</div>
-              <div className="font-bold text-text mt-1">{shock.title}</div>
-              <div className="text-[11px] text-text-muted mt-1 leading-relaxed">{shock.detail}</div>
-            </button>
+            <div className="space-y-2">
+              {contextFeed.map(item => {
+                const selected = item.id === activeFeedId;
+                const isAlert = item.severity === "ALERT";
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => { setActiveFeedId(item.id); setShockTriggered(isAlert); }}
+                    className={`w-full text-left p-4 border transition-colors ${
+                      selected ? "border-accent/40 bg-accent/10" : "border-border bg-surface-2/40 hover:bg-surface-2"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                          News feed {isAlert ? "· Alert" : "· Signal"}
+                        </div>
+                        <div className="font-bold text-text mt-1">{item.title}</div>
+                        <div className="text-[11px] text-text-muted mt-1 leading-relaxed">{item.detail}</div>
+                      </div>
+                      <div className={`shrink-0 text-[9px] font-black uppercase tracking-widest px-2 py-1 border ${
+                        isAlert ? "border-occuorange/40 bg-occuorange/10 text-occuorange" : "border-border bg-surface text-text-muted"
+                      }`}>
+                        {item.kind}
+                      </div>
+                    </div>
+                    {item.factors?.length ? (
+                      <div className="mt-3 grid grid-cols-1 gap-1.5 text-[10px] text-text-muted">
+                        {item.factors.map((f, idx) => (
+                          <div key={`${item.id}-${idx}`} className="flex items-center justify-between gap-3">
+                            <span className="uppercase tracking-widest font-bold">{f.type}</span>
+                            <span className="text-right">{f.label}: {f.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
             <div className="mt-4 flex items-center justify-between gap-2">
               <div className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 border ${
                 shockTriggered ? "border-accent/30 bg-accent/5 text-accent" : "border-border bg-surface-2/30 text-text-muted"
@@ -550,7 +637,9 @@ export function PricingOptimizationTab() {
             <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
               <div>
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Logical choice</div>
-                <div className="font-serif font-bold text-base text-text mt-0.5">Sell the stranded sandwich night</div>
+                <div className="font-serif font-bold text-base text-text mt-0.5">
+                  Smart Clearance recommendations ({logicalChoices.length})
+                </div>
                 <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
                   {firstSandwich
                     ? <>Highlighted candidate: <span className="font-bold text-text">{firstSandwich.category}</span> · <span className="font-mono font-bold text-text">{firstSandwich.date}</span></>
@@ -606,6 +695,64 @@ export function PricingOptimizationTab() {
                   Converts a 100% loss into net profit while explaining cost, not just discount depth.
                 </div>
               </div>
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-border/60">
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">
+                  All sandwich nights in this {WINDOW_DAYS}d window
+                </div>
+                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                  Trigger: <span className="text-text">{activeFeedItem.kind}</span>
+                </div>
+              </div>
+              {logicalChoices.length === 0 ? (
+                <div className="text-sm text-text-muted bg-surface-2/40 border border-border px-4 py-3">
+                  No sandwich nights detected in the current heatmap slice.
+                </div>
+              ) : (
+                <div className="max-h-[360px] overflow-auto border border-border bg-surface">
+                  <div className="grid grid-cols-[120px_90px_1fr_90px_90px_90px] gap-2 px-3 py-2 border-b border-border/60 text-[9px] font-black uppercase tracking-widest text-text-muted bg-surface-2/40">
+                    <div>Date</div>
+                    <div>Room</div>
+                    <div>Category</div>
+                    <div className="text-right">Offer</div>
+                    <div className="text-right">TCO</div>
+                    <div className="text-right">Net</div>
+                  </div>
+                  {logicalChoices.slice(0, 200).map((c, idx) => (
+                    <div
+                      key={`${c.roomId}-${c.date}-${idx}`}
+                      className={`grid grid-cols-[120px_90px_1fr_90px_90px_90px] gap-2 px-3 py-2 border-b border-border/40 text-xs ${
+                        shockTriggered ? "bg-occugreen/[0.03]" : "bg-surface"
+                      }`}
+                    >
+                      <div className="font-mono font-bold text-text">{c.date}</div>
+                      <div className="font-mono text-text-muted">#{c.roomId}</div>
+                      <div className="text-text">
+                        <span className="font-bold">{c.category}</span>{" "}
+                        <span className="text-[10px] text-text-muted">
+                          floor ${c.floorRate} · current ${roundTo5(c.currentRate)}
+                        </span>
+                      </div>
+                      <div className="text-right font-mono font-bold text-text">
+                        {shockTriggered ? `$${c.discountedRate}` : "—"}
+                      </div>
+                      <div className="text-right font-mono font-bold text-text-muted">
+                        {shockTriggered ? `-$${operationalCost}` : "—"}
+                      </div>
+                      <div className={`text-right font-mono font-black ${shockTriggered ? "text-occugreen" : "text-text-muted"}`}>
+                        {shockTriggered ? `$${c.netProfit}` : "—"}
+                      </div>
+                    </div>
+                  ))}
+                  {logicalChoices.length > 200 && (
+                    <div className="px-3 py-2 text-[11px] text-text-muted">
+                      Showing first 200 opportunities (of {logicalChoices.length}).
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -5,6 +5,11 @@ export type ContextFeedItem = {
   detail: string;
   location?: string;
   severity: "INFO" | "ALERT";
+  factors: Array<{
+    type: "WEATHER" | "EVENT" | "FLIGHT" | "MARKET";
+    label: string;
+    value: string;
+  }>;
 };
 
 /**
@@ -20,6 +25,11 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "External shock detected → last-minute demand spike likely (disrupted arrivals re-book locally). Trigger clearance simulation.",
     location: "Chicago, IL",
+    factors: [
+      { type: "FLIGHT", label: "Flight disruption", value: "50+ cancellations (hub) · rebooking pressure ↑" },
+      { type: "WEATHER", label: "Weather pattern", value: "Severe storm band · ground stops likely" },
+      { type: "MARKET", label: "Elasticity", value: "Same-day demand volatility ↑ · short-LOS preference ↑" },
+    ],
   },
   {
     id: "lakefront-thunderstorms",
@@ -29,6 +39,10 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "Storm risk increases same-day booking volatility; last-minute travelers shift to flexible rates and shorter LOS.",
     location: "Metro area",
+    factors: [
+      { type: "WEATHER", label: "Forecast", value: "Thunderstorms (48h) · rain probability 70–90%" },
+      { type: "MARKET", label: "Demand behavior", value: "Late pickup ↑ · cancellation risk ↑" },
+    ],
   },
   {
     id: "conference-week",
@@ -38,6 +52,10 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "Compression nights expected. Maintain price floor; discount only stranded sandwich gaps with targeted channels.",
     location: "Downtown",
+    factors: [
+      { type: "EVENT", label: "Event", value: "Citywide conference · compression nights likely" },
+      { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only" },
+    ],
   },
 ];
 
