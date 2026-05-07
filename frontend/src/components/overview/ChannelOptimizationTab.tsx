@@ -33,6 +33,47 @@ const MARKET_RADAR_ITEM_ID = "bookingcom-24h-downtime";
 type PartnerHealth = "GREEN" | "AMBER" | "RED";
 type InventoryAllocation = Record<string, number>;
 
+function buildDefaultHealthMap(partners: string[]): Record<string, PartnerHealth> {
+  const map: Record<string, PartnerHealth> = {};
+  for (const p of partners) map[p] = "GREEN";
+  return map;
+}
+
+function buildDefaultFlexibleInventory(partners: string[], totalFlexibleRooms: number): InventoryAllocation {
+  const uniquePartners = partners.filter(Boolean);
+  const next: InventoryAllocation = {};
+  for (const p of uniquePartners) next[p] = 0;
+  if (uniquePartners.length === 0 || totalFlexibleRooms <= 0) return next;
+
+  // Bias toward Booking.com + Expedia for the demo narrative, then distribute remainder.
+  const preferred = ["Booking.com", "Expedia"].filter(p => uniquePartners.includes(p));
+  const remaining = uniquePartners.filter(p => !preferred.includes(p));
+
+  let remainingRooms = totalFlexibleRooms;
+  if (preferred.includes("Booking.com")) {
+    const v = Math.min(3, remainingRooms);
+    next["Booking.com"] += v;
+    remainingRooms -= v;
+  }
+  if (preferred.includes("Expedia")) {
+    const v = Math.min(3, remainingRooms);
+    next["Expedia"] += v;
+    remainingRooms -= v;
+  }
+
+  const distributeTo = [...preferred, ...remaining].filter(p => p !== "Booking.com"); // keep some concentration to show pivot away from Booking.com
+  if (distributeTo.length === 0) return next;
+
+  const share = Math.floor(remainingRooms / distributeTo.length);
+  let remainder = remainingRooms - share * distributeTo.length;
+  for (const p of distributeTo) {
+    next[p] += share + (remainder > 0 ? 1 : 0);
+    remainder = Math.max(0, remainder - 1);
+  }
+
+  return next;
+}
+
 function healthRingClass(health: PartnerHealth): string {
   if (health === "GREEN") return "border-occugreen/60 shadow-[0_0_0_3px_rgba(34,197,94,0.12)]";
   if (health === "AMBER") return "border-occuorange/70 shadow-[0_0_0_3px_rgba(249,115,22,0.12)]";
@@ -81,24 +122,14 @@ export function ChannelOptimizationTab() {
   const [channelWindow, setChannelWindow] = useState<7 | 30 | 60>(30);
 
   const marketRadarItem = useMemo(() => contextFeed.find(i => i.id === MARKET_RADAR_ITEM_ID) ?? null, []);
-  const [partnerHealth, setPartnerHealth] = useState<Record<string, PartnerHealth>>(() => ({
-    "Booking.com": "GREEN",
-    Expedia: "GREEN",
-    Agoda: "GREEN",
-    MakeMyTrip: "GREEN",
-    Goibibo: "GREEN",
-    Direct: "GREEN",
-  }));
+  const [partnerHealth, setPartnerHealth] = useState<Record<string, PartnerHealth>>(() =>
+    buildDefaultHealthMap(["Booking.com", "Expedia", "Agoda", "MakeMyTrip", "Goibibo", "Direct"]),
+  );
   const partnerList = useMemo(() => Object.keys(partnerHealth), [partnerHealth]);
 
-  const [inventoryBefore, setInventoryBefore] = useState<InventoryAllocation>(() => ({
-    "Booking.com": 3,
-    Expedia: 3,
-    Agoda: 1,
-    MakeMyTrip: 2,
-    Goibibo: 1,
-    Direct: 0,
-  }));
+  const [inventoryBefore, setInventoryBefore] = useState<InventoryAllocation>(() =>
+    buildDefaultFlexibleInventory(["Booking.com", "Expedia", "Agoda", "MakeMyTrip", "Goibibo", "Direct"], 10),
+  );
   const [inventoryAfter, setInventoryAfter] = useState<InventoryAllocation | null>(null);
   const [marketRadarLoading, setMarketRadarLoading] = useState(false);
   const [marketRadarResult, setMarketRadarResult] = useState<{
@@ -149,6 +180,13 @@ export function ChannelOptimizationTab() {
         const sources = [...d.direct.map(p => p.name), ...d.ota.map(p => p.name), ...d.gds.map(p => p.name)];
         setAllocSources(sources);
         setAllocSource(prev => prev || sources[2] || sources[0]);
+
+        // Partner Pulse should reflect the backend partner set. Use Direct + OTA + (optionally) GDS.
+        const pulsePartners = sources.filter(Boolean);
+        if (pulsePartners.length > 0) {
+          setPartnerHealth(buildDefaultHealthMap(pulsePartners));
+          setInventoryBefore(buildDefaultFlexibleInventory(pulsePartners, 10));
+        }
       })
       .catch(() => {
         const fallback = [
@@ -165,6 +203,9 @@ export function ChannelOptimizationTab() {
         ];
         setAllocSources(fallback);
         setAllocSource(prev => prev || "MakeMyTrip");
+
+        setPartnerHealth(buildDefaultHealthMap(fallback));
+        setInventoryBefore(buildDefaultFlexibleInventory(fallback, 10));
       });
   }, []);
 
@@ -174,14 +215,7 @@ export function ChannelOptimizationTab() {
   };
 
   const handleClearPartnerRisk = () => {
-    setPartnerHealth({
-      "Booking.com": "GREEN",
-      Expedia: "GREEN",
-      Agoda: "GREEN",
-      MakeMyTrip: "GREEN",
-      Goibibo: "GREEN",
-      Direct: "GREEN",
-    });
+    setPartnerHealth(prev => buildDefaultHealthMap(Object.keys(prev)));
     setInventoryAfter(null);
     setMarketRadarResult(null);
     show("Cleared mock partner risk scenario", "success");
@@ -212,10 +246,9 @@ export function ChannelOptimizationTab() {
       });
 
       if (needsAdjustment) {
-        setPartnerHealth(prev => ({ ...prev, "Booking.com": "RED" }));
-        const greenPartners = Object.entries(partnerHealth)
-          .filter(([p, h]) => p !== "Booking.com" && h === "GREEN")
-          .map(([p]) => p);
+        const nextHealth = { ...partnerHealth, "Booking.com": "RED" as const };
+        setPartnerHealth(nextHealth);
+        const greenPartners = partnerList.filter(p => p !== "Booking.com" && (nextHealth[p] ?? "GREEN") === "GREEN");
         const rebalanced = rebalanceFlexibleInventory({
           partners: partnerList,
           fromPartner: "Booking.com",
