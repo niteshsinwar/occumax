@@ -31,6 +31,8 @@ import { OCCUPANCY_HEATMAP_VISIBLE_DAYS, useOccupancyPredictiveLos } from "../ho
 import { ChannelOptimizationTab } from "../components/overview/ChannelOptimizationTab";
 import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimizationTab";
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
+import { ExogenousDemandSignals } from "../components/overview/ExogenousDemandSignals";
+import { OverviewSignalsProvider } from "../context/overviewSignals";
 import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, AlertTriangle, Zap, Sparkles, Info, ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 import { AiTag } from "../components/shared/AiTag";
@@ -811,34 +813,37 @@ export function Dashboard() {
     <div>
       <Toasts />
 
-      {/* ── OVERVIEW SUBTAB BAR ─────────────────────────────────────── */}
-      <div className="flex items-end justify-between mb-8 border-b border-border/50">
-        <div className="flex gap-0">
-          {(["dashboard", "dashboard-v2", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-6 py-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors flex items-center gap-2 ${
-                activeTab === tab
-                  ? "border-accent text-text"
-                  : "border-transparent text-text-muted hover:text-text hover:border-border"
-              }`}
-            >
-              {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5" /> Dashboard</>}
-              {tab === "dashboard-v2" && (
-                <>
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Dashboard
-                  <span className="text-[8px] font-black tracking-widest px-1 py-0.5 bg-accent/15 text-accent border border-accent/30 rounded-sm">V2</span>
-                </>
-              )}
-              {tab === "occupancy" && <><Zap className="w-3.5 h-3.5" /> Occupancy</>}
-              {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
-              {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5" /> Channels</>}
-            </button>
-          ))}
+      <OverviewSignalsProvider>
+        <ExogenousDemandSignals />
+
+        {/* ── OVERVIEW SUBTAB BAR ─────────────────────────────────────── */}
+        <div className="flex items-end justify-between mb-8 border-b border-border/50">
+          <div className="flex gap-0">
+            {(["dashboard", "dashboard-v2", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-6 py-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors flex items-center gap-2 ${
+                  activeTab === tab
+                    ? "border-accent text-text"
+                    : "border-transparent text-text-muted hover:text-text hover:border-border"
+                }`}
+              >
+                {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5" /> Dashboard</>}
+                {tab === "dashboard-v2" && (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Dashboard
+                    <span className="text-[8px] font-black tracking-widest px-1 py-0.5 bg-accent/15 text-accent border border-accent/30 rounded-sm">V2</span>
+                  </>
+                )}
+                {tab === "occupancy" && <><Zap className="w-3.5 h-3.5" /> Occupancy</>}
+                {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
+                {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5" /> Channels</>}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
 
       {activeTab === "occupancy" && (
         <OccupancyOptimizationTab
@@ -1891,6 +1896,7 @@ export function Dashboard() {
           )}
         </div>
       )}
+      </OverviewSignalsProvider>
     </div>
   );
 }
