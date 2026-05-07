@@ -6,6 +6,13 @@ export default {
     extend: {
       colors: {
         bg: "#fdfbf7",
+        /** Primary app chrome (top nav, future demand strip) — mockup-aligned dark brown */
+        nav: {
+          DEFAULT: "#1A1512",
+          elevated: "#221C18",
+          border: "#2F2824",
+          muted: "#A89D93",
+        },
         surface: { DEFAULT: "#ffffff", '2': "#f4eedb" },
         border: "#e6dcd3",
         text: { DEFAULT: "#2c1b18", muted: "#7a594e" },

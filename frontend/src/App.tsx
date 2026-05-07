@@ -17,38 +17,50 @@ export default function App() {
 function AppLayout() {
   return (
     <div className="flex flex-col min-h-screen bg-bg">
-      {/* Top Navigation Bar */}
-      <header className="bg-surface border-b border-border sticky top-0 z-[100] shadow-sm">
+      {/* Top Navigation Bar — dark chrome (OPTIHOST mockup) */}
+      <header className="bg-nav border-b border-nav-border sticky top-0 z-[100] shadow-[0_4px_24px_rgba(0,0,0,0.25)]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-[72px]">
             <div className="flex items-center gap-10 h-full">
-              <div className="text-[26px] font-serif font-black text-text tracking-wide uppercase">
+              <div className="text-[26px] font-serif font-black text-occuyellow tracking-wide uppercase">
                 Opti<span className="text-accent italic font-light">host</span>
               </div>
               <nav className="flex items-center gap-8 hidden md:flex h-full pt-1">
                 <NavLink
                   to="/dashboard"
-                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-occuyellow text-occuyellow" : "border-transparent text-nav-muted hover:text-[#E8E0D8] hover:border-white/15"}`
+                  }
                 >
-                  <Grid3x3 className="w-4 h-4" /> Overview
+                  <Grid3x3 className="w-4 h-4 shrink-0" /> Overview
                 </NavLink>
                 <NavLink
                   to="/receptionist"
-                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-occuyellow text-occuyellow" : "border-transparent text-nav-muted hover:text-[#E8E0D8] hover:border-white/15"}`
+                  }
                 >
-                  <Users className="w-4 h-4" /> Front Desk
+                  <Users className="w-4 h-4 shrink-0" /> Front Desk
                 </NavLink>
                 <NavLink
                   to="/admin"
-                  className={({ isActive }) => `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text hover:border-text/20"}`}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2 h-full border-b-[3px] font-bold transition-colors text-[11px] uppercase tracking-[0.15em] ${isActive ? "border-occuyellow text-occuyellow" : "border-transparent text-nav-muted hover:text-[#E8E0D8] hover:border-white/15"}`
+                  }
                 >
-                  <Settings className="w-4 h-4" /> Settings
+                  <Settings className="w-4 h-4 shrink-0" /> Settings
                 </NavLink>
               </nav>
             </div>
             <div className="flex items-center">
-              <div className="text-[9px] font-bold text-text-muted uppercase tracking-[0.2em] bg-surface-2 px-4 py-1.5 rounded-sm border border-border shadow-subtle relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-occugreen" />
+              <div
+                className="flex items-center gap-2 text-[9px] font-bold text-[#E8E0D8] uppercase tracking-[0.2em] bg-nav-elevated/80 px-4 py-1.5 rounded-full border border-white/15 shadow-subtle"
+                title="Live production data"
+              >
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                </span>
                 Live
               </div>
             </div>

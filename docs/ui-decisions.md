@@ -6,6 +6,16 @@ Add new entries as decisions are made. Prefer “what + why + where implemented�
 
 ---
 
+## Global chrome
+
+### Decision: Primary navigation uses dark “OPTIHOST” mockup chrome
+
+- **What**: Top bar background `#1A1512`, subtle bottom border, gold active nav (`occuyellow`), muted link color on idle, pill **Live** with green status dot.
+- **Why**: Matches the property-management dashboard reference and reserves `nav.elevated` for the upcoming exogenous-demand strip (Step 2).
+- **Where**: Design tokens — `frontend/tailwind.config.js` (`nav.*`), `frontend/src/index.css` (`--nav*`); header markup — `frontend/src/App.tsx`.
+
+---
+
 ## Overview page (primary surface)
 
 ### Decision: Overview is the main UI entry
