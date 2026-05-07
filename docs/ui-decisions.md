@@ -14,6 +14,18 @@ Add new entries as decisions are made. Prefer “what + why + where implemented�
 - **Why**: Matches the property-management dashboard reference and reserves `nav.elevated` for the upcoming exogenous-demand strip (Step 2).
 - **Where**: Design tokens — `frontend/tailwind.config.js` (`nav.*`), `frontend/src/index.css` (`--nav*`); header markup — `frontend/src/App.tsx`.
 
+### Decision: Overview layout is full-bleed under the header (no white page card)
+
+- **What**: `/dashboard` renders **outside** the padded “white shell” used by Receptionist/Admin. It uses a vertical stack: dark **Exogenous Demand Signals** band (`ExogenousDemandSignals`) → cream **subtab** strip → constrained content column (`max-w-7xl`).
+- **Why**: Matches the OPTIHOST mockup and keeps signals visible for every Overview subtab without duplicating them inside tabs.
+- **Where**: `frontend/src/App.tsx` (`PageShell` vs bare `main` for `/dashboard`); `frontend/src/pages/Dashboard.tsx`; `frontend/src/components/overview/ExogenousDemandSignals.tsx`.
+
+### Decision: Overview subtabs sync to the URL
+
+- **What**: Subtabs **Dashboard / Occupancy / Pricing / Channels** use `?tab=occupancy` (etc.). Default Dashboard uses a clean path with no `tab` query.
+- **Why**: Deep-linking and refresh-safe state for operator workflows.
+- **Where**: `frontend/src/pages/Dashboard.tsx` (`useSearchParams`).
+
 ---
 
 ## Overview page (primary surface)
