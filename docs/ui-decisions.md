@@ -91,20 +91,19 @@ Then we ask the AI to:
 
 - **Recommend the most optimal LOS** for our current date range, with a rationale and confidence.
 
-### Decision: Recovery actions follow the Predictive constraint layer
+### Decision: Recovery actions sit between KPI strip and Inventory Heatmap
 
-- **Placement**: Immediately below the Predictive constraint layer component
-- **Components**:
-  - **Preview Recovery Shuffle** (primary)
-  - **Advanced actions** (secondary)
-- **Behavior**:
-  - When **Preview Recovery Shuffle** runs, it should call the recovery algorithm using the **AI-recommended LOS** as the target constraint.
-  - The goal is to preview whether the system can optimize/re-pack bookings to manufacture bookable windows under that LOS target.
+- **Placement**: After the **six-card KPI row**, immediately before the **Before / After** heatmap pair.
+- **Why**: Matches the OPTIHOST mockup reading order (AI insight → key metrics → act → validate in the grid). Functionality unchanged: **Preview Recovery Shuffle**, apply/clear, **Advanced** k-night tools.
+- **Behavior**: **Preview Recovery Shuffle** still uses the **AI-recommended LOS** as the target when the occupancy recovery path is enabled (same as before).
+- **Where**: `frontend/src/components/overview/OccupancyOptimizationTab.tsx`
 
-### Decision: Inventory heatmap + KPI sections remain unchanged
+### Decision: Occupancy visual system (Step 3 mockup alignment)
 
-- **Scope**: Occupancy subtab sections below the recovery actions
-- **Rule**: The existing **KPI strip** and **inventory heatmap (before/after)** sections remain **as-is** (no layout or metric changes) while we iterate on the Predictive constraint layer and recovery actions ordering.
+- **Predictive constraint layer**: Warm panel (`#FDF7E6`), rounded corners, **Learn more** expands the three input buckets (no duplicate exogenous cards), **Refresh AI insight** as secondary surface button.
+- **KPI row**: Six centered metric cards (tonight %, orphan nights, k=2 / k=3 windows, hard-to-fill, MinLOS blocks) with soft shadow and parenthetical sublines.
+- **Inventory Heatmap**: Section title + two elevated white panels **Before (live slice)** / **After (preview)**; grids use **`palette="optihost"`** on `HeatmapGrid` (muted gold / blue / terracotta / mint).
+- **Where**: `OccupancyOptimizationTab.tsx`, `frontend/src/components/Heatmap/HeatmapGrid.tsx` (`palette` prop).
 
 ---
 
