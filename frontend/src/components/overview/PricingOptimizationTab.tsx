@@ -932,5 +932,6 @@ export function PricingOptimizationTab() {
         )}
       </div>
     </div>
+    </div>
   );
 }
