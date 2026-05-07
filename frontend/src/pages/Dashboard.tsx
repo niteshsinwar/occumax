@@ -5,7 +5,6 @@ import {
   getHeatmap,
   dashboardOptimisePreview,
   dashboardScorecard,
-  patchSlot,
   getEventInsights,
   getPace,
   getChannelPerformance,
@@ -21,8 +20,7 @@ import type {
   ChannelPerformanceResponse,
   PaceResponse,
 } from "../types";
-import { type CellClickInfo } from "../components/Heatmap/HeatmapGrid";
-import { BirdseyeFilters, type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
+import { type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
@@ -33,7 +31,7 @@ import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimi
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
 import { ExogenousDemandSignals } from "../components/overview/ExogenousDemandSignals";
 import { OverviewSignalsProvider } from "../context/overviewSignals";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, Lock, Unlock, AlertTriangle, Zap, Sparkles, Info, ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, AlertTriangle, Zap, Sparkles, ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 import { AiTag } from "../components/shared/AiTag";
 
@@ -276,13 +274,12 @@ function computeBirdseyeDashboardKpis(
  * KPI strip below the filters is computed from the same filtered rows and visible day span (not the global revenue-summary endpoint).
  */
 export function Dashboard() {
-  type OverviewTab = "dashboard" | "dashboard-v2" | "occupancy" | "pricing" | "channels";
+  type OverviewTab = "dashboard" | "occupancy" | "pricing" | "channels";
 
   const [activeTab, setActiveTab] = useState<OverviewTab>("dashboard");
 
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
-  const [isOptimiseLoading, setIsOptimiseLoading] = useState<boolean>(false);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [swapCommitLoading, setSwapCommitLoading] = useState(false);
   const [kNightNights, setKNightNights] = useState<number>(2);
@@ -292,15 +289,10 @@ export function Dashboard() {
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
   const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
-  const [slotModal, setSlotModal] = useState<CellClickInfo | null>(null);
-  const [demoMode, setDemoMode] = useState(false);
 
   // Hackathon scorecard (before/after + deltas)
   const [scorecard, setScorecard] = useState<DashboardScorecardResponse | null>(null);
   const [scorecardLoading, setScorecardLoading] = useState(false);
-  const [scorecardError, setScorecardError] = useState<string | null>(null);
-  const [showAdvancedActions, setShowAdvancedActions] = useState(false);
-  const [showInsights, setShowInsights] = useState(true);
   const { show, Toasts } = useToast();
 
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
@@ -386,7 +378,6 @@ export function Dashboard() {
   const refreshScorecard = useCallback(async (plan?: SwapStep[] | null) => {
     if (!scorecardSlice) return;
     setScorecardLoading(true);
-    setScorecardError(null);
     try {
       const res = await dashboardScorecard({
         start: scorecardSlice.startStr,
@@ -398,39 +389,20 @@ export function Dashboard() {
       setScorecard(res.data as DashboardScorecardResponse);
     } catch {
       setScorecard(null);
-      setScorecardError("Could not compute the capacity recovery scorecard for this slice.");
     } finally {
       setScorecardLoading(false);
     }
   }, [scorecardSlice, selectedCategories]);
-
-  const dashboardKpis = useMemo((): BirdseyeDashboardKpis | null => {
-    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
-    return computeBirdseyeDashboardKpis(heatmap.dates, filteredRows, spanDays);
-  }, [heatmap, filteredRows, spanDays]);
 
   const snapshot = useMemo(() => {
     if (!heatmap) return null;
     return computeEmptyRunInventory(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
 
-  const runMetrics = useMemo(() => {
-    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
-    return computeRunMetrics(filteredRows, spanDays);
-  }, [heatmap, filteredRows, spanDays]);
-
-  const channelMix = useMemo(() => {
-    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
-    return computeChannelMix(filteredRows, spanDays);
-  }, [heatmap, filteredRows, spanDays]);
-
   const mostCommonLosFallback = useMemo(() => {
     if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
     return computeMostCommonLosFromSlice(filteredRows, spanDays);
   }, [heatmap, filteredRows, spanDays]);
-
-  const topChannel = useMemo(() => (channelMix ? topChannelInsight(channelMix) : null), [channelMix]);
-  const cancelRatePct = useMemo(() => (channelMix ? estimatedCancellationRate(channelMix) : null), [channelMix]);
 
   const simulatedRows = useMemo(() => {
     const plan = (kNightSwapPlan && kNightSwapPlan.length > 0) ? kNightSwapPlan : swapPlan;
@@ -470,85 +442,6 @@ export function Dashboard() {
     void refreshScorecard(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scorecardSlice?.startStr, scorecardSlice?.endStr, selectedCategories.join("|")]);
-
-  const dashboardInsights = useMemo(() => {
-    if (!snapshot || spanDays === 0) return [];
-    const totals = snapshot.totalsByBucket;
-    const buckets: Array<{ k: string; n: number }> = [
-      { k: "1", n: totals["1"] ?? 0 },
-      { k: "2", n: totals["2"] ?? 0 },
-      { k: "3", n: totals["3"] ?? 0 },
-      { k: "4", n: totals["4"] ?? 0 },
-      { k: "4+", n: totals["4+"] ?? 0 },
-    ];
-    const best = buckets.reduce((a, b) => (b.n > a.n ? b : a), buckets[0]);
-    const out: string[] = [];
-    // 1) Booking pattern prediction (AI summary from bookings, when available)
-    if (eventInsights?.most_common_los_nights != null) {
-      out.push(`Most likely duration of stay: ${eventInsights.most_common_los_nights} night stays.`);
-    } else if (mostCommonLosFallback != null) {
-      out.push(`Most likely duration of stay: ${mostCommonLosFallback} night stays (from current bookings in this slice).`);
-    } else if (best.n > 0) {
-      // Fallback when analytics endpoint is unavailable.
-      out.push("Most likely duration of stay: unavailable — not enough booked nights in this slice.");
-    }
-
-    // 2) Partner/channel insight (prefer analytics endpoint; fallback to slice)
-    if (channelPerf?.channels && channelPerf.channels.length > 0) {
-      const top = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
-      const topPartner = top.partners && top.partners.length > 0
-        ? [...top.partners].sort((a, b) => b.room_nights - a.room_nights)[0]!
-        : null;
-      if (topPartner) {
-        out.push(`Partner channel: ${top.channel} leads. Top partner: ${topPartner.partner} (${topPartner.share_of_channel_pct}% of ${top.channel}).`);
-      } else {
-        out.push(`Partner channel: ${top.channel} leads with ${top.share_pct}% share in this slice.`);
-      }
-    } else if (topChannel) {
-      out.push(`Channel mix: ${topChannel.channel} leads with ~${topChannel.sharePct}% of booked nights (${topChannel.total} nights in this slice).`);
-    } else {
-      out.push("Channel mix: not enough booked nights in this slice to summarize channel performance.");
-    }
-
-    // 3) Booking trend vs last 2 years (pace endpoint uses historical baseline)
-    if (pace?.series && pace.series.length > 0) {
-      const pts = pace.series[0]?.points ?? [];
-      if (pts.length > 0) {
-        const avgDelta = pts.reduce((s, p) => s + (p.on_books_occ_pct - p.expected_on_books_occ_pct), 0) / pts.length;
-        const dir = avgDelta >= 0 ? "ahead" : "behind";
-        out.push(`Booking trend vs last 2 years: ${dir} baseline pace by ~${Math.abs(Math.round(avgDelta))} occ-pts (model baseline).`);
-      } else {
-        out.push("Booking trend vs last 2 years: pace data unavailable for this slice.");
-      }
-    } else {
-      out.push("Booking trend vs last 2 years: pace data unavailable for this slice.");
-    }
-
-    // 4) Estimated cancellation rate (heuristic, clearly labeled as modelled)
-    out.push(
-      cancelRatePct != null
-        ? `Estimated cancellation rate (modelled): ~${cancelRatePct}% for this slice (based on channel mix).`
-        : "Estimated cancellation rate (modelled): unavailable — no booked nights in this slice.",
-    );
-
-    // Helpful rules callout (real)
-    if (dashboardKpis?.sandwichMinlosBlockedNights) {
-      out.push(`${dashboardKpis.sandwichMinlosBlockedNights} orphan-night gap(s) are blocked by MinLOS rules — “Apply Orphan Night Offers” can unlock them.`);
-    }
-
-    return out.slice(0, 6);
-  }, [
-    cancelRatePct,
-    channelPerf,
-    dashboardKpis?.sandwichMinlosBlockedNights,
-    eventInsights,
-    mostCommonLosFallback,
-    pace,
-    runMetrics,
-    snapshot,
-    spanDays,
-    topChannel,
-  ]);
 
   // ── V2 computed values (bird's-eye, always uses allRows — not filtered) ──────
 
@@ -660,28 +553,8 @@ export function Dashboard() {
     return out.slice(0, 5);
   }, [snapshot, spanDays, eventInsights, mostCommonLosFallback, channelPerf, v2TopChannel, pace, v2CancelRate, v2Kpis]);
 
-  /**
-   * Toggles a room type chip; at least one type stays selected so the grid never has an ambiguous empty state.
-   */
-  const handleToggleCategory = useCallback((category: RoomCategory) => {
-    setSelectedCategories(prev => {
-      const on = prev.includes(category);
-      if (on && prev.length === 1) return prev;
-      if (on) return prev.filter(c => c !== category);
-      const order = heatmapCategories;
-      return [...prev, category].sort((a, b) => {
-        const ia = order.indexOf(a);
-        const ib = order.indexOf(b);
-        const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        return sa - sb;
-      });
-    });
-  }, [heatmapCategories]);
-
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
-    setIsOptimiseLoading(true);
     try {
       const start = parseISO(heatmap.dates[0]);
       const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
@@ -705,8 +578,6 @@ export function Dashboard() {
       show("Failed to run optimisation preview", "error");
       setSwapPlan(null);
       void refreshScorecard(null);
-    } finally {
-      setIsOptimiseLoading(false);
     }
   }, [heatmap, weekSpan, selectedCategories, show, refreshScorecard]);
 
@@ -789,26 +660,6 @@ export function Dashboard() {
     }
   }, [kNightSwapPlan, loadHeatmap, show, refreshScorecard]);
 
-  const handleSlotPatch = async (block_type: "EMPTY" | "HARD") => {
-    if (!slotModal) return;
-    try {
-      await patchSlot(slotModal.id, { block_type, reason: "Manual edit from Bird's Eye View dashboard" });
-      setSlotModal(null);
-      await loadHeatmap();
-    } catch (e: unknown) {
-      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      show(typeof detail === "string" ? detail : "Cannot edit this slot", "error");
-    }
-  };
-
-  function KpiInfo({ label, text }: { label: string; text: string }) {
-    return (
-      <span className="inline-flex items-center" title={`${label}: ${text}`}>
-        <Info className="w-3 h-3 text-text-muted/70 hover:text-text-muted" />
-      </span>
-    );
-  }
-
   return (
     <div>
       <Toasts />
@@ -819,7 +670,7 @@ export function Dashboard() {
         {/* ── OVERVIEW SUBTAB BAR ─────────────────────────────────────── */}
         <div className="flex items-end justify-between mb-8 border-b border-border/50">
           <div className="flex gap-0">
-            {(["dashboard", "dashboard-v2", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
+            {(["dashboard", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -830,13 +681,6 @@ export function Dashboard() {
                 }`}
               >
                 {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5" /> Dashboard</>}
-                {tab === "dashboard-v2" && (
-                  <>
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Dashboard
-                    <span className="text-[8px] font-black tracking-widest px-1 py-0.5 bg-accent/15 text-accent border border-accent/30 rounded-sm">V2</span>
-                  </>
-                )}
                 {tab === "occupancy" && <><Zap className="w-3.5 h-3.5" /> Occupancy</>}
                 {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
                 {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5" /> Channels</>}
@@ -877,601 +721,8 @@ export function Dashboard() {
       {activeTab === "pricing" && <PricingOptimizationTab />}
       {activeTab === "channels" && <ChannelOptimizationTab />}
 
+      {/* ── DASHBOARD (V2) TAB ─────────────────────────────────────────────── */}
       {activeTab === "dashboard" && (
-        <>
-      {slotModal && (
-        <div className="fixed inset-0 bg-text/60 backdrop-blur-sm flex items-center justify-center z-[999]" onClick={() => setSlotModal(null)}>
-          <div className="bg-surface border border-border shadow-2xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-border flex items-center justify-between">
-              <div>
-                <h2 className="font-serif font-bold text-lg text-text">Room {slotModal.room}</h2>
-                <p className="text-[10px] text-text-muted uppercase tracking-widest mt-0.5">{slotModal.category} · {slotModal.date}</p>
-              </div>
-              <span className={`text-[10px] uppercase tracking-wider font-bold px-2.5 py-1 border ${
-                slotModal.block === "EMPTY" ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                : slotModal.block === "SOFT" ? "bg-sky-100 text-sky-800 border-sky-300"
-                : "bg-stone-100 text-stone-700 border-stone-300"
-              }`}>
-                {slotModal.block === "EMPTY" ? "Available" : slotModal.block === "SOFT" ? "Booked" : "Blocked"}
-              </span>
-            </div>
-
-            {/* Slot details */}
-            <div className="px-6 py-4 space-y-2.5 border-b border-border">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-text-muted font-medium">Night rate</span>
-                <span className="font-mono font-bold text-text">${slotModal.rate.toLocaleString("en-US")}</span>
-              </div>
-              {slotModal.block === "SOFT" && slotModal.channel && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-muted font-medium">Booked via</span>
-                  <span className={`font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 border ${
-                    slotModal.channel === "OTA"    ? "bg-amber-50 text-amber-700 border-amber-200" :
-                    slotModal.channel === "DIRECT" ? "bg-teal-50 text-teal-700 border-teal-200" :
-                    slotModal.channel === "GDS"    ? "bg-violet-50 text-violet-700 border-violet-200" :
-                    slotModal.channel === "WALKIN" ? "bg-orange-50 text-orange-700 border-orange-200" :
-                                                    "bg-surface-2 text-text-muted border-border"
-                  }`}>{slotModal.channel}</span>
-                </div>
-              )}
-              {slotModal.block === "SOFT" && slotModal.booking_id && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-muted font-medium">Booking ID</span>
-                  <span className="font-mono font-bold text-text bg-surface-2 border border-border px-2 py-0.5">{slotModal.booking_id}</span>
-                </div>
-              )}
-              {slotModal.offer_type && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-text-muted font-medium">Offer</span>
-                  <span className="font-mono font-bold text-accent bg-accent/5 border border-accent/20 px-2 py-0.5">
-                    {slotModal.offer_type}
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-text-muted font-medium">Slot ID</span>
-                <span className="font-mono text-text-muted text-[10px]">{slotModal.id}</span>
-              </div>
-            </div>
-
-            {/* Actions */}
-            <div className="px-6 py-4 space-y-2">
-              {slotModal.block === "SOFT" ? (
-                <p className="text-xs text-occuorange font-semibold bg-occuorange/8 border border-occuorange/20 px-3 py-2.5">
-                  Active booking — cannot override manually. Cancel via Front Desk.
-                </p>
-              ) : (
-                <div className="flex gap-2">
-                  {slotModal.block !== "EMPTY" && (
-                    <button type="button"
-                      className="flex-1 bg-occugreen text-white text-sm font-semibold hover:bg-occugreen/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                      onClick={() => handleSlotPatch("EMPTY")}
-                    >
-                      <Unlock className="w-3.5 h-3.5" /> Mark Available
-                    </button>
-                  )}
-                  {slotModal.block !== "HARD" && (
-                    <button type="button"
-                      className="flex-1 bg-text text-surface text-sm font-semibold hover:bg-text/90 active:scale-95 py-2.5 transition-all flex justify-center items-center gap-1.5"
-                      onClick={() => handleSlotPatch("HARD")}
-                    >
-                      <Lock className="w-3.5 h-3.5" /> Block
-                    </button>
-                  )}
-                </div>
-              )}
-              <button type="button"
-                className="w-full bg-surface-2 text-text text-sm font-semibold hover:bg-border active:scale-95 py-2.5 transition-all border border-border"
-                onClick={() => setSlotModal(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="mb-6 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
-          <div>
-            <h1 className="font-serif font-bold text-2xl text-text tracking-tight">Hotel at a Glance</h1>
-            <p className="text-xs tracking-wider text-text-muted mt-2 uppercase">
-              Occupancy health, gap risk, and the fastest levers to improve revenue
-            </p>
-          </div>
-        </div>
-
-        {/* Insights (auto-generated) — top of the dashboard flow */}
-        {heatmap && dashboardInsights.length > 0 && (demoMode || showInsights) && (
-          <div className="bg-accent/5 border border-accent/20 p-6">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4 text-accent" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
-                  AI-generated insights
-                  <AiTag title="AI-generated insights combine real slice metrics with clearly-labeled estimates/placeholders when required data is not yet available." />
-                </div>
-                <ul className="space-y-2">
-                  {dashboardInsights.map((t, i) => (
-                    <li key={i} className="text-sm text-text leading-relaxed">
-                      {t}
-                    </li>
-                  ))}
-                </ul>
-                <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold mt-3">
-                  Based on the current filters and the visible heatmap window
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {heatmap && dashboardInsights.length > 0 && !demoMode && (
-          <div>
-            <button
-              type="button"
-              className="text-[10px] font-bold uppercase tracking-widest border border-border px-4 py-2 bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-              onClick={() => setShowInsights(v => !v)}
-              title="Show or hide auto-generated summary insights"
-            >
-              {showInsights ? "Hide insights" : "Show insights"}
-            </button>
-          </div>
-        )}
-
-        {/* Filters should lead the flow (slice definition) */}
-        {heatmap && (
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-            <BirdseyeFilters
-              weekSpan={weekSpan}
-              onWeekSpanChange={setWeekSpan}
-              availableCategories={heatmapCategories}
-              selectedCategories={selectedCategories}
-              onToggleCategory={handleToggleCategory}
-            />
-          </div>
-        )}
-
-        {/* Actions come after filters */}
-        <div className="bg-surface border border-border shadow-subtle p-3 sm:p-4">
-          <div className="flex flex-wrap gap-2 items-center">
-              <button
-                type="button"
-                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => runOptimisePreview()}
-                disabled={!heatmap || isOptimiseLoading}
-              >
-                {isOptimiseLoading ? "Scanning…" : "Preview Recovery Shuffle"}
-              </button>
-              <button
-                type="button"
-                className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                onClick={() => commitSwapShuffle()}
-                disabled={swapCommitLoading || !swapPlan || (swapPlan.length ?? 0) === 0}
-                title={!swapPlan || (swapPlan.length ?? 0) === 0 ? "Preview a shuffle first, then apply it" : "Apply the preview shuffle to the DB for this slice"}
-              >
-                {swapCommitLoading ? "Applying…" : `Apply Recovery Shuffle${swapPlan && swapPlan.length > 0 ? ` (${swapPlan.length})` : ""}`}
-              </button>
-              <button
-                type="button"
-                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border"
-                onClick={() => setShowAdvancedActions(v => !v)}
-                title="Show advanced actions and toggles"
-              >
-                Advanced {showAdvancedActions ? "▲" : "▼"}
-              </button>
-          </div>
-
-          {/* Advanced actions */}
-          {showAdvancedActions && (
-            <div className="mt-3 pt-3 border-t border-border/60 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className={`text-text font-semibold hover:bg-surface-2 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border ${
-                  demoMode ? "bg-accent/10 border-accent/30" : "bg-surface border-border"
-                }`}
-                onClick={() => setDemoMode(v => !v)}
-                title="Guided callouts for hackathon demo"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-accent" />
-                Demo mode {demoMode ? "On" : "Off"}
-              </button>
-              <button
-                type="button"
-                className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
-                onClick={() => refreshAllData()}
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-accent" /> Refresh data
-              </button>
-              {swapPlan && (
-                <button
-                  type="button"
-                  className="bg-surface text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-5 py-2.5 rounded-sm border border-border"
-                  onClick={() => clearOptimisePreview()}
-                >
-                  Clear preview
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Secondary row: k-night optimiser (advanced) */}
-          {showAdvancedActions && heatmap && (
-            <div className="mt-3 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-end gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                  k-night optimisation
-                </div>
-                <KpiInfo
-                  label="k-night optimisation"
-                  text="Rearranges existing SOFT bookings to maximize bookable windows of length k within the current filtered heatmap slice."
-                />
-              </div>
-              <div className="flex flex-wrap items-end gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  max={14}
-                  value={kNightNights}
-                  onChange={e => setKNightNights(Math.max(1, Math.min(14, parseInt(e.target.value) || 1)))}
-                  className="w-20 bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                  aria-label="k nights"
-                />
-                <button
-                  type="button"
-                  className="bg-surface-2 text-text font-semibold hover:bg-border active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-border disabled:opacity-60 disabled:cursor-not-allowed"
-                  onClick={() => runKNightPreview()}
-                  disabled={kNightLoading}
-                >
-                  {kNightLoading ? "Previewing…" : "Preview k-night shuffle"}
-                </button>
-                {kNightSwapPlan && (kNightSwapPlan.length ?? 0) > 0 && (
-                  <button
-                    type="button"
-                    className="bg-text text-surface font-semibold hover:bg-text/90 active:scale-95 transition-all flex items-center gap-2 text-xs uppercase tracking-widest px-4 py-2.5 rounded-sm border border-text disabled:opacity-60 disabled:cursor-not-allowed"
-                    onClick={() => commitKNightShuffle()}
-                    disabled={kNightCommitLoading}
-                  >
-                    {kNightCommitLoading ? "Committing…" : `Commit (${kNightSwapPlan.length ?? 0})`}
-                  </button>
-                )}
-                {kNightSwapPlan && (
-                  <div className="text-[9px] text-text-muted uppercase tracking-widest font-bold pb-0.5">
-                    {kNightSwapPlan.length > 0 ? `${kNightSwapPlan.length} step(s) ready` : "No steps"}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Insights / action plan / revenue recovery (3 focus areas) */}
-      <div className="mb-6 grid grid-cols-1 lg:grid-cols-3 gap-3">
-        <div className="bg-surface border border-border p-5">
-          <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted mb-3">Insights</div>
-          <div className="space-y-3 text-sm text-text leading-relaxed">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
-              <div>
-                {scorecard?.before
-                  ? (
-                    <>
-                      <span className="font-bold">{scorecard.before.orphan_nights}</span> orphan night(s) are stranded, putting{" "}
-                      <span className="font-bold">${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}</span> at risk.
-                    </>
-                  )
-                  : "Select a slice to quantify orphan nights and revenue at risk."}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
-              <div className="text-text-muted">
-                Use Pricing to run RateIQ and choose discount depth where gaps are stranded. (Pricing impact is computed in the Pricing tab.)
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
-              <div className="text-text-muted">
-                {topChannel
-                  ? `Current slice leans ${topChannel.channel} (~${topChannel.sharePct}%). Use Channels to shift incremental demand to higher-net partners.`
-                  : "Use Channels to shift incremental demand to higher-net partners (partner logic placeholder)."}
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="mt-4 w-full bg-surface-2 border border-border text-text text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-border transition-colors"
-            onClick={() => setActiveTab("occupancy")}
-          >
-            View capacity details
-          </button>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Action plan</div>
-            <AiTag title="AI assists pricing and channel actions; shuffle is deterministic capacity optimization." />
-          </div>
-          <div className="space-y-3 text-sm text-text leading-relaxed">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
-              <div className="text-text-muted">Run <span className="font-bold text-text">Preview Recovery Shuffle</span>, then <span className="font-bold text-text">Apply Recovery Shuffle</span> if the deltas look good.</div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
-              <div className="text-text-muted">Go to Pricing and run RateIQ to monetize recovered capacity with targeted discounts.</div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
-              <div className="text-text-muted">Go to Channels and review YieldIQ recommendations (placeholder panel is present).</div>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="mt-4 w-full bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-4 py-2.5 hover:bg-text/90 transition-colors"
-            onClick={() => setActiveTab("pricing")}
-            title="Open Pricing to run AI what-if discount simulation and rate recommendations"
-          >
-            Go to Pricing
-          </button>
-        </div>
-
-        <div className="bg-surface border border-border p-5">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Revenue recovery</div>
-            <AiTag title="Offer uplift is AI-estimated; shuffle impact is deterministic from the preview plan. Pricing/channel monetization is calculated in their tabs." />
-          </div>
-          <div className="space-y-3 text-sm text-text leading-relaxed">
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Room shuffling</div>
-              <div>
-                {scorecard?.after && scorecard?.delta
-                  ? (
-                    <>
-                      <span className="font-bold">
-                        ${Math.max(0, Math.round(-scorecard.delta.revenue_at_risk)).toLocaleString("en-US")}
-                      </span>{" "}
-                      recovered via shuffle (deterministic)
-                    </>
-                  )
-                  : "Run Preview Recovery Shuffle to see projected recovery impact."}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Smart pricing / discounts</div>
-              <div className="text-text-muted">Calculated in Pricing (RateIQ). Placeholder here until pricing outputs are surfaced into this dashboard.</div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Channel partner optimization</div>
-              <div className="text-text-muted">Calculated in Channels (YieldIQ). Placeholder here until partner optimization is finalized.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Capacity Recovery Scorecard */}
-      <div className="mb-6">
-        <div className={`border p-6 ${demoMode ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <div className="font-serif font-bold text-xl text-text">Capacity Recovery Scorecard</div>
-              <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
-                Before/after snapshot for the selected slice. Use <span className="font-bold text-text">Preview Recovery Shuffle</span> to generate a plan and see predicted deltas.
-              </div>
-            </div>
-            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-occuorange" />
-              Focus: orphan nights ↓ · k-night windows ↑ · revenue at risk ↓
-            </div>
-          </div>
-
-          {scorecardError && (
-            <div className="mt-4 text-xs text-occured border border-occured/30 bg-occured/5 px-4 py-3">
-              {scorecardError}
-            </div>
-          )}
-
-          <div className="mt-5 grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div className="bg-surface border border-border p-4">
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan nights</div>
-              <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-                {scorecardLoading ? "…" : (scorecard?.before.orphan_nights ?? "—")}
-              </div>
-              {scorecard?.after && scorecard?.delta && (
-                <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
-                  <span className="text-text-muted">After {scorecard.after.orphan_nights}</span>
-                  <span className={(scorecard.delta.orphan_nights <= 0) ? "text-occugreen" : "text-occuorange"}>
-                    Δ {scorecard.delta.orphan_nights}
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-surface border border-border p-4">
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Revenue at risk</div>
-              <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-                {scorecardLoading ? "…" : `$${Math.round(scorecard?.before.revenue_at_risk ?? 0).toLocaleString("en-US")}`}
-              </div>
-              {scorecard?.before.revenue_weighted_fill_pct != null && scorecard.before.revenue_weighted_fill_pct > 0 && (
-                <div className="mt-1 text-[10px] text-text-muted leading-relaxed">
-                  Calculated as <span className="font-bold text-text">orphan-night room rate × (1 − implied fill %)</span>. Implied fill{" "}
-                  <span className="font-bold tabular-nums text-text">{Math.round(scorecard.before.revenue_weighted_fill_pct)}%</span>
-                  {scorecard?.after?.revenue_weighted_fill_pct != null && scorecard.after.revenue_weighted_fill_pct > 0 && (
-                    <>
-                      {" → "}
-                      <span className="font-bold tabular-nums text-text">
-                        {Math.round(scorecard.after.revenue_weighted_fill_pct)}%
-                      </span>
-                      {" "}
-                      <span className="text-text-muted">(after preview)</span>
-                    </>
-                  )}
-                  <span className="block mt-0.5 text-[9px] uppercase tracking-widest font-bold text-text-muted">
-                    Uses the same implied gap-fill model across the slice
-                  </span>
-                </div>
-              )}
-              {scorecard?.after && scorecard?.delta && (
-                <div className="mt-2 text-[11px] font-bold tabular-nums flex items-baseline gap-3">
-                  <span className="text-text-muted">After ${Math.round(scorecard.after.revenue_at_risk).toLocaleString("en-US")}</span>
-                  <span className={(scorecard.delta.revenue_at_risk <= 0) ? "text-occugreen" : "text-occuorange"}>
-                    Δ {Math.round(scorecard.delta.revenue_at_risk).toLocaleString("en-US")}
-                  </span>
-                </div>
-              )}
-            </div>
-            <div className="bg-surface border border-border p-4">
-              <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Next best action</div>
-              <div className="mt-2 text-sm text-text leading-relaxed">
-                {swapPlan && swapPlan.length > 0
-                  ? (
-                    <>
-                      A shuffle plan is ready. Apply it to reduce orphan nights and revenue at risk.
-                      <div className="mt-3 text-[10px] text-text-muted uppercase tracking-widest font-bold">
-                        Then run Preview Orphan Night Offers for uplift.
-                      </div>
-                    </>
-                  )
-                  : "Run Preview Recovery Shuffle to generate a deterministic plan for this slice."}
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      {/* Property at a Glance (KPIs) */}
-      <div className="mb-6 bg-surface border border-border shadow-subtle p-6">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <div className="font-serif font-bold text-xl text-text">Property at a Glance</div>
-            <div className="text-xs text-text-muted mt-1 max-w-2xl leading-relaxed">
-              Quick KPIs for the current slice. (More KPIs will be added here over time.)
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
-              Tonight occupancy {dashboardKpis?.tonightInView ? "" : "(out of view)"}
-            </div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-              {dashboardKpis ? `${Math.round(dashboardKpis.tonightOccupancyPct)}%` : "—"}
-            </div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              {dashboardKpis ? `${dashboardKpis.tonightRoomsOccupied}/${dashboardKpis.tonightTotalRooms} rooms · ${dashboardKpis.firstNightLabel}` : "—"}
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Avg booked rate (in view)</div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-              {dashboardKpis ? `$${Math.round(dashboardKpis.avgRateInView).toLocaleString("en-US")}` : "—"}
-            </div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              {dashboardKpis ? `${dashboardKpis.avgRateNightCount} booked nights` : "—"}
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Orphan nights at risk</div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-              {dashboardKpis ? dashboardKpis.orphanNightsAtRisk : "—"}
-            </div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              {dashboardKpis ? `${dashboardKpis.sandwichMinlosBlockedNights} blocked by MinLOS` : "—"}
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Usable windows (k-night)</div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {[2, 3].map(k => {
-                const before = scorecard?.before.k_windows?.[k] ?? 0;
-                return (
-                  <div key={k} className="border border-border bg-surface-2/40 px-3 py-2">
-                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">k={k}</div>
-                    <div className="text-xl font-serif font-bold text-text tabular-nums">{scorecardLoading ? "…" : before}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Top channel (booked nights)</div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-              {topChannel ? `${topChannel.channel}` : "—"}
-            </div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              {topChannel ? `~${topChannel.sharePct}% share in slice` : "Not enough booked nights to compute"}
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
-              Estimated cancellation rate <AiTag title="Modelled estimate based on channel mix; replace with real cancellations when backend data exists." />
-            </div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">
-              {cancelRatePct != null ? `${cancelRatePct}%` : "—"}
-            </div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              Heuristic estimate (placeholder until cancellation data is available)
-            </div>
-          </div>
-
-          <div className="bg-surface border border-border p-4">
-            <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted flex items-center gap-2">
-              Booking trend (2-year) <AiTag title="Placeholder until historical pace/comps endpoint exists." />
-            </div>
-            <div className="mt-1 text-3xl font-serif font-bold text-text tabular-nums">—</div>
-            <div className="mt-1 text-[10px] text-text-muted">
-              Coming soon: YoY pace vs last 2 years
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {!heatmap && (
-        <div className="bg-surface border border-border py-16 px-6 text-center">
-          <Grid3x3 className="w-8 h-8 text-accent/50 mx-auto mb-4" />
-          {isHeatmapLoading ? (
-            <>
-              <h2 className="text-xl font-serif font-bold text-text mb-2">Loading your bookings...</h2>
-              <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-                Fetching your room calendar and generating insights…
-              </p>
-              <div className="max-w-sm mx-auto">
-                <div className="h-10 bg-surface-2 border border-border/60 animate-pulse" />
-              </div>
-            </>
-          ) : (
-            <>
-              <h2 className="text-xl font-serif font-bold text-text mb-2">Couldn't load your rooms</h2>
-              <p className="text-xs text-text-muted font-medium mb-6 max-w-sm mx-auto leading-relaxed">
-                {heatmapLoadError ?? "Something went wrong loading your booking calendar. Please try again."}
-              </p>
-              <button
-                type="button"
-                className="bg-text text-surface font-semibold hover:bg-text/90 text-xs uppercase tracking-widest px-8 py-3"
-                onClick={() => loadHeatmap()}
-              >
-                Retry load
-              </button>
-            </>
-          )}
-        </div>
-      )}
-        </>
-      )}
-
-      {/* ── DASHBOARD V2 TAB ─────────────────────────────────────────────────── */}
-      {activeTab === "dashboard-v2" && (
         <div>
 
           {/* Header */}

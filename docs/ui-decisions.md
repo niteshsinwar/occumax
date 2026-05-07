@@ -34,7 +34,7 @@ Add new entries as decisions are made. Prefer â€œwhat + why + where implementedâ
   - **Channels**
 
 - **Intent**:
-  - **Dashboard**: executive / at-a-glance KPIs and action queue
+  - **Dashboard**: executive / at-a-glance KPIs and action queue (V2 design; live-data-first)
   - **Occupancy**: capacity recovery (inventory healing / shuffle preview + commit)
   - **Pricing**: rate optimization + marginal revenue capture (Smart Clearance)
   - **Channels**: channel mix / partner performance + allocation guidance
