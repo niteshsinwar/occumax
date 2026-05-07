@@ -6,6 +6,10 @@
 
 :root {
   --bg: #fdfbf7;
+  --nav: #1a1512;
+  --nav-elevated: #221c18;
+  --nav-border: #2f2824;
+  --nav-muted: #a89d93;
   --surface: #ffffff;
   --surface2: #f4eedb;
   --border: #e6dcd3;
