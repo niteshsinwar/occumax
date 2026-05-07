@@ -4,6 +4,18 @@ import { DashboardV2 } from "./pages/DashboardV2";
 import { ReceptionistView } from "./pages/ReceptionistView";
 import { AdminPanel } from "./pages/AdminPanel";
 import { Users, Settings, Grid3x3 } from "lucide-react";
+import type { ReactNode } from "react";
+
+/** Padded main + white content card for routes that are not the full-bleed Overview (/dashboard). */
+function PageShell({ children }: { children: ReactNode }) {
+  return (
+    <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="bg-surface rounded-sm shadow-subtle border border-border/70 border-t-4 border-t-accent p-8 sm:p-10 min-h-[600px] relative">
+        {children}
+      </div>
+    </main>
+  );
+}
 
 /** Top Level Application Shell */
 export default function App() {
@@ -67,21 +79,44 @@ function AppLayout() {
           </div>
         </div>
       </header>
-      
-      {/* Main Content Area */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="bg-surface rounded-sm shadow-subtle border border-border/70 border-t-4 border-t-accent p-8 sm:p-10 min-h-[600px] relative">
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/manager" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/dashboard-v2" element={<DashboardV2 />} />
-            <Route path="/receptionist" element={<ReceptionistView />} />
-            <Route path="/admin" element={<AdminPanel />} />
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
-          </Routes>
-        </div>
-      </main>
+
+      <Routes>
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/manager" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/dashboard"
+          element={
+            <main className="flex-1 w-full flex flex-col min-h-0">
+              <Dashboard />
+            </main>
+          }
+        />
+        <Route
+          path="/dashboard-v2"
+          element={
+            <PageShell>
+              <DashboardV2 />
+            </PageShell>
+          }
+        />
+        <Route
+          path="/receptionist"
+          element={
+            <PageShell>
+              <ReceptionistView />
+            </PageShell>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <PageShell>
+              <AdminPanel />
+            </PageShell>
+          }
+        />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
 
       {/* Luxury Footer */}
       <footer className="bg-surface border-t border-border mt-auto w-full">

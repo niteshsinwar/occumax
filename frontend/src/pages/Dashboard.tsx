@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   dashboardCommitShuffle,
   dashboardOptimiseKNightPreview,
@@ -276,7 +277,21 @@ function computeBirdseyeDashboardKpis(
 export function Dashboard() {
   type OverviewTab = "dashboard" | "occupancy" | "pricing" | "channels";
 
-  const [activeTab, setActiveTab] = useState<OverviewTab>("dashboard");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = useMemo((): OverviewTab => {
+    const t = searchParams.get("tab");
+    if (t === "occupancy" || t === "pricing" || t === "channels" || t === "dashboard") return t;
+    return "dashboard";
+  }, [searchParams]);
+
+  /** Sets Overview subtab; cleans URL when the default Dashboard tab is selected. */
+  const setActiveTab = useCallback(
+    (tab: OverviewTab) => {
+      if (tab === "dashboard") setSearchParams({}, { replace: true });
+      else setSearchParams({ tab }, { replace: true });
+    },
+    [setSearchParams],
+  );
 
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState<boolean>(false);
@@ -661,34 +676,40 @@ export function Dashboard() {
   }, [kNightSwapPlan, loadHeatmap, show, refreshScorecard]);
 
   return (
-    <div>
+    <div className="flex flex-col flex-1 w-full min-h-0 bg-bg">
       <Toasts />
 
       <OverviewSignalsProvider>
         <ExogenousDemandSignals />
 
-        {/* ── OVERVIEW SUBTAB BAR ─────────────────────────────────────── */}
-        <div className="flex items-end justify-between mb-8 border-b border-border/50">
-          <div className="flex gap-0">
-            {(["dashboard", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`px-6 py-4 text-xs font-bold uppercase tracking-widest border-b-2 transition-colors flex items-center gap-2 ${
-                  activeTab === tab
-                    ? "border-accent text-text"
-                    : "border-transparent text-text-muted hover:text-text hover:border-border"
-                }`}
-              >
-                {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5" /> Dashboard</>}
-                {tab === "occupancy" && <><Zap className="w-3.5 h-3.5" /> Occupancy</>}
-                {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5" /> Pricing</>}
-                {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5" /> Channels</>}
-              </button>
-            ))}
+        {/* Cream subtab strip — transitions from dark signals band to main body (mockup). */}
+        <div className="w-full bg-bg border-b border-border/70 shadow-[0_1px_0_rgba(44,27,24,0.04)]">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-wrap items-end gap-0" role="tablist" aria-label="Overview sections">
+              {(["dashboard", "occupancy", "pricing", "channels"] as OverviewTab[]).map(tab => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-4 sm:px-6 py-4 text-[11px] font-bold uppercase tracking-[0.12em] border-b-[3px] transition-colors flex items-center gap-2 ${
+                    activeTab === tab
+                      ? "border-text text-text"
+                      : "border-transparent text-text-muted hover:text-text hover:border-border"
+                  }`}
+                >
+                  {tab === "dashboard" && <><Grid3x3 className="w-3.5 h-3.5 shrink-0" /> Dashboard</>}
+                  {tab === "occupancy" && <><Zap className="w-3.5 h-3.5 shrink-0" /> Occupancy</>}
+                  {tab === "pricing" && <><DollarSign className="w-3.5 h-3.5 shrink-0" /> Pricing</>}
+                  {tab === "channels" && <><BarChart2 className="w-3.5 h-3.5 shrink-0" /> Channels</>}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
+        <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
       {activeTab === "occupancy" && (
         <OccupancyOptimizationTab
           heatmap={heatmap}
@@ -1147,6 +1168,7 @@ export function Dashboard() {
           )}
         </div>
       )}
+        </div>
       </OverviewSignalsProvider>
     </div>
   );

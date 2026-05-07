@@ -4,6 +4,7 @@ import { useOverviewSignals } from "../../context/overviewSignals";
 
 type SignalKind = "EVENT" | "WEATHER" | "TRAVEL" | "MARKET";
 
+/** Maps API/mock kind to the four fixed Overview signal labels (ui-decisions). */
 function labelForKind(kind: SignalKind): string {
   if (kind === "EVENT") return "Big Event";
   if (kind === "WEATHER") return "Weather";
@@ -17,6 +18,10 @@ function pickTopByKind(kind: SignalKind) {
   return [...items].sort((a, b) => computeCompositeScore(b) - computeCompositeScore(a))[0]!;
 }
 
+/**
+ * Full-width dark band: shared exogenous demand context for all Overview subtabs.
+ * Matches OPTIHOST mockup (dark chrome + four white signal cards).
+ */
 export function ExogenousDemandSignals() {
   const { selectedItems } = useOverviewSignals();
   const sections = useMemo(() => {
@@ -25,41 +30,52 @@ export function ExogenousDemandSignals() {
   }, [selectedItems]);
 
   return (
-    <div className="bg-surface border border-border p-5 mb-6">
-      <div className="flex items-end justify-between gap-4 flex-wrap">
-        <div>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Exogenous Demand Signals</div>
-          <div className="text-[11px] text-text-muted mt-1 max-w-3xl leading-relaxed">
-            Shared signals across all subtabs (shown once). Used to contextualize decisions without duplicating the feed inside tabs.
-          </div>
+    <section
+      className="w-full bg-nav-elevated border-b border-nav-border text-[#E8E0D8]"
+      aria-labelledby="exogenous-demand-signals-heading"
+    >
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h2
+            id="exogenous-demand-signals-heading"
+            className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#E8E0D8]"
+          >
+            Exogenous Demand Signals
+          </h2>
+          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-nav-muted shrink-0">
+            Source: Mock context feed
+          </p>
         </div>
-        <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted border border-border/60 bg-surface-2/40 px-3 py-2">
-          Source: mock context feed
-        </div>
-      </div>
 
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        {sections.map(({ kind, item }) => {
-          const title = labelForKind(kind);
-          const score = item ? computeCompositeScore(item) : null;
-          return (
-            <div key={kind} className="border border-border bg-surface-2/20 p-4">
-              <div className="text-[9px] font-black uppercase tracking-widest text-text-muted">{title}</div>
-              <div className="mt-2 text-sm font-bold text-text leading-tight">
-                {item?.title ?? "—"}
-              </div>
-              <div className="mt-1 text-[11px] text-text-muted leading-relaxed line-clamp-3">
-                {item?.detail ?? "No signal configured."}
-              </div>
-              <div className="mt-3 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                <span>Score</span>
-                <span className="font-mono font-black text-text">{score != null ? `${score}/100` : "—"}</span>
-              </div>
-            </div>
-          );
-        })}
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {sections.map(({ kind, item }) => {
+            const title = labelForKind(kind);
+            const score = item ? computeCompositeScore(item) : null;
+            return (
+              <article
+                key={kind}
+                className="rounded-[10px] bg-surface text-text shadow-[0_6px_20px_rgba(0,0,0,0.12)] border border-black/[0.06] p-4 flex flex-col min-h-[140px]"
+              >
+                <div className="text-[9px] font-black uppercase tracking-[0.15em] text-text-muted">
+                  {title}
+                </div>
+                <div className="mt-2 text-sm font-bold text-text leading-snug line-clamp-2">
+                  {item?.title ?? "—"}
+                </div>
+                <div className="mt-1 text-[11px] text-text-muted leading-relaxed line-clamp-3 flex-1">
+                  {item?.detail ?? "No signal configured."}
+                </div>
+                <div className="mt-3 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted pt-2 border-t border-border/60">
+                  <span>Score</span>
+                  <span className="font-mono font-black text-text">
+                    {score != null ? `${score}/100` : "—"}
+                  </span>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
-
