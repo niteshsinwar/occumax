@@ -27,6 +27,17 @@ import { format, parseISO } from "date-fns";
 import type { ContextFeedItem } from "../../mock/contextFeed";
 import { scoreContextBundleWithAi } from "../../mock/aiContextScoring";
 import { useOverviewSignals } from "../../context/overviewSignals";
+import {
+  overviewCardClass,
+  overviewCardLgClass,
+  overviewEyebrowClass,
+  overviewInsetClass,
+  overviewInsightBannerClass,
+  overviewMutedBadgeClass,
+  overviewSectionTitleClass,
+  overviewStackClass,
+  overviewSubtitleClass,
+} from "./overviewChrome";
 
 const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
@@ -651,27 +662,27 @@ export function PricingOptimizationTab() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4">
+    <div className={overviewStackClass}>
       <Toasts />
 
       {/* Pillar 2: Marginal Revenue Capture */}
-      <div className="bg-surface border border-border p-6">
+      <div className={`${overviewCardLgClass} p-6 sm:p-7`}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0">
-            <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Pillar 2</div>
-            <div className="font-serif font-bold text-xl text-text mt-1">Marginal Revenue Capture</div>
-            <div className="text-xs text-text-muted mt-2 max-w-3xl leading-relaxed">
+            <div className={overviewEyebrowClass}>Pillar 2</div>
+            <div className={`${overviewSectionTitleClass} mt-1`}>Marginal Revenue Capture</div>
+            <div className={overviewSubtitleClass}>
               Smart Clearance monetizes “sandwich nights” that cannot be physically moved, while protecting your price floor.
             </div>
           </div>
-          <div className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 border border-border bg-surface-2/40 text-text-muted">
+          <div className={overviewMutedBadgeClass}>
             Real-time elasticity · external shocks · A/B trade-offs (demo)
           </div>
         </div>
 
-        <div className="mt-5">
+        <div className="mt-6">
           {/* Logical Choice + Profit Gauge */}
-          <div className="border border-border bg-surface p-5">
+          <div className={`${overviewInsetClass} p-5 sm:p-6`}>
             <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
               <div>
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Logical choice</div>
@@ -712,7 +723,7 @@ export function PricingOptimizationTab() {
             </div>
 
             {(aiRationale || aiConfidence) && (
-              <div className="mb-4 p-4 border border-accent/25 bg-accent/5">
+              <div className={`mb-4 p-4 sm:p-5 ${overviewInsightBannerClass}`}>
                 <div className="text-[9px] font-bold uppercase tracking-widest text-accent mb-1">
                   AI scoring {aiConfidence ? `· ${aiConfidence} confidence` : ""}
                   {" · "}composite {activeCompositeScore}/100
@@ -804,9 +815,9 @@ export function PricingOptimizationTab() {
       </div>
 
       {/* Existing Pricing features (moved down) */}
-      <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
+      <div className={`${overviewCardLgClass} min-h-[600px] flex flex-col relative overflow-hidden p-0`}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+        <div className="px-6 py-4 border-b border-border/80 shrink-0 bg-surface-2/20 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <DollarSign className="w-4 h-4 text-accent" />
             <div>
@@ -820,7 +831,7 @@ export function PricingOptimizationTab() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             {hasCached && !pricing && (
               <button
                 className="text-[11px] uppercase tracking-widest font-bold text-accent border border-accent/30 px-3 py-2 hover:bg-accent/5 transition-colors flex items-center gap-1.5"
@@ -863,9 +874,9 @@ export function PricingOptimizationTab() {
         </div>
 
         {/* Summary cards */}
-        <div className="px-6 py-4 border-b border-border grid grid-cols-2 lg:grid-cols-4 gap-3 bg-surface-2/10">
+        <div className="px-6 py-4 border-b border-border/80 grid grid-cols-2 lg:grid-cols-4 gap-3 bg-bg/40">
         {/* Card 1: Orphan Nights */}
-        <div className="border border-border bg-surface px-4 py-3">
+        <div className={`${overviewCardClass} px-4 py-3.5`}>
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Orphan Nights</div>
           <div className="text-3xl font-serif font-bold text-text mt-2">
             {cardStats ? cardStats.count : <span className="text-text-muted">—</span>}
@@ -878,7 +889,7 @@ export function PricingOptimizationTab() {
         </div>
 
         {/* Card 2: Revenue Snapshot */}
-        <div className="border border-border bg-surface px-4 py-3">
+        <div className={`${overviewCardClass} px-4 py-3.5`}>
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Revenue Snapshot</div>
           <div className="flex items-end gap-3 mt-2">
             <div>
@@ -901,7 +912,7 @@ export function PricingOptimizationTab() {
         </div>
 
         {/* Card 3: Active Discounts */}
-        <div className="border border-border bg-surface px-4 py-3">
+        <div className={`${overviewCardClass} px-4 py-3.5`}>
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Active Discounts</div>
           <div className="text-3xl font-serif font-bold text-text mt-2">
             {cardStats ? cardStats.roomsDiscounted : <span className="text-text-muted">—</span>}
@@ -910,8 +921,8 @@ export function PricingOptimizationTab() {
         </div>
 
         {/* Card 4: Revenue Rescue */}
-        <div className={`border px-4 py-3 transition-colors ${
-          pricing ? "border-accent/30 bg-accent/[0.03]" : "border-border bg-surface"
+        <div className={`${overviewCardClass} px-4 py-3.5 transition-colors ${
+          pricing ? "!border-accent/35 bg-accent/[0.04]" : ""
         }`}>
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Revenue Rescue</div>
           {pricing ? (
