@@ -75,6 +75,15 @@ This doc defines **which mock “context feed” events** (weather / flights / m
   - re-rank action recommendations
   - explain why certain metrics are highlighted
 
+### Channels subtab — “Strategic Channel Resilience”
+
+- **Uses**: the shared `contextFeed` as the single source of mock “social sentiment/news” signals (Market kind)
+- **Demo trigger**: `bookingcom-24h-downtime` (Market) simulates partner-risk conditions via market/news sentiment
+- **UI**: `frontend/src/components/overview/ChannelOptimizationTab.tsx`
+  - Partner Pulse renders partners with health rings
+  - A mock scenario can set Booking.com → **RED**
+  - Market Radar action runs `scoreContextWithAi({ item })` and recommends whether to pivot **flexible inventory** away from the high-risk partner
+
 ---
 
 ## Editing rules (to avoid drift)
