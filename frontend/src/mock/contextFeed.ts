@@ -61,6 +61,18 @@ export const contextFeed: ContextFeedItem[] = [
       { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only", score: 72, weight: 0.35 },
     ],
   },
+  {
+    id: "bookingcom-24h-downtime",
+    kind: "MARKET",
+    severity: "ALERT",
+    title: "Market: Booking.com experiencing 1-day API downtime (partner risk)",
+    detail:
+      "Social/news chatter indicates sustained outage. Treat as partner-health risk → shift flexible inventory away from high-risk channels to protect net margin.",
+    factors: [
+      { type: "MARKET", label: "Social sentiment / news", value: "Outage trending · negative sentiment ↑ · customer friction ↑", score: 86, weight: 0.65 },
+      { type: "MARKET", label: "Partner reliability", value: "API downtime (24h) · booking conversion ↓ · support load ↑", score: 94, weight: 0.35 },
+    ],
+  },
 ];
 
 export function computeCompositeScore(item: ContextFeedItem): number {

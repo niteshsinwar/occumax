@@ -5,6 +5,8 @@ import {
   getChannelPerformance,
   getChannelRecommendations,
 } from "../../api/client";
+import { contextFeed, computeCompositeScore } from "../../mock/contextFeed";
+import { scoreContextWithAi } from "../../mock/aiContextScoring";
 import type {
   ChannelPerformanceResponse,
   ChannelRecommendResponse,
@@ -26,6 +28,46 @@ import {
 } from "lucide-react";
 
 const ALLOC_CATS = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"];
+const MARKET_RADAR_ITEM_ID = "bookingcom-24h-downtime";
+
+type PartnerHealth = "GREEN" | "AMBER" | "RED";
+type InventoryAllocation = Record<string, number>;
+
+function healthRingClass(health: PartnerHealth): string {
+  if (health === "GREEN") return "border-occugreen/60 shadow-[0_0_0_3px_rgba(34,197,94,0.12)]";
+  if (health === "AMBER") return "border-occuorange/70 shadow-[0_0_0_3px_rgba(249,115,22,0.12)]";
+  return "border-red-500/70 shadow-[0_0_0_3px_rgba(239,68,68,0.12)]";
+}
+
+function healthBadgeClass(health: PartnerHealth): string {
+  if (health === "GREEN") return "bg-occugreen/10 border-occugreen/30 text-occugreen";
+  if (health === "AMBER") return "bg-occuorange/10 border-occuorange/30 text-occuorange";
+  return "bg-red-500/10 border-red-500/30 text-red-600";
+}
+
+function rebalanceFlexibleInventory(args: {
+  partners: string[];
+  fromPartner: string;
+  toPartners: string[];
+  current: InventoryAllocation;
+}): InventoryAllocation {
+  const { partners, fromPartner, toPartners, current } = args;
+  const next: InventoryAllocation = {};
+  for (const p of partners) next[p] = Math.max(0, Math.round(current[p] ?? 0));
+
+  const moved = next[fromPartner] ?? 0;
+  next[fromPartner] = 0;
+  if (moved <= 0 || toPartners.length === 0) return next;
+
+  const share = Math.floor(moved / toPartners.length);
+  let remainder = moved - share * toPartners.length;
+  for (const p of toPartners) {
+    next[p] = (next[p] ?? 0) + share + (remainder > 0 ? 1 : 0);
+    remainder = Math.max(0, remainder - 1);
+  }
+
+  return next;
+}
 
 /**
  * Channel Insights and Optimization tab.
@@ -37,6 +79,34 @@ export function ChannelOptimizationTab() {
   const [channelData, setChannelData] = useState<ChannelPerformanceResponse | null>(null);
   const [channelLoading, setChannelLoading] = useState(false);
   const [channelWindow, setChannelWindow] = useState<7 | 30 | 60>(30);
+
+  const marketRadarItem = useMemo(() => contextFeed.find(i => i.id === MARKET_RADAR_ITEM_ID) ?? null, []);
+  const [partnerHealth, setPartnerHealth] = useState<Record<string, PartnerHealth>>(() => ({
+    "Booking.com": "GREEN",
+    Expedia: "GREEN",
+    Agoda: "GREEN",
+    MakeMyTrip: "GREEN",
+    Goibibo: "GREEN",
+    Direct: "GREEN",
+  }));
+  const partnerList = useMemo(() => Object.keys(partnerHealth), [partnerHealth]);
+
+  const [inventoryBefore, setInventoryBefore] = useState<InventoryAllocation>(() => ({
+    "Booking.com": 3,
+    Expedia: 3,
+    Agoda: 1,
+    MakeMyTrip: 2,
+    Goibibo: 1,
+    Direct: 0,
+  }));
+  const [inventoryAfter, setInventoryAfter] = useState<InventoryAllocation | null>(null);
+  const [marketRadarLoading, setMarketRadarLoading] = useState(false);
+  const [marketRadarResult, setMarketRadarResult] = useState<{
+    compositeScore: number;
+    impact: "LOW" | "MEDIUM" | "HIGH";
+    needsAdjustment: boolean;
+    rationale: string;
+  } | null>(null);
 
   // Channel allocation form state — partner list fetched from backend
   const [allocSources, setAllocSources] = useState<string[]>([]);
@@ -98,6 +168,72 @@ export function ChannelOptimizationTab() {
       });
   }, []);
 
+  const handleTriggerBookingDowntime = () => {
+    setPartnerHealth(prev => ({ ...prev, "Booking.com": "RED" }));
+    show("Mock event triggered: Booking.com experiencing 1-day API downtime", "success");
+  };
+
+  const handleClearPartnerRisk = () => {
+    setPartnerHealth({
+      "Booking.com": "GREEN",
+      Expedia: "GREEN",
+      Agoda: "GREEN",
+      MakeMyTrip: "GREEN",
+      Goibibo: "GREEN",
+      Direct: "GREEN",
+    });
+    setInventoryAfter(null);
+    setMarketRadarResult(null);
+    show("Cleared mock partner risk scenario", "success");
+  };
+
+  const handleRunMarketRadar = async () => {
+    if (!marketRadarItem) {
+      show("Market Radar signal not found", "error");
+      return;
+    }
+
+    setMarketRadarLoading(true);
+    setMarketRadarResult(null);
+    setInventoryAfter(null);
+    try {
+      const compositeScore = computeCompositeScore(marketRadarItem);
+      const ai = await scoreContextWithAi({ item: marketRadarItem });
+      const maxFactor = Math.max(0, ...ai.factors.map(f => f.score ?? 0));
+
+      const impact: "LOW" | "MEDIUM" | "HIGH" = maxFactor >= 85 ? "HIGH" : maxFactor >= 70 ? "MEDIUM" : "LOW";
+      const needsAdjustment = impact !== "LOW";
+
+      setMarketRadarResult({
+        compositeScore,
+        impact,
+        needsAdjustment,
+        rationale: ai.rationale,
+      });
+
+      if (needsAdjustment) {
+        setPartnerHealth(prev => ({ ...prev, "Booking.com": "RED" }));
+        const greenPartners = Object.entries(partnerHealth)
+          .filter(([p, h]) => p !== "Booking.com" && h === "GREEN")
+          .map(([p]) => p);
+        const rebalanced = rebalanceFlexibleInventory({
+          partners: partnerList,
+          fromPartner: "Booking.com",
+          toPartners: greenPartners.length > 0 ? greenPartners : partnerList.filter(p => p !== "Booking.com"),
+          current: inventoryBefore,
+        });
+        setInventoryAfter(rebalanced);
+        show("Market Radar: flexible inventory pivot applied", "success");
+      } else {
+        show("Market Radar: no flexible inventory adjustment needed", "success");
+      }
+    } catch {
+      show("Market Radar analysis failed", "error");
+    } finally {
+      setMarketRadarLoading(false);
+    }
+  };
+
   const handleAllocate = async () => {
     if (!allocIn || !allocOut || allocCount < 1) return;
     setAllocLoading(true);
@@ -158,6 +294,147 @@ export function ChannelOptimizationTab() {
   return (
     <div className="space-y-6">
       <Toasts />
+
+      {/* Strategic Channel Resilience */}
+      <div className="border border-border bg-surface p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-serif font-bold text-xl text-text">Strategic Channel Resilience</h2>
+            <p className="text-xs text-text-muted mt-1 uppercase tracking-widest">
+              Market Radar monitors partner health and shifts flexible inventory away from high-risk channels to protect net margin.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleRunMarketRadar}
+              disabled={marketRadarLoading}
+              className="bg-text text-surface text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:opacity-90 active:scale-95 disabled:opacity-40 flex items-center gap-2 transition-all"
+            >
+              {marketRadarLoading ? (
+                <>
+                  <div className="w-3 h-3 border border-white/40 border-t-white rounded-full animate-spin" /> Running Radar…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" /> Run Market Radar
+                </>
+              )}
+            </button>
+            <button
+              onClick={handleTriggerBookingDowntime}
+              className="bg-red-600 text-white text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:brightness-110 active:scale-95 transition-all"
+            >
+              Trigger Downtime
+            </button>
+            <button
+              onClick={handleClearPartnerRisk}
+              className="bg-surface border border-border text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:bg-surface-2 active:scale-95 transition-all text-text-muted"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-6">
+          {/* Partner Pulse */}
+          <div className="border border-border bg-surface-2/40 p-5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-3">Partner Pulse</div>
+            <div className="space-y-2">
+              {partnerList.map(p => {
+                const health = partnerHealth[p] ?? "GREEN";
+                return (
+                  <div key={p} className="flex items-center justify-between border border-border bg-surface px-4 py-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-9 h-9 rounded-full border-2 ${healthRingClass(health)} bg-surface flex items-center justify-center`}>
+                        <div className="w-2 h-2 rounded-full bg-text/50" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-text truncate">{p}</div>
+                        <div className="text-[10px] text-text-muted uppercase tracking-widest truncate">
+                          {health === "GREEN" ? "Healthy" : health === "AMBER" ? "Watch" : "High risk"}
+                        </div>
+                      </div>
+                    </div>
+                    <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 border ${healthBadgeClass(health)}`}>
+                      {health}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {marketRadarItem && (
+              <div className="mt-4 text-[11px] text-text-muted leading-relaxed">
+                Signal source (Market context): <span className="text-text font-bold">{marketRadarItem.title}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Strategic Pivot */}
+          <div className="border border-border bg-surface-2/40 p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Strategic Pivot</div>
+                <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
+                  Flexible inventory (not contract-locked) shifts priority to green partners when a partner-risk scenario is detected.
+                </div>
+              </div>
+              {marketRadarResult && (
+                <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 border ${
+                  marketRadarResult.impact === "HIGH"
+                    ? "bg-red-500/10 border-red-500/30 text-red-600"
+                    : marketRadarResult.impact === "MEDIUM"
+                      ? "bg-occuorange/10 border-occuorange/30 text-occuorange"
+                      : "bg-surface border-border text-text-muted"
+                }`}>
+                  Impact {marketRadarResult.impact}
+                </span>
+              )}
+            </div>
+
+            {marketRadarResult ? (
+              <div className="mt-4 border border-border bg-surface p-4">
+                <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
+                  AI assessment · composite {marketRadarResult.compositeScore}/100 · {marketRadarResult.needsAdjustment ? "adjustment recommended" : "no adjustment"}
+                </div>
+                <div className="text-xs text-text-muted mt-2 leading-relaxed">{marketRadarResult.rationale}</div>
+              </div>
+            ) : (
+              <div className="mt-4 border border-dashed border-border bg-surface p-4 text-xs text-text-muted">
+                Run Market Radar to evaluate impact and determine if a flexible inventory adjustment is needed.
+              </div>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="border border-border bg-surface p-4">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Flexible inventory (before)</div>
+                <div className="space-y-1 text-[11px] text-text-muted">
+                  {partnerList.map(p => (
+                    <div key={`b-${p}`} className="flex items-center justify-between">
+                      <span className="truncate">{p}</span>
+                      <span className="font-mono font-bold text-text">{inventoryBefore[p] ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="border border-border bg-surface p-4">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Flexible inventory (after)</div>
+                {inventoryAfter ? (
+                  <div className="space-y-1 text-[11px] text-text-muted">
+                    {partnerList.map(p => (
+                      <div key={`a-${p}`} className="flex items-center justify-between">
+                        <span className="truncate">{p}</span>
+                        <span className="font-mono font-bold text-text">{inventoryAfter[p] ?? 0}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-text-muted">—</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Header + window selector */}
       <div className="flex items-center justify-between">
