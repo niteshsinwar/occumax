@@ -17,7 +17,7 @@ export type ContextFeedItem = {
 };
 
 /**
- * Shared mock “context triggers” used across demo surfaces (Pricing / Occupancy / Optimizer).
+ * Shared mock “context triggers” used across demo surfaces (Pricing / Occupancy / Channels).
  * Keep this as the single source of truth so the story stays consistent in pitch flows.
  */
 export const contextFeed: ContextFeedItem[] = [
