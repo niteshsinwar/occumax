@@ -246,7 +246,7 @@ export function ChannelOptimizationTab() {
       });
 
       if (needsAdjustment) {
-        const nextHealth = { ...partnerHealth, "Booking.com": "RED" as const };
+        const nextHealth: Record<string, PartnerHealth> = { ...partnerHealth, "Booking.com": "RED" };
         setPartnerHealth(nextHealth);
         const greenPartners = partnerList.filter(p => p !== "Booking.com" && (nextHealth[p] ?? "GREEN") === "GREEN");
         const rebalanced = rebalanceFlexibleInventory({
