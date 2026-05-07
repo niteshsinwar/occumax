@@ -26,6 +26,12 @@ Add new entries as decisions are made. Prefer â€œwhat + why + where implementedâ
 - **Why**: Deep-linking and refresh-safe state for operator workflows.
 - **Where**: `frontend/src/pages/Dashboard.tsx` (`useSearchParams`).
 
+### Decision: Shared Overview card chrome (all subtabs)
+
+- **What**: `frontend/src/components/overview/overviewChrome.ts` exports reusable Tailwind bundles (`overviewCardClass`, `overviewCardLgClass`, `overviewInsightBannerClass`, `overviewStackClass`, buttons/badges, etc.) so **Dashboard**, **Pricing**, and **Channels** use the same radii, shadows, and borders as the Occupancy reference.
+- **Why**: One coherent OPTIHOST-style system across the four Overview pillars; avoids duplicated long class strings.
+- **Where**: `Dashboard.tsx` (Dashboard subtab), `PricingOptimizationTab.tsx`, `ChannelOptimizationTab.tsx`.
+
 ---
 
 ## Overview page (primary surface)
