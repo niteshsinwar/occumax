@@ -17,18 +17,16 @@ import type {
 import { useToast } from "../shared/Toast";
 import { AiTag } from "../shared/AiTag";
 import {
-  AlertTriangle,
   ArrowRight,
   BarChart2,
   CheckCircle2,
   RefreshCw,
   Sparkles,
-  TrendingUp,
   XCircle,
 } from "lucide-react";
 
-const ALLOC_CATS = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"];
 const MARKET_RADAR_ITEM_ID = "bookingcom-24h-downtime";
+const CHANNEL_AI_WINDOW_DAYS = 15;
 
 type PartnerHealth = "GREEN" | "AMBER" | "RED";
 type InventoryAllocation = Record<string, number>;
@@ -139,18 +137,6 @@ export function ChannelOptimizationTab() {
     rationale: string;
   } | null>(null);
 
-  // Channel allocation form state — partner list fetched from backend
-  const [allocSources, setAllocSources] = useState<string[]>([]);
-  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const defaultOut = useMemo(() => new Date(Date.now() + 3 * 86400000).toISOString().split("T")[0], []);
-  const [allocSource, setAllocSource] = useState("");
-  const [allocCat, setAllocCat] = useState("DELUXE");
-  const [allocIn, setAllocIn] = useState(todayStr);
-  const [allocOut, setAllocOut] = useState(defaultOut);
-  const [allocCount, setAllocCount] = useState(1);
-  const [allocLoading, setAllocLoading] = useState(false);
-  const [allocResult, setAllocResult] = useState<{ message: string; rooms: string[]; booking_ids: string[] } | null>(null);
-
   // AI channel recommendations
   const [aiRecs, setAiRecs] = useState<ChannelRecommendResponse | null>(null);
   const [aiRecsLoading, setAiRecsLoading] = useState(false);
@@ -178,8 +164,6 @@ export function ChannelOptimizationTab() {
       .then(res => {
         const d = res.data as { ota: { name: string }[]; gds: { name: string }[]; direct: { name: string }[] };
         const sources = [...d.direct.map(p => p.name), ...d.ota.map(p => p.name), ...d.gds.map(p => p.name)];
-        setAllocSources(sources);
-        setAllocSource(prev => prev || sources[2] || sources[0]);
 
         // Partner Pulse should reflect the backend partner set. Use Direct + OTA + (optionally) GDS.
         const pulsePartners = sources.filter(Boolean);
@@ -201,8 +185,6 @@ export function ChannelOptimizationTab() {
           "Sabre",
           "Travelport",
         ];
-        setAllocSources(fallback);
-        setAllocSource(prev => prev || "MakeMyTrip");
 
         setPartnerHealth(buildDefaultHealthMap(fallback));
         setInventoryBefore(buildDefaultFlexibleInventory(fallback, 10));
@@ -267,29 +249,6 @@ export function ChannelOptimizationTab() {
     }
   };
 
-  const handleAllocate = async () => {
-    if (!allocIn || !allocOut || allocCount < 1) return;
-    setAllocLoading(true);
-    setAllocResult(null);
-    try {
-      const res = await channelAllocate({
-        booking_source: allocSource,
-        category: allocCat,
-        check_in: allocIn,
-        check_out: allocOut,
-        room_count: allocCount,
-      });
-      setAllocResult(res.data);
-      show(res.data.message, "success");
-      loadChannelData(channelWindow);
-    } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Allocation failed";
-      show(msg, "error");
-    } finally {
-      setAllocLoading(false);
-    }
-  };
-
   const handleRunAiAnalysis = async () => {
     setAiRecsLoading(true);
     setAiRecs(null);
@@ -323,6 +282,18 @@ export function ChannelOptimizationTab() {
       show(msg, "error");
     }
   };
+
+  const filteredAiRecs = useMemo(() => {
+    if (!aiRecs) return null;
+    const start = new Date();
+    const end = new Date(Date.now() + (CHANNEL_AI_WINDOW_DAYS - 1) * 86400000);
+    const withinWindow = (d: string) => {
+      const dt = new Date(d);
+      return !Number.isNaN(dt.getTime()) && dt >= start && dt <= end;
+    };
+    const recommendations = aiRecs.recommendations.filter(r => withinWindow(r.check_in));
+    return { ...aiRecs, recommendations };
+  }, [aiRecs]);
 
   return (
     <div className="space-y-6">
@@ -505,43 +476,6 @@ export function ChannelOptimizationTab() {
 
       {!channelLoading && channelData && (
         <>
-          {/* AI Allocation Recommendation */}
-          <div className="bg-accent/5 border border-accent/20 p-6">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4 text-accent" />
-              </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-accent mb-2 flex items-center gap-2">
-                  Revenue Intelligence · Channel Optimisation <AiTag title="YieldIQ recommends channel allocations based on performance and gap patterns (you approve before committing)." />
-                </div>
-                <p className="text-sm text-text leading-relaxed mb-4">{channelData.recommendation}</p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
-                  {channelData.channels.slice(0, 3).map((ch: ChannelStat) => {
-                    const netPct = channelData.total_gross_revenue > 0 ? Math.round((ch.net_revenue / channelData.total_gross_revenue) * 100) : 0;
-                    const advice =
-                      ch.commission_pct === 0
-                        ? "Maximise allocation — zero commission, full revenue retained"
-                        : ch.share_pct > 50
-                          ? "High dependency — reduce allocation, push direct equivalent"
-                          : ch.share_pct < 10
-                            ? "Low volume — consider increasing if direct inventory is full"
-                            : "Balanced — maintain current allocation";
-                    return (
-                      <div key={ch.channel} className="bg-surface border border-border p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-text">{ch.channel}</span>
-                          <span className="text-[10px] font-bold text-text-muted">{netPct}% of net</span>
-                        </div>
-                        <div className="text-[10px] text-text-muted leading-relaxed">{advice}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-
           {/* AI Channel Recommendation Panel */}
           <div className="border border-accent/20 bg-accent/5 p-6">
             <div className="flex items-center justify-between mb-5">
@@ -553,7 +487,7 @@ export function ChannelOptimizationTab() {
                   <div className="text-[10px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
                     YieldIQ · Channel Allocation <AiTag title="YieldIQ recommends where to push inventory across partners to improve net yield." />
                   </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">Analyses 14-day gaps + partner history to recommend where to push inventory</div>
+                  <div className="text-[10px] text-text-muted mt-0.5">Analyses the next {CHANNEL_AI_WINDOW_DAYS} days of gaps + partner history to recommend where to push inventory</div>
                 </div>
               </div>
               <button
@@ -580,17 +514,17 @@ export function ChannelOptimizationTab() {
               </div>
             )}
 
-            {aiRecs && !aiRecsLoading && (
+            {filteredAiRecs && !aiRecsLoading && (
               <div className="space-y-3">
-                {aiRecs.summary && (
+                {filteredAiRecs.summary && (
                   <div className="bg-surface border border-border p-4 text-sm text-text leading-relaxed">
-                    {aiRecs.summary}
+                    {filteredAiRecs.summary}
                   </div>
                 )}
-                {aiRecs.recommendations.length === 0 && (
+                {filteredAiRecs.recommendations.length === 0 && (
                   <div className="py-8 text-center text-xs text-text-muted">No recommendations — your channel mix looks healthy.</div>
                 )}
-                {aiRecs.recommendations.map((rec: ChannelRecommendation, idx: number) => {
+                {filteredAiRecs.recommendations.map((rec: ChannelRecommendation, idx: number) => {
                   const isCommitted = committedRecs.has(idx);
                   const isSkipped = skippedRecs.has(idx);
                   const confColor =
@@ -667,108 +601,9 @@ export function ChannelOptimizationTab() {
               </div>
             )}
 
-            {!aiRecs && !aiRecsLoading && (
+            {!filteredAiRecs && !aiRecsLoading && (
               <div className="py-8 text-center text-xs text-text-muted border border-dashed border-accent/20">
                 Press "Run AI Analysis" — YieldIQ will check your gaps and recommend channel allocations.
-              </div>
-            )}
-          </div>
-
-          {/* Channel Allocation Commit Panel */}
-          <div className="border border-border bg-surface p-6">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-8 h-8 bg-text/5 border border-border flex items-center justify-center shrink-0">
-                <TrendingUp className="w-4 h-4 text-text" />
-              </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-text">Commit Channel Allocation</div>
-                <div className="text-[10px] text-text-muted mt-0.5">Pre-block inventory for a booking source based on AI recommendation</div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Booking Source</label>
-                <select
-                  value={allocSource}
-                  onChange={e => setAllocSource(e.target.value)}
-                  className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                >
-                  {allocSources.map(s => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Category</label>
-                <select
-                  value={allocCat}
-                  onChange={e => setAllocCat(e.target.value)}
-                  className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                >
-                  {ALLOC_CATS.map(c => (
-                    <option key={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Check-in</label>
-                <input
-                  type="date"
-                  value={allocIn}
-                  min={todayStr}
-                  onChange={e => setAllocIn(e.target.value)}
-                  className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Check-out</label>
-                <input
-                  type="date"
-                  value={allocOut}
-                  min={allocIn}
-                  onChange={e => setAllocOut(e.target.value)}
-                  className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Rooms</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={allocCount}
-                  onChange={e => setAllocCount(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full bg-surface-2 border border-border text-xs px-2 py-2 text-text focus:border-accent focus:outline-none"
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  onClick={handleAllocate}
-                  disabled={allocLoading}
-                  className="w-full bg-text text-surface font-bold uppercase tracking-widest text-[10px] px-3 py-2 hover:opacity-90 active:scale-95 disabled:opacity-40 flex items-center justify-center gap-1.5 transition-all"
-                >
-                  {allocLoading ? (
-                    <>
-                      <AlertTriangle className="w-3 h-3 animate-pulse" />
-                      Working…
-                    </>
-                  ) : (
-                    <>Allocate</>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {allocResult && (
-              <div className="bg-occugreen/5 border border-occugreen/30 p-3 text-xs">
-                <div className="font-bold text-occugreen uppercase tracking-widest text-[10px] mb-1">Allocation committed</div>
-                <div className="text-text">{allocResult.message}</div>
-                {allocResult.rooms.length > 0 && (
-                  <div className="text-text-muted mt-1">
-                    Rooms: {allocResult.rooms.join(", ")} · Booking IDs: {allocResult.booking_ids.join(", ")}
-                  </div>
-                )}
               </div>
             )}
           </div>
