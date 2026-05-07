@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Sparkles, Blocks, Radar, Newspaper, ArrowRightLeft } from "lucide-react";
 import type { HeatmapCell, HeatmapRow, RoomCategory } from "../types";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
+import { getPrimaryShockTrigger } from "../mock/contextFeed";
 
 type OptimizerTab = "inventoryReconstitution" | "marginalRevenueCapture" | "channelResilience";
 
@@ -200,6 +201,7 @@ export function Optimizer() {
   // ── Tab 2: clearance + profit gauge ────────────────────────────────────────
   const clearanceDates = useMemo(() => dateRange("2026-05-20", 7), []);
   const [shockTriggered, setShockTriggered] = useState(false);
+  const shock = useMemo(() => getPrimaryShockTrigger(), []);
   const discountedRate = 110;
   const operationalCost = 40;
   const netProfit = discountedRate - operationalCost;
@@ -393,9 +395,9 @@ export function Optimizer() {
                 }`}
               >
                 <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Alert</div>
-                <div className="font-bold text-text mt-1">O’Hare Airport: 50+ Flight Cancellations Due to Weather</div>
+                <div className="font-bold text-text mt-1">{shock.title}</div>
                 <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
-                  External shock detected → last-minute demand spike likely. Trigger clearance simulation.
+                  {shock.detail}
                 </div>
               </button>
               {shockTriggered && (

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { AiTag } from "../shared/AiTag";
 import { format, parseISO } from "date-fns";
+import { getPrimaryShockTrigger } from "../../mock/contextFeed";
 
 const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
@@ -89,6 +90,34 @@ function computeRevenueStats(rows: HeatmapRow[], maxDays: number): {
     }
   }
   return { unsoldRooms, revenueAtRisk, revenueOnBooks, roomsDiscounted };
+}
+
+function findFirstSandwichNight(rows: HeatmapRow[], maxDays: number): {
+  roomId: string;
+  category: string;
+  date: string;
+  currentRate: number;
+  baseRate: number;
+} | null {
+  for (const row of rows) {
+    const cells = row.cells.slice(0, maxDays);
+    for (let i = 1; i < cells.length - 1; i++) {
+      const c = cells[i];
+      const before = cells[i - 1];
+      const after = cells[i + 1];
+      if (!c || !before || !after) continue;
+      if (c.block_type !== "EMPTY") continue;
+      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
+      return {
+        roomId: String(row.room_id),
+        category: String(row.category),
+        date: String(c.date),
+        currentRate: Number(c.current_rate ?? row.base_rate),
+        baseRate: Number(row.base_rate),
+      };
+    }
+  }
+  return null;
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -275,8 +304,11 @@ export function PricingOptimizationTab() {
   const [hasCached, setHasCached] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [customRates, setCustomRates] = useState<Record<string, number>>({});
+  const [shockTriggered, setShockTriggered] = useState(false);
 
   const WINDOW_DAYS = 20;
+  const shock = useMemo(() => getPrimaryShockTrigger(), []);
+  const operationalCost = 40;
 
   // ── Load heatmap on mount ──────────────────────────────────────────────────
 
@@ -316,6 +348,19 @@ export function PricingOptimizationTab() {
     const rev = computeRevenueStats(heatmap.rows, WINDOW_DAYS);
     return { ...orphan, ...rev };
   }, [heatmap]);
+
+  const firstSandwich = useMemo(() => {
+    if (!heatmap) return null;
+    return findFirstSandwichNight(heatmap.rows, WINDOW_DAYS);
+  }, [heatmap]);
+
+  const clearanceScenario = useMemo(() => {
+    const discountedRate = 110;
+    const netProfit = discountedRate - operationalCost;
+    const gaugeMax = 120;
+    const profitPct = Math.max(0, Math.min(100, (netProfit / gaugeMax) * 100));
+    return { discountedRate, netProfit, profitPct, gaugeMax };
+  }, [operationalCost]);
 
   // ── Run analysis ──────────────────────────────────────────────────────────
 
@@ -451,68 +496,182 @@ export function PricingOptimizationTab() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
+    <div className="space-y-4">
       <Toasts />
 
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
-        <div className="flex items-center gap-3">
-          <DollarSign className="w-4 h-4 text-accent" />
-          <div>
-            <div className="text-sm font-bold text-text flex items-center gap-2">
-              Pricing Optimization{" "}
-              <AiTag title="RateIQ runs 5 parallel AI calls — weather, events, market news, historical trends, occupancy — then synthesizes into a 20-day pricing calendar per room category." />
+      {/* Pillar 2: Marginal Revenue Capture */}
+      <div className="bg-surface border border-border p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Pillar 2</div>
+            <div className="font-serif font-bold text-xl text-text mt-1">Marginal Revenue Capture</div>
+            <div className="text-xs text-text-muted mt-2 max-w-3xl leading-relaxed">
+              Smart Clearance monetizes “sandwich nights” that cannot be physically moved, while protecting your price floor.
             </div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-              Multi-signal AI · 20-day calendar view · click cells to select for commit
-            </div>
+          </div>
+          <div className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 border border-border bg-surface-2/40 text-text-muted">
+            Real-time elasticity · external shocks · A/B trade-offs (demo)
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {hasCached && !pricing && (
+        <div className="mt-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+          {/* Context Trigger / News Feed */}
+          <div className="border border-border bg-surface p-5">
+            <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-3">Context trigger</div>
             <button
-              className="text-[11px] uppercase tracking-widest font-bold text-accent border border-accent/30 px-3 py-2 hover:bg-accent/5 transition-colors flex items-center gap-1.5"
-              onClick={loadCached}
+              type="button"
+              onClick={() => setShockTriggered(true)}
+              className={`w-full text-left p-4 border transition-colors ${
+                shockTriggered ? "border-accent/40 bg-accent/10" : "border-border bg-surface-2/40 hover:bg-surface-2"
+              }`}
             >
-              <Clock className="w-3 h-3" /> Previous Analysis
+              <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">News feed</div>
+              <div className="font-bold text-text mt-1">{shock.title}</div>
+              <div className="text-[11px] text-text-muted mt-1 leading-relaxed">{shock.detail}</div>
             </button>
-          )}
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <div className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 border ${
+                shockTriggered ? "border-accent/30 bg-accent/5 text-accent" : "border-border bg-surface-2/30 text-text-muted"
+              }`}>
+                {shockTriggered ? "Trigger active" : "Waiting"}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShockTriggered(false)}
+                className="text-[10px] font-bold uppercase tracking-widest px-3 py-2 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
 
-          <button
-            className="text-[11px] uppercase tracking-widest font-bold text-text-muted hover:text-text border border-border px-3 py-2 hover:bg-surface-2 transition-colors flex items-center gap-1.5 disabled:opacity-40"
-            onClick={refreshHeatmap}
-            disabled={loadingHeatmap}
-          >
-            {loadingHeatmap ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-            Refresh
-          </button>
+          {/* Logical Choice + Profit Gauge */}
+          <div className="border border-border bg-surface p-5 xl:col-span-2">
+            <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Logical choice</div>
+                <div className="font-serif font-bold text-base text-text mt-0.5">Sell the stranded sandwich night</div>
+                <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
+                  {firstSandwich
+                    ? <>Highlighted candidate: <span className="font-bold text-text">{firstSandwich.category}</span> · <span className="font-mono font-bold text-text">{firstSandwich.date}</span></>
+                    : "No sandwich night found in the current 20-day slice (refresh heatmap and retry)."}
+                </div>
+              </div>
+              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
+                <AiTag title="Demo panel: uses shared mock context triggers and a fixed cost model to show decision logic and profit, independent of RateIQ calendar recommendations." />
+              </div>
+            </div>
 
-          <button
-            className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:bg-text/90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
-            onClick={runAnalysis}
-            disabled={analysing}
-          >
-            {analysing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-            Run Analysis
-          </button>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="bg-surface-2/40 border border-border p-4">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Target slot</div>
+                <div className="space-y-2 text-sm text-text">
+                  <div className="flex items-center justify-between">
+                    <span className="text-text-muted font-medium">Previously empty</span>
+                    <span className="font-mono font-bold tabular-nums">$0</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-text-muted font-medium">Discounted offer (Last Minute)</span>
+                    <span className="font-mono font-bold tabular-nums">${clearanceScenario.discountedRate}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-text-muted font-medium">TCO (Operational cost)</span>
+                    <span className="font-mono font-bold tabular-nums">-${operationalCost}</span>
+                  </div>
+                  <div className="pt-2 mt-2 border-t border-border flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-widest font-bold text-text-muted">Net profit</span>
+                    <span className={`font-mono font-black tabular-nums ${shockTriggered ? "text-occugreen" : "text-text"}`}>
+                      {shockTriggered ? `$${clearanceScenario.netProfit}` : "—"}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-3 text-[11px] text-text-muted leading-relaxed">
+                  A/B trade-off sim: clearance only activates on a shock trigger and still respects the price floor (demo rule).
+                </div>
+              </div>
 
-          {pricing && !committed && (
-            <button
-              className="bg-occugreen text-white text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:brightness-110 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
-              onClick={handleCommit}
-              disabled={committing || selectedCount === 0}
-            >
-              {committing
-                ? <><Loader2 className="w-3 h-3 animate-spin" /> Committing</>
-                : <><CheckCircle2 className="w-3 h-3" /> Commit ({selectedCount})</>}
-            </button>
-          )}
+              <div className="bg-surface-2/40 border border-border p-4">
+                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Profit gauge</div>
+                <div className="h-3.5 bg-surface border border-border overflow-hidden">
+                  <div
+                    className="h-full bg-occugreen/70 transition-all duration-700"
+                    style={{ width: shockTriggered ? `${clearanceScenario.profitPct}%` : "0%" }}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted">
+                  <span>$0 (empty)</span>
+                  <span>{shockTriggered ? `$${clearanceScenario.netProfit} net` : "$—"}</span>
+                </div>
+                <div className="mt-3 text-[11px] text-text-muted leading-relaxed">
+                  Converts a 100% loss into net profit while explaining cost, not just discount depth.
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="px-6 py-4 border-b border-border grid grid-cols-2 lg:grid-cols-4 gap-3 bg-surface-2/10">
+      {/* Existing Pricing features (moved down) */}
+      <div className="bg-surface border border-border min-h-[600px] flex flex-col relative">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+          <div className="flex items-center gap-3">
+            <DollarSign className="w-4 h-4 text-accent" />
+            <div>
+              <div className="text-sm font-bold text-text flex items-center gap-2">
+                RateIQ Pricing Optimization{" "}
+                <AiTag title="RateIQ runs 5 parallel AI calls — weather, events, market news, historical trends, occupancy — then synthesizes into a 20-day pricing calendar per room category." />
+              </div>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
+                Existing features · multi-signal AI · 20-day calendar · click cells to select for commit
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {hasCached && !pricing && (
+              <button
+                className="text-[11px] uppercase tracking-widest font-bold text-accent border border-accent/30 px-3 py-2 hover:bg-accent/5 transition-colors flex items-center gap-1.5"
+                onClick={loadCached}
+              >
+                <Clock className="w-3 h-3" /> Previous Analysis
+              </button>
+            )}
+
+            <button
+              className="text-[11px] uppercase tracking-widest font-bold text-text-muted hover:text-text border border-border px-3 py-2 hover:bg-surface-2 transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              onClick={refreshHeatmap}
+              disabled={loadingHeatmap}
+            >
+              {loadingHeatmap ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Refresh
+            </button>
+
+            <button
+              className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:bg-text/90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
+              onClick={runAnalysis}
+              disabled={analysing}
+            >
+              {analysing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              Run Analysis
+            </button>
+
+            {pricing && !committed && (
+              <button
+                className="bg-occugreen text-white text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:brightness-110 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
+                onClick={handleCommit}
+                disabled={committing || selectedCount === 0}
+              >
+                {committing
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Committing</>
+                  : <><CheckCircle2 className="w-3 h-3" /> Commit ({selectedCount})</>}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Summary cards */}
+        <div className="px-6 py-4 border-b border-border grid grid-cols-2 lg:grid-cols-4 gap-3 bg-surface-2/10">
         {/* Card 1: Orphan Nights */}
         <div className="border border-border bg-surface px-4 py-3">
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Orphan Nights</div>
