@@ -35,6 +35,15 @@ import { OverviewSignalsProvider } from "../context/overviewSignals";
 import { BarChart2, DollarSign, Grid3x3, RefreshCw, AlertTriangle, Zap, Sparkles, ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 import { AiTag } from "../components/shared/AiTag";
+import {
+  overviewCardClass,
+  overviewCardLgClass,
+  overviewEyebrowClass,
+  overviewInsightBannerClass,
+  overviewSecondaryBtnClass,
+  overviewStackClass,
+  overviewTitleClass,
+} from "../components/overview/overviewChrome";
 
 /**
  * Distinct room categories in heatmap row order (SQL `ORDER BY category, id`), for filters aligned with inventory in the database.
@@ -744,33 +753,30 @@ export function Dashboard() {
 
       {/* ── DASHBOARD (V2) TAB ─────────────────────────────────────────────── */}
       {activeTab === "dashboard" && (
-        <div>
+        <div className={overviewStackClass}>
 
           {/* Header */}
-          <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-0.5">Revenue Intelligence Center</div>
-              <h1 className="font-serif font-bold text-2xl text-text">Hotel at a Glance</h1>
+              <div className={`${overviewEyebrowClass} mb-0.5`}>Revenue Intelligence Center</div>
+              <h1 className={overviewTitleClass}>Hotel at a Glance</h1>
               <p className="text-[11px] text-text-muted mt-1">
                 {heatmapCategories.length} room type{heatmapCategories.length !== 1 ? "s" : ""} · {allRows.length} active rooms · all data live from DB
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex gap-1 border border-border bg-surface-2/50">
+              <div className="flex gap-0 rounded-[10px] border border-border/80 overflow-hidden shadow-subtle bg-surface-2/40">
                 {([1, 2, 3] as BirdseyeWeekSpan[]).map(w => (
                   <button
                     key={w}
                     onClick={() => setWeekSpan(w)}
-                    className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 transition-all ${weekSpan === w ? "bg-text text-surface" : "text-text-muted hover:text-text hover:bg-surface"}`}
+                    className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 transition-all ${weekSpan === w ? "bg-text text-surface" : "text-text-muted hover:text-text hover:bg-surface"}`}
                   >
                     {w}W
                   </button>
                 ))}
               </div>
-              <button
-                onClick={refreshAllData}
-                className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface text-text-muted hover:text-text hover:bg-surface-2 transition-all"
-              >
+              <button type="button" onClick={refreshAllData} className={overviewSecondaryBtnClass}>
                 <RefreshCw className="w-3 h-3" /> Refresh
               </button>
             </div>
@@ -778,7 +784,7 @@ export function Dashboard() {
 
           {/* Loading / error state */}
           {!heatmap && (
-            <div className="py-20 text-center bg-surface border border-border">
+            <div className={`py-20 text-center ${overviewCardLgClass} px-4`}>
               <Grid3x3 className="w-8 h-8 text-accent/40 mx-auto mb-4" />
               {isHeatmapLoading ? (
                 <p className="text-sm text-text-muted">Loading hotel data…</p>
@@ -794,11 +800,11 @@ export function Dashboard() {
           )}
 
           {heatmap && (
-            <>
+            <div className="space-y-6">
               {/* ── KPI STRIP (7 cards) ──────────────────────────────────────── */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-2 mb-6">
+              <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3">
 
-                <div className="bg-surface border border-border p-4">
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
                   <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Tonight</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
                     {v2Kpis ? `${Math.round(v2Kpis.tonightOccupancyPct)}%` : "—"}
@@ -812,7 +818,7 @@ export function Dashboard() {
                   const n = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
                   const isRisk = n > 0;
                   return (
-                    <div className={`bg-surface border p-4 ${isRisk ? "border-occuorange/50" : "border-border"}`}>
+                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isRisk ? "!border-occuorange/50" : ""}`}>
                       <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan Nights</div>
                       <div className={`text-2xl font-serif font-bold tabular-nums ${isRisk ? "text-occuorange" : "text-text"}`}>{n}</div>
                       <div className="text-[10px] text-text-muted mt-0.5">stranded gaps</div>
@@ -824,7 +830,7 @@ export function Dashboard() {
                   const v = scorecard?.before.revenue_at_risk ?? 0;
                   const isRisk = v > 0;
                   return (
-                    <div className={`bg-surface border p-4 ${isRisk ? "border-occuorange/30" : "border-border"}`}>
+                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isRisk ? "!border-occuorange/35" : ""}`}>
                       <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Rev at Risk</div>
                       <div className={`text-2xl font-serif font-bold tabular-nums ${isRisk ? "text-occuorange" : "text-text"}`}>
                         {scorecard ? `$${Math.round(v).toLocaleString("en-US")}` : "—"}
@@ -834,7 +840,7 @@ export function Dashboard() {
                   );
                 })()}
 
-                <div className="bg-surface border border-border p-4">
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
                   <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Avg Rate</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
                     {v2Kpis ? `$${Math.round(v2Kpis.avgRateInView).toLocaleString("en-US")}` : "—"}
@@ -844,7 +850,7 @@ export function Dashboard() {
                   </div>
                 </div>
 
-                <div className="bg-surface border border-border p-4">
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
                   <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=2 Windows</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
                     {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[2] ?? "—")}
@@ -852,7 +858,7 @@ export function Dashboard() {
                   <div className="text-[10px] text-text-muted mt-0.5">2-night openings</div>
                 </div>
 
-                <div className="bg-surface border border-border p-4">
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
                   <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Top Channel</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">{v2TopChannel?.channel ?? "—"}</div>
                   <div className="text-[10px] text-text-muted mt-0.5">
@@ -864,7 +870,7 @@ export function Dashboard() {
                   const isAhead = paceDelta !== null && paceDelta >= 0;
                   const isBehind = paceDelta !== null && paceDelta < 0;
                   return (
-                    <div className={`bg-surface border p-4 ${isAhead ? "border-occugreen/40" : isBehind ? "border-occuorange/30" : "border-border"}`}>
+                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isAhead ? "!border-occugreen/40" : isBehind ? "!border-occuorange/30" : ""}`}>
                       <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-1">
                         Pace vs 2yr
                         {isAhead && <TrendingUp className="w-3 h-3 text-occugreen" />}
@@ -882,10 +888,10 @@ export function Dashboard() {
               </div>
 
               {/* ── MIDDLE: 3-column visual section ─────────────────────────── */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
                 {/* Col 1: 14-Night Occupancy Trend */}
-                <div className="bg-surface border border-border p-5">
+                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
                   <div className="mb-4 pb-3 border-b border-border/60">
                     <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Next 14 Nights</div>
                     <div className="font-serif font-bold text-base text-text mt-0.5">Occupancy Trend</div>
@@ -917,7 +923,7 @@ export function Dashboard() {
                 </div>
 
                 {/* Col 2: Gap & Capacity Analysis */}
-                <div className="bg-surface border border-border p-5">
+                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
                   <div className="mb-4 pb-3 border-b border-border/60">
                     <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Capacity</div>
                     <div className="font-serif font-bold text-base text-text mt-0.5">Gap Analysis</div>
@@ -972,7 +978,7 @@ export function Dashboard() {
                 </div>
 
                 {/* Col 3: Channel Intelligence */}
-                <div className="bg-surface border border-border p-5">
+                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
                   <div className="mb-4 pb-3 border-b border-border/60">
                     <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Distribution</div>
                     <div className="font-serif font-bold text-base text-text mt-0.5">Channel Intelligence</div>
@@ -1040,10 +1046,10 @@ export function Dashboard() {
               </div>
 
               {/* ── BOTTOM: Action Queue + Capacity Scorecard ────────────────── */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
                 {/* Action Queue */}
-                <div className="bg-surface border border-border p-5">
+                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
                   <div className="mb-4 pb-3 border-b border-border/60 flex items-center justify-between">
                     <div>
                       <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Computed from live data</div>
@@ -1080,7 +1086,7 @@ export function Dashboard() {
                 </div>
 
                 {/* Capacity Scorecard (compact) */}
-                <div className="bg-surface border border-border p-5">
+                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
                   <div className="mb-4 pb-3 border-b border-border/60 flex items-center justify-between">
                     <div>
                       <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Before → After shuffle preview</div>
@@ -1129,7 +1135,7 @@ export function Dashboard() {
 
               {/* ── INTELLIGENCE FEED ─────────────────────────────────────────── */}
               {intelligenceFeedV2.length > 0 && (
-                <div className={`border p-5 transition-colors ${showInsightsV2 ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
+                <div className={`p-5 sm:p-6 ${showInsightsV2 ? overviewInsightBannerClass : overviewCardLgClass}`}>
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
                       <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
@@ -1164,7 +1170,7 @@ export function Dashboard() {
                   )}
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
       )}

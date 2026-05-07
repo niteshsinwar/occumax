@@ -24,6 +24,16 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react";
+import {
+  overviewCardClass,
+  overviewCardLgClass,
+  overviewEyebrowClass,
+  overviewInsetClass,
+  overviewInsightBannerClass,
+  overviewSecondaryBtnClass,
+  overviewSectionTitleClass,
+  overviewStackClass,
+} from "./overviewChrome";
 
 const MARKET_RADAR_ITEM_ID = "bookingcom-24h-downtime";
 const CHANNEL_AI_WINDOW_DAYS = 15;
@@ -296,23 +306,24 @@ export function ChannelOptimizationTab() {
   }, [aiRecs]);
 
   return (
-    <div className="space-y-6">
+    <div className={overviewStackClass}>
       <Toasts />
 
       {/* Strategic Channel Resilience */}
-      <div className="border border-border bg-surface p-6">
-        <div className="flex items-start justify-between gap-4">
+      <div className={`${overviewCardLgClass} p-6 sm:p-7`}>
+        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
           <div>
-            <h2 className="font-serif font-bold text-xl text-text">Strategic Channel Resilience</h2>
-            <p className="text-xs text-text-muted mt-1 uppercase tracking-widest">
+            <div className={overviewEyebrowClass}>Channels</div>
+            <h2 className={`${overviewSectionTitleClass} mt-1`}>Strategic Channel Resilience</h2>
+            <p className="text-[11px] text-text-muted mt-2 uppercase tracking-[0.12em] leading-relaxed max-w-2xl">
               Market Radar monitors partner health and shifts flexible inventory away from high-risk channels to protect net margin.
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
             <button
               onClick={handleRunMarketRadar}
               disabled={marketRadarLoading}
-              className="bg-text text-surface text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:opacity-90 active:scale-95 disabled:opacity-40 flex items-center gap-2 transition-all"
+              className="bg-text text-surface text-[10px] font-bold uppercase tracking-[0.12em] px-4 py-2.5 rounded-[10px] hover:opacity-90 active:scale-[0.99] disabled:opacity-40 flex items-center gap-2 transition-all"
             >
               {marketRadarLoading ? (
                 <>
@@ -326,13 +337,13 @@ export function ChannelOptimizationTab() {
             </button>
             <button
               onClick={handleTriggerBookingDowntime}
-              className="bg-red-600 text-white text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:brightness-110 active:scale-95 transition-all"
+              className="bg-red-600 text-white text-[10px] font-bold uppercase tracking-[0.12em] px-4 py-2.5 rounded-[10px] hover:brightness-110 active:scale-[0.99] transition-all"
             >
               Trigger Downtime
             </button>
             <button
               onClick={handleClearPartnerRisk}
-              className="bg-surface border border-border text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:bg-surface-2 active:scale-95 transition-all text-text-muted"
+              className={`${overviewSecondaryBtnClass} px-4 py-2.5`}
             >
               Reset
             </button>
@@ -341,13 +352,13 @@ export function ChannelOptimizationTab() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-6">
           {/* Partner Pulse */}
-          <div className="border border-border bg-surface-2/40 p-5">
+          <div className={`${overviewInsetClass} p-5 sm:p-6`}>
             <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-3">Partner Pulse</div>
             <div className="space-y-2">
               {partnerList.map(p => {
                 const health = partnerHealth[p] ?? "GREEN";
                 return (
-                  <div key={p} className="flex items-center justify-between border border-border bg-surface px-4 py-3">
+                  <div key={p} className={`flex items-center justify-between ${overviewCardClass} px-4 py-3`}>
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`w-9 h-9 rounded-full border-2 ${healthRingClass(health)} bg-surface flex items-center justify-center`}>
                         <div className="w-2 h-2 rounded-full bg-text/50" />
@@ -374,7 +385,7 @@ export function ChannelOptimizationTab() {
           </div>
 
           {/* Strategic Pivot */}
-          <div className="border border-border bg-surface-2/40 p-5">
+          <div className={`${overviewInsetClass} p-5 sm:p-6`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Strategic Pivot</div>
@@ -396,20 +407,20 @@ export function ChannelOptimizationTab() {
             </div>
 
             {marketRadarResult ? (
-              <div className="mt-4 border border-border bg-surface p-4">
+              <div className={`mt-4 p-4 sm:p-5 ${overviewCardClass}`}>
                 <div className="text-[10px] uppercase tracking-widest font-bold text-text-muted">
                   AI assessment · composite {marketRadarResult.compositeScore}/100 · {marketRadarResult.needsAdjustment ? "adjustment recommended" : "no adjustment"}
                 </div>
                 <div className="text-xs text-text-muted mt-2 leading-relaxed">{marketRadarResult.rationale}</div>
               </div>
             ) : (
-              <div className="mt-4 border border-dashed border-border bg-surface p-4 text-xs text-text-muted">
+              <div className={`mt-4 border border-dashed border-border/70 ${overviewInsetClass} p-4 text-xs text-text-muted`}>
                 Run Market Radar to evaluate impact and determine if a flexible inventory adjustment is needed.
               </div>
             )}
 
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="border border-border bg-surface p-4">
+              <div className={`${overviewCardClass} p-4 sm:p-5`}>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Flexible inventory (before)</div>
                 <div className="space-y-1 text-[11px] text-text-muted">
                   {partnerList.map(p => (
@@ -420,7 +431,7 @@ export function ChannelOptimizationTab() {
                   ))}
                 </div>
               </div>
-              <div className="border border-border bg-surface p-4">
+              <div className={`${overviewCardClass} p-4 sm:p-5`}>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Flexible inventory (after)</div>
                 {inventoryAfter ? (
                   <div className="space-y-1 text-[11px] text-text-muted">
@@ -441,26 +452,30 @@ export function ChannelOptimizationTab() {
       </div>
 
       {/* Header + window selector */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
-          <h2 className="font-serif font-bold text-xl text-text">Channel Performance</h2>
-          <p className="text-xs text-text-muted mt-1 uppercase tracking-widest">Revenue by booking source · commission-adjusted net yield</p>
+          <div className={overviewEyebrowClass}>Performance</div>
+          <h2 className={`${overviewSectionTitleClass} mt-1`}>Channel Performance</h2>
+          <p className="text-[11px] text-text-muted mt-2 uppercase tracking-[0.12em]">Revenue by booking source · commission-adjusted net yield</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex rounded-[10px] border border-border/80 overflow-hidden shadow-subtle">
           {([7, 30, 60] as const).map(w => (
             <button
               key={w}
               onClick={() => setChannelWindow(w)}
-              className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border transition-colors ${
-                channelWindow === w ? "bg-text text-surface border-text" : "bg-surface text-text-muted border-border hover:bg-surface-2"
+              className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 transition-colors ${
+                channelWindow === w ? "bg-text text-surface" : "bg-surface text-text-muted hover:bg-surface-2"
               }`}
             >
               {w}d
             </button>
           ))}
+          </div>
           <button
+            type="button"
             onClick={() => loadChannelData(channelWindow)}
-            className="ml-2 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface hover:bg-surface-2 flex items-center gap-1.5 text-text-muted"
+            className={`${overviewSecondaryBtnClass} px-3 py-2`}
           >
             <RefreshCw className="w-3 h-3" /> Refresh
           </button>
@@ -477,7 +492,7 @@ export function ChannelOptimizationTab() {
       {!channelLoading && channelData && (
         <>
           {/* AI Channel Recommendation Panel */}
-          <div className="border border-accent/20 bg-accent/5 p-6">
+          <div className={`${overviewInsightBannerClass} p-6 sm:p-7`}>
             <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
@@ -517,7 +532,7 @@ export function ChannelOptimizationTab() {
             {filteredAiRecs && !aiRecsLoading && (
               <div className="space-y-3">
                 {filteredAiRecs.summary && (
-                  <div className="bg-surface border border-border p-4 text-sm text-text leading-relaxed">
+                  <div className={`${overviewCardClass} p-4 text-sm text-text leading-relaxed`}>
                     {filteredAiRecs.summary}
                   </div>
                 )}
@@ -542,8 +557,8 @@ export function ChannelOptimizationTab() {
                   return (
                     <div
                       key={idx}
-                      className={`bg-surface border p-4 transition-all ${
-                        isCommitted ? "border-occugreen/40 opacity-70" : isSkipped ? "border-border opacity-40" : "border-border"
+                      className={`${overviewCardClass} p-4 transition-all ${
+                        isCommitted ? "!border-occugreen/40 opacity-70" : isSkipped ? "opacity-40" : ""
                       }`}
                     >
                       <div className="flex items-start justify-between gap-4">
