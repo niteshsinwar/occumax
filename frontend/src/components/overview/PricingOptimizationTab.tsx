@@ -7,6 +7,7 @@ import type {
   PricingAnalyseResponse,
   PricingCalendarCell,
   PricingCommitItem,
+  RoomCategory,
 } from "../../types";
 import { useToast } from "../shared/Toast";
 import {
@@ -25,15 +26,12 @@ import {
 import { AiTag } from "../shared/AiTag";
 import { format, parseISO } from "date-fns";
 import type { ContextFeedItem } from "../../mock/contextFeed";
-import { scoreContextBundleWithAi } from "../../mock/aiContextScoring";
 import { useOverviewSignals } from "../../context/overviewSignals";
 import { getCompetitorRatePoint } from "../../mock/competitorPricing";
 import {
   overviewCardClass,
   overviewCardLgClass,
   overviewEyebrowClass,
-  overviewInsetClass,
-  overviewInsightBannerClass,
   overviewMutedBadgeClass,
   overviewSectionTitleClass,
   overviewStackClass,
@@ -105,70 +103,6 @@ function computeRevenueStats(rows: HeatmapRow[], maxDays: number): {
     }
   }
   return { unsoldRooms, revenueAtRisk, revenueOnBooks, roomsDiscounted };
-}
-
-function findFirstSandwichNight(rows: HeatmapRow[], maxDays: number): {
-  roomId: string;
-  category: string;
-  date: string;
-  currentRate: number;
-  baseRate: number;
-} | null {
-  for (const row of rows) {
-    const cells = row.cells.slice(0, maxDays);
-    for (let i = 1; i < cells.length - 1; i++) {
-      const c = cells[i];
-      const before = cells[i - 1];
-      const after = cells[i + 1];
-      if (!c || !before || !after) continue;
-      if (c.block_type !== "EMPTY") continue;
-      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
-      return {
-        roomId: String(row.room_id),
-        category: String(row.category),
-        date: String(c.date),
-        currentRate: Number(c.current_rate ?? row.base_rate),
-        baseRate: Number(row.base_rate),
-      };
-    }
-  }
-  return null;
-}
-
-type SandwichNight = {
-  roomId: string;
-  category: string;
-  date: string;
-  currentRate: number;
-  baseRate: number;
-};
-
-function findSandwichNights(rows: HeatmapRow[], maxDays: number): SandwichNight[] {
-  const out: SandwichNight[] = [];
-  for (const row of rows) {
-    const cells = row.cells.slice(0, maxDays);
-    for (let i = 1; i < cells.length - 1; i++) {
-      const c = cells[i];
-      const before = cells[i - 1];
-      const after = cells[i + 1];
-      if (!c || !before || !after) continue;
-      if (c.block_type !== "EMPTY") continue;
-      if (before.block_type === "EMPTY" || after.block_type === "EMPTY") continue;
-      out.push({
-        roomId: String(row.room_id),
-        category: String(row.category),
-        date: String(c.date),
-        currentRate: Number(c.current_rate ?? row.base_rate),
-        baseRate: Number(row.base_rate),
-      });
-    }
-  }
-  out.sort((a, b) => (a.date === b.date ? a.category.localeCompare(b.category) : a.date.localeCompare(b.date)));
-  return out;
-}
-
-function roundTo5(n: number): number {
-  return Math.round(n / 5) * 5;
 }
 
 function clamp(n: number, min: number, max: number): number {
@@ -408,15 +342,8 @@ export function PricingOptimizationTab() {
   const [hasCached, setHasCached] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [customRates, setCustomRates] = useState<Record<string, number>>({});
-  const [simulationActive, setSimulationActive] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiRationale, setAiRationale] = useState<string | null>(null);
-  const [aiConfidence, setAiConfidence] = useState<"LOW" | "MEDIUM" | "HIGH" | null>(null);
-  const [scoredFactors, setScoredFactors] = useState<ContextFeedItem["factors"] | null>(null);
-  const aiCacheRef = useRef<Record<string, { factors: ContextFeedItem["factors"]; rationale: string; confidence: "LOW" | "MEDIUM" | "HIGH" }>>({});
 
   const WINDOW_DAYS = 15; // Align with Occupancy/Overview 15-day window
-  const CLEARANCE_WINDOW_DAYS = 15; // Align with Occupancy heatmap visible days
   const activeSignalBundle = useMemo(
     () => [selectedItems.EVENT, selectedItems.WEATHER, selectedItems.TRAVEL, selectedItems.MARKET],
     [selectedItems],
@@ -442,8 +369,7 @@ export function PricingOptimizationTab() {
     })) as ContextFeedItem["factors"];
   }, [activeSignalBundle]);
 
-  const activeFactors = scoredFactors ?? mergedBundleFactors;
-  const activeCompositeScore = useMemo(() => computeCompositeFromFactors(activeFactors), [activeFactors]);
+  const activeCompositeScore = useMemo(() => computeCompositeFromFactors(mergedBundleFactors), [mergedBundleFactors]);
 
   // ── Load heatmap on mount ──────────────────────────────────────────────────
 
@@ -462,7 +388,7 @@ export function PricingOptimizationTab() {
   useEffect(() => {
     void refreshHeatmap();
     setHasCached(!!localStorage.getItem(PRICING_CACHE_KEY));
-  }, []);
+  }, [refreshHeatmap]);
 
   // ── Loading message cycling ────────────────────────────────────────────────
 
@@ -483,93 +409,6 @@ export function PricingOptimizationTab() {
     const rev = computeRevenueStats(heatmap.rows, WINDOW_DAYS);
     return { ...orphan, ...rev };
   }, [heatmap]);
-
-  const firstSandwich = useMemo(() => {
-    if (!heatmap) return null;
-    return findFirstSandwichNight(heatmap.rows, CLEARANCE_WINDOW_DAYS);
-  }, [heatmap]);
-
-  const sandwichNights = useMemo(() => {
-    if (!heatmap) return [];
-    return findSandwichNights(heatmap.rows, CLEARANCE_WINDOW_DAYS);
-  }, [heatmap]);
-
-  const logicalChoices = useMemo(() => {
-    const getScore = (t: "WEATHER" | "EVENT" | "FLIGHT" | "MARKET") =>
-      activeFactors.find(f => f.type === t)?.score ?? 0;
-
-    const weather = getScore("WEATHER");
-    const flight = getScore("FLIGHT");
-    const event = getScore("EVENT");
-    const market = getScore("MARKET");
-
-    const disruption = clamp((weather * 0.5 + flight * 0.5) / 100, 0, 1);
-    const compression = clamp((event * 0.7 + market * 0.3) / 100, 0, 1);
-
-    // Discount: deeper when disruption dominates, shallower when compression dominates.
-    const discountFactor = clamp(0.75 + 0.10 * disruption - 0.18 * compression, 0.55, 0.88);
-    // Floor protection: stronger when compression dominates.
-    const floorFactor = clamp(0.58 + 0.22 * compression - 0.05 * disruption, 0.50, 0.85);
-
-    const tcoUplift = 1 + 0.15 * disruption;
-
-    const baseTcoByCategory: Record<string, number> = {
-      ECONOMY: 28,
-      STANDARD: 32,
-      DELUXE: 36,
-      PREMIUM: 40,
-      SUITE: 48,
-    };
-
-    return sandwichNights.map(s => {
-      const floorRate = roundTo5(Math.max(50, s.baseRate * floorFactor));
-      const discounted = roundTo5(Math.min(s.currentRate, Math.max(floorRate, s.currentRate * discountFactor)));
-
-      const baseTco = baseTcoByCategory[s.category] ?? 40;
-      const tco = roundTo5(baseTco * tcoUplift);
-      const netProfit = Math.max(0, discounted - tco);
-
-      return { ...s, floorRate, discountedRate: discounted, tco, netProfit };
-    });
-  }, [sandwichNights, activeFactors]);
-
-  const estimatedTotalNetProfit = useMemo(() => {
-    if (!simulationActive) return 0;
-    return logicalChoices.reduce((s, c) => s + (c.netProfit ?? 0), 0);
-  }, [logicalChoices, simulationActive]);
-
-  const estimatedGaugeMax = useMemo(() => {
-    // Simple scaling for a readable gauge: cap minimum so the bar isn't always full.
-    const min = 200;
-    return Math.max(min, Math.round(estimatedTotalNetProfit * 1.25));
-  }, [estimatedTotalNetProfit]);
-
-  const runSmartClearance = useCallback(async () => {
-    setAiLoading(true);
-    setAiRationale(null);
-    setAiConfidence(null);
-    try {
-      const key = activeSignalBundle.map(i => i?.id ?? "null").join("|");
-      const cached = aiCacheRef.current[key];
-      if (cached) {
-        setScoredFactors(cached.factors);
-        setAiRationale(cached.rationale);
-        setAiConfidence(cached.confidence);
-      } else {
-        const res = await scoreContextBundleWithAi({ items: activeSignalBundle });
-        aiCacheRef.current[key] = { factors: res.factors, rationale: res.rationale, confidence: res.confidence };
-        setScoredFactors(res.factors);
-        setAiRationale(res.rationale);
-        setAiConfidence(res.confidence);
-      }
-      setSimulationActive(true);
-      show("Smart Clearance simulation updated", "success");
-    } catch {
-      show("Could not score context with AI", "error");
-    } finally {
-      setAiLoading(false);
-    }
-  }, [activeSignalBundle, show]);
 
   // ── Run analysis ──────────────────────────────────────────────────────────
 
@@ -643,9 +482,10 @@ export function PricingOptimizationTab() {
           const isUnsold = stats.emptyRooms > 0;
           const isSandwich = stats.sandwichEmptyRooms > 0;
 
+          const category = row.category as RoomCategory;
           const competitor = getCompetitorRatePoint({
             date: cell.date,
-            category: row.category as any,
+            category,
             baseRate: cell.current_rate || 0,
             marketHeat: activeCompositeScore,
           });
@@ -732,7 +572,8 @@ export function PricingOptimizationTab() {
     const key = `${category}::${date}`;
     setSelectedCells(prev => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
@@ -827,139 +668,6 @@ export function PricingOptimizationTab() {
           </div>
           <div className={overviewMutedBadgeClass}>
             Real-time elasticity · external shocks · A/B trade-offs (demo)
-          </div>
-        </div>
-
-        <div className="mt-6">
-          {/* Logical Choice + Profit Gauge */}
-          <div className={`${overviewInsetClass} p-5 sm:p-6`}>
-            <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
-              <div>
-                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Logical choice</div>
-                <div className="font-serif font-bold text-base text-text mt-0.5">
-                  Smart Clearance recommendations ({logicalChoices.length})
-                </div>
-                <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
-                  {firstSandwich
-                    ? <>Highlighted candidate: <span className="font-bold text-text">{firstSandwich.category}</span> · <span className="font-mono font-bold text-text">{firstSandwich.date}</span></>
-                    : "No sandwich night found in the current 15-day slice (refresh heatmap and retry)."}
-                </div>
-                <div className="mt-2 text-[10px] uppercase tracking-widest font-bold text-text-muted">
-                  Considering weather pattern · flight disruption · big events · market sentiment (from Overview header)
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => void runSmartClearance()}
-                  disabled={aiLoading}
-                  className="bg-text text-surface text-[11px] uppercase tracking-widest font-bold px-5 py-2 hover:bg-text/90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-40"
-                  title="Scores the selected context (AI) and recalculates offer/TCO/net across all sandwich nights"
-                >
-                  {aiLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                  Run Smart Clearance
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setSimulationActive(false); setScoredFactors(null); setAiRationale(null); setAiConfidence(null); }}
-                  className="text-[11px] uppercase tracking-widest font-bold px-4 py-2 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-                >
-                  Clear
-                </button>
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
-                  <AiTag title="AI produces weighted factor scores; the offer calculation is deterministic: floor protection + discount depth + category-aware TCO." />
-                </div>
-              </div>
-            </div>
-
-            {(aiRationale || aiConfidence) && (
-              <div className={`mb-4 p-4 sm:p-5 ${overviewInsightBannerClass}`}>
-                <div className="text-[9px] font-bold uppercase tracking-widest text-accent mb-1">
-                  AI scoring {aiConfidence ? `· ${aiConfidence} confidence` : ""}
-                  {" · "}composite {activeCompositeScore}/100
-                </div>
-                {aiRationale && <div className="text-[11px] text-text-muted leading-relaxed">{aiRationale}</div>}
-              </div>
-            )}
-
-            <div className="bg-surface-2/40 border border-border p-4">
-              <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Profit Gauge (Estimated)</div>
-              <div className="h-3.5 bg-surface border border-border overflow-hidden">
-                <div
-                  className="h-full bg-occugreen/70 transition-all duration-700"
-                  style={{
-                    width: simulationActive
-                      ? `${clamp((estimatedTotalNetProfit / estimatedGaugeMax) * 100, 0, 100)}%`
-                      : "0%",
-                  }}
-                />
-              </div>
-              <div className="mt-2 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                <span>$0 (empty)</span>
-                <span>{simulationActive ? `$${Math.round(estimatedTotalNetProfit).toLocaleString("en-US")} net` : "$—"}</span>
-              </div>
-              <div className="mt-3 text-[11px] text-text-muted leading-relaxed">
-                Estimated total net profit across all proposed sandwich-night offers in the {CLEARANCE_WINDOW_DAYS}-day window.
-              </div>
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-border/60">
-              <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">
-                  All sandwich nights in this {CLEARANCE_WINDOW_DAYS}d window
-                </div>
-                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                  Trigger: <span className="text-text">Bundle (Event + Weather + Travel + Market)</span>
-                </div>
-              </div>
-              {logicalChoices.length === 0 ? (
-                <div className="text-sm text-text-muted bg-surface-2/40 border border-border px-4 py-3">
-                  No sandwich nights detected in the current heatmap slice.
-                </div>
-              ) : (
-                <div className="max-h-[360px] overflow-auto border border-border bg-surface">
-                  <div className="grid grid-cols-[120px_90px_1fr_90px_90px_90px] gap-2 px-3 py-2 border-b border-border/60 text-[9px] font-black uppercase tracking-widest text-text-muted bg-surface-2/40">
-                    <div>Date</div>
-                    <div>Room</div>
-                    <div>Category</div>
-                    <div className="text-right">Offer</div>
-                    <div className="text-right">TCO</div>
-                    <div className="text-right">Net</div>
-                  </div>
-                  {logicalChoices.slice(0, 200).map((c, idx) => (
-                    <div
-                      key={`${c.roomId}-${c.date}-${idx}`}
-                      className={`grid grid-cols-[120px_90px_1fr_90px_90px_90px] gap-2 px-3 py-2 border-b border-border/40 text-xs ${
-                        simulationActive ? "bg-occugreen/[0.03]" : "bg-surface"
-                      }`}
-                    >
-                      <div className="font-mono font-bold text-text">{c.date}</div>
-                      <div className="font-mono text-text-muted">#{c.roomId}</div>
-                      <div className="text-text">
-                        <span className="font-bold">{c.category}</span>{" "}
-                        <span className="text-[10px] text-text-muted">
-                          floor ${c.floorRate} · current ${roundTo5(c.currentRate)}
-                        </span>
-                      </div>
-                      <div className="text-right font-mono font-bold text-text">
-                        {simulationActive ? `$${c.discountedRate}` : "—"}
-                      </div>
-                      <div className="text-right font-mono font-bold text-text-muted">
-                        {simulationActive ? `-$${c.tco}` : "—"}
-                      </div>
-                      <div className={`text-right font-mono font-black ${simulationActive ? "text-occugreen" : "text-text-muted"}`}>
-                        {simulationActive ? `$${c.netProfit}` : "—"}
-                      </div>
-                    </div>
-                  ))}
-                  {logicalChoices.length > 200 && (
-                    <div className="px-3 py-2 text-[11px] text-text-muted">
-                      Showing first 200 opportunities (of {logicalChoices.length}).
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </div>
