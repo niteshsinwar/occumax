@@ -697,7 +697,11 @@ export function PricingOptimizationTab() {
 
       const data: PricingAnalyseResponse = {
         ...aiWindowed,
-        summary: `${aiWindowed.summary} (15-day window · filtered to unsold nights · competitor pricing + context events shown in tooltip.)`,
+        summary: `${aiWindowed.summary} ${
+          selectedBundle
+            ? `Context (Overview): ${selectedBundle}.`
+            : ""
+        } (15-day window · filtered to unsold nights · competitor pricing + context events shown in tooltip.)`,
         calendar_rows: nextCalendarRows,
         recommendations: nextRecommendations,
       };
