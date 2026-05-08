@@ -20,6 +20,9 @@ class Channel(str, PyEnum):
     OTA = "OTA"
     DIRECT = "DIRECT"
     GDS = "GDS"
+    # Legacy DB rows may still contain WALKIN. Treat it as Direct Hotel Front Desk
+    # in business logic, but keep the enum readable so old rows do not crash ORM loads.
+    WALKIN = "WALKIN"
 
     CLOSED = "CLOSED"
 
@@ -28,4 +31,3 @@ class OfferType(str, PyEnum):
     SANDWICH_ORPHAN = "SANDWICH_ORPHAN"
     EXTENSION_OFFER = "EXTENSION_OFFER"
     LAST_MINUTE = "LAST_MINUTE"
-

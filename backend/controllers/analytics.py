@@ -668,8 +668,6 @@ async def get_revenue_summary(
 _COMMISSION: dict[str, float] = {
     "OTA":    0.18,  # US OTA average across Expedia Group/Priceline brands
     "DIRECT": 0.00,  # Hotel/front-desk selling — zero commission
-    "WALKIN": 0.00,  # Walk-in — zero commission
-    "CLOSED": 0.00,
 }
 
 
@@ -715,15 +713,14 @@ async def get_channel_performance(
     partner_gross: dict[str, dict[str, float]] = {}   # {channel: {partner: gross}}
 
     for row in rows:
-        ch = row.channel.value if row.channel and hasattr(row.channel, "value") else "DIRECT"
+        raw_ch = row.channel.value if row.channel and hasattr(row.channel, "value") else "DIRECT"
+        # Channel performance is intentionally OTA vs Direct. Legacy GDS/WALKIN
+        # rows are not current OTA partners, so they roll into Direct Hotel Front Desk.
+        ch = "OTA" if raw_ch == "OTA" else "DIRECT"
         if ch == "OTA":
             pt = row.channel_partner if row.channel_partner in OTA_PARTNER_NAMES else _fallback_ota_partner(row.id)
-        elif ch == "DIRECT":
-            pt = "Direct Hotel Front Desk"
-        elif ch == "WALKIN":
-            pt = "Walk-in"
         else:
-            pt = row.channel_partner or ch
+            pt = "Direct Hotel Front Desk"
         channel_nights[ch] = channel_nights.get(ch, 0) + 1
         channel_gross[ch] = channel_gross.get(ch, 0.0) + float(row.current_rate)
         _pn = partner_nights.setdefault(ch, {})
