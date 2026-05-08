@@ -26,6 +26,12 @@ Add new entries as decisions are made. Prefer “what + why + where implemented�
 - **Why**: Deep-linking and refresh-safe state for operator workflows.
 - **Where**: `frontend/src/pages/Dashboard.tsx` (`useSearchParams`).
 
+### Decision: Shared Overview card chrome (all subtabs)
+
+- **What**: `frontend/src/components/overview/overviewChrome.ts` exports reusable Tailwind bundles (`overviewCardClass`, `overviewCardLgClass`, `overviewInsightBannerClass`, `overviewStackClass`, buttons/badges, etc.) so **Dashboard**, **Pricing**, and **Channels** use the same radii, shadows, and borders as the Occupancy reference.
+- **Why**: One coherent OPTIHOST-style system across the four Overview pillars; avoids duplicated long class strings.
+- **Where**: `Dashboard.tsx` (Dashboard subtab), `PricingOptimizationTab.tsx`, `ChannelOptimizationTab.tsx`.
+
 ---
 
 ## Overview page (primary surface)
@@ -144,6 +150,15 @@ Then we ask the AI to:
   - Must show **total estimated net profit** summed across all proposed sandwich-night offers in the 15-day window (not a single-slot example).
   - Title should read **“Profit Gauge (Estimated)”**.
   - **Consumption rule (Option B)**: Pricing consumes **all 4** exogenous signal categories as inputs (Big Event + Weather + Flight/Travel + Market).
+
+### Decision: Pricing “Run Analysis” uses context + competitor pricing and focuses on unsold nights
+
+- **UX**: Keep the “Run Analysis” experience (loading sequence, previous-analysis cache, calendar grid, hover tooltip).
+- **Inputs**:
+  - **Context signals** come from `frontend/src/mock/contextFeed.ts` via the Overview header selections.
+  - **Market research (competitor pricing)** comes from `frontend/src/mock/competitorPricing.ts` (demo-only, deterministic by category+date).
+- **Scope**: Generate actionable recommendations **only for nights with unsold inventory** (heatmap `block_type === "EMPTY"`), with extra emphasis for **sandwich nights** (empty between two occupied nights).
+- **Explainability**: Calendar cell hover must show the recommendation “why” plus the context signal text and competitor anchor range.
 
 ---
 
