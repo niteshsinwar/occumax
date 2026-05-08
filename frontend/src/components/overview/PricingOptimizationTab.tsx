@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
+import { analysePricingWithContext, commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
   HeatmapRow,
@@ -47,8 +47,8 @@ const PRICING_CACHE_KEY = "rateiq_last_analysis";
 const LOADING_MESSAGES = [
   "Connecting to market data feeds...",
   "Analyzing weather patterns for next 15 days...",
-  "Scanning NJ events and conference calendar...",
-  "Processing market sentiment and travel trends...",
+  "Loading Overview context signals (events, weather, travel, market)...",
+  "Scoring market impact from selected signals (AI)...",
   "Evaluating occupancy and orphan room patterns...",
   "Reviewing 2-year historical booking trends...",
   "Benchmarking competitor pricing (market research)...",
@@ -611,7 +611,14 @@ export function PricingOptimizationTab() {
         return;
       }
 
-      const res = await analysePricing();
+      const contextItems = [
+        selectedItems.EVENT,
+        selectedItems.WEATHER,
+        selectedItems.TRAVEL,
+        selectedItems.MARKET,
+      ].filter(Boolean);
+
+      const res = await analysePricingWithContext({ context_items: contextItems });
       const aiData = res.data as PricingAnalyseResponse;
       const aiWindowed: PricingAnalyseResponse = {
         ...aiData,
@@ -697,11 +704,13 @@ export function PricingOptimizationTab() {
 
       const data: PricingAnalyseResponse = {
         ...aiWindowed,
-        summary: `${aiWindowed.summary} ${
+        summary: `${
           selectedBundle
             ? `Context (Overview): ${selectedBundle}.`
-            : ""
-        } (15-day window · filtered to unsold nights · competitor pricing + context events shown in tooltip.)`,
+            : "Context (Overview): —"
+        } AI generated the pricing recommendations in the calendar grid. ` +
+        `Market research (competitor pricing) is demo data. ` +
+        `(15-day window · filtered to unsold nights · context + competitor details in tooltip.)`,
         calendar_rows: nextCalendarRows,
         recommendations: nextRecommendations,
       };

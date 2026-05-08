@@ -23,12 +23,7 @@ from langchain_openai import ChatOpenAI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from config import settings
-from services.ai.pricing_mock_data import (
-    get_events_for_window,
-    get_historical_trends,
-    get_market_news,
-    get_weather_forecast,
-)
+from services.ai.pricing_mock_data import get_historical_trends
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +241,15 @@ Mention specific upcoming events (concert, graduation, holiday), current demand 
 Output ONLY the summary text — no JSON, no headings.
 """
 
+_SUMMARY_SYSTEM_CONTEXT = """\
+You are RateIQ, the Revenue Management AI for {hotel_name} (NJ, USA). Today: {today}.
+You MUST use ONLY the provided context feed bundle as external signals. Do NOT invent events, concerts, holidays, or news.
+Write a 2-3 sentence revenue outlook summary based on:
+- the provided context feed signals (event/weather/travel/market)
+- the live occupancy snapshot trends implied by the request context
+Output ONLY the summary text — no JSON, no headings.
+"""
+
 
 def _derive_reason(
     date_str: str,
@@ -382,6 +386,31 @@ async def _call_summary_agent(
     return (text or "").strip() or "Analysis complete."
 
 
+async def _call_summary_agent_from_context(
+    llm: ChatOpenAI,
+    context_items: list[dict],
+    today: date,
+) -> str:
+    """Single call to produce a short summary from the provided context feed bundle."""
+    context = json.dumps(
+        {
+            "context_feed": [
+                {
+                    "kind": i.get("kind"),
+                    "severity": i.get("severity"),
+                    "title": i.get("title"),
+                    "detail": i.get("detail"),
+                    "factors": i.get("factors", []),
+                }
+                for i in (context_items or [])
+            ]
+        },
+        ensure_ascii=False,
+    )
+    system = _SUMMARY_SYSTEM_CONTEXT.format(hotel_name=settings.HOTEL_NAME, today=today.isoformat())
+    text = await _safe_call(llm, [SystemMessage(content=system), HumanMessage(content=context)], "summary_context")
+    return (text or "").strip() or "Analysis complete."
+
 async def _call_synthesis_agent(
     llm: ChatOpenAI,
     snapshot: dict,
@@ -390,6 +419,7 @@ async def _call_synthesis_agent(
     events_analysis: dict,
     market_analysis: dict,
     history_analysis: dict,
+    context_items: list[dict] | None = None,
 ) -> dict:
     dates_window = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
 
@@ -424,7 +454,10 @@ async def _call_synthesis_agent(
         for cat in SYNTHESIS_CATEGORIES
         if compact_snapshot.get(cat)
     ]
-    tasks.append(_call_summary_agent(llm, events_analysis, weather_analysis, market_analysis, today))  # type: ignore[arg-type]
+    if context_items:
+        tasks.append(_call_summary_agent_from_context(llm, context_items, today))  # type: ignore[arg-type]
+    else:
+        tasks.append(_call_summary_agent(llm, events_analysis, weather_analysis, market_analysis, today))  # type: ignore[arg-type]
 
     results = await asyncio.gather(*tasks)
 
@@ -553,6 +586,7 @@ async def run_pricing_agent(
     context_text: str,  # noqa: ARG001 — kept for API compat; multi-call strategy builds its own
     today: date,
     session_factory: async_sessionmaker,
+    context_items: list[dict] | None = None,
 ) -> dict:
     """
     Run multi-call pricing analysis. Returns:
@@ -564,37 +598,57 @@ async def run_pricing_agent(
     """
     llm = _make_llm()
 
-    # Gather mock external data
-    weather = get_weather_forecast(today, WINDOW_DAYS)
-    events = get_events_for_window(today, WINDOW_DAYS)
-    news = get_market_news()
+    # Historical trends remain internal/demo; external context should come from provided context_items.
     history = get_historical_trends()
 
-    # Phase 1a: weather + events (parallel)
-    try:
-        weather_analysis, events_analysis = await asyncio.wait_for(
-            asyncio.gather(
-                _call_weather_agent(llm, weather),
-                _call_events_agent(llm, events, today),
-            ),
-            timeout=240,
-        )
-    except asyncio.TimeoutError:
-        logger.warning("Weather/events calls timed out — using defaults")
+    if context_items:
+        # When context is provided from the frontend, do NOT use backend mock external data.
         weather_analysis, events_analysis = {}, {}
-
-    # Phase 1b: market + history (parallel)
-    try:
-        market_analysis, history_analysis = await asyncio.wait_for(
-            asyncio.gather(
-                _call_market_agent(llm, news),
-                _call_history_agent(llm, history, today),
-            ),
-            timeout=180,
+        market_analysis = {
+            "sentiment": "neutral",
+            "rate_pressure": "flat",
+            "key_insight": " | ".join(
+                [str(i.get("title") or "") for i in context_items if isinstance(i, dict) and i.get("title")]
+            )[:400],
+            "category_outlook": {},
+        }
+    else:
+        # Legacy path (uses backend mock external data)
+        from services.ai.pricing_mock_data import (  # local import to avoid forcing mocks when context provided
+            get_events_for_window,
+            get_market_news,
+            get_weather_forecast,
         )
+
+        weather = get_weather_forecast(today, WINDOW_DAYS)
+        events = get_events_for_window(today, WINDOW_DAYS)
+        news = get_market_news()
+
+        # Phase 1a: weather + events (parallel)
+        try:
+            weather_analysis, events_analysis = await asyncio.wait_for(
+                asyncio.gather(
+                    _call_weather_agent(llm, weather),
+                    _call_events_agent(llm, events, today),
+                ),
+                timeout=240,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Weather/events calls timed out — using defaults")
+            weather_analysis, events_analysis = {}, {}
+
+        # Phase 1b: market (LLM) — only in legacy path
+        try:
+            market_analysis = await asyncio.wait_for(_call_market_agent(llm, news), timeout=180)
+        except asyncio.TimeoutError:
+            logger.warning("Market call timed out — using defaults")
+            market_analysis = {}
+
+    try:
+        history_analysis = await asyncio.wait_for(_call_history_agent(llm, history, today), timeout=180)
     except asyncio.TimeoutError:
-        logger.warning("Market/history calls timed out — using defaults")
-        market_analysis, history_analysis = {}, {}
+        logger.warning("History call timed out — using defaults")
+        history_analysis = {}
 
     # Phase 2: 1 micro-shard per category + 1 summary — all parallel
     # Each shard covers 1 category × 20 days with compact output (fits Poly AI 400-token cap)
@@ -603,6 +657,7 @@ async def run_pricing_agent(
             _call_synthesis_agent(
                 llm, snapshot, today,
                 weather_analysis, events_analysis, market_analysis, history_analysis,
+                context_items=context_items,
             ),
             timeout=300,
         )

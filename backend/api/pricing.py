@@ -15,7 +15,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.database import get_db
-from core.schemas.pricing import PricingAnalyseResponse, PricingCommitRequest, PricingCommitResult
+from core.schemas.pricing import (
+    PricingAnalyseRequest,
+    PricingAnalyseResponse,
+    PricingCommitRequest,
+    PricingCommitResult,
+)
 from controllers import pricing as ctrl
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,15 @@ async def analyse_pricing():
     Nothing is written to slots — call POST /commit to apply changes.
     """
     return await ctrl.analyse()
+
+
+@router.post("/analyse-context", response_model=PricingAnalyseResponse)
+async def analyse_pricing_with_context(body: PricingAnalyseRequest):
+    """
+    Run pricing analysis using ONLY the provided context feed bundle (frontend mock contextFeed.ts).
+    This avoids backend-side mock external events/news/weather.
+    """
+    return await ctrl.analyse_with_context(body)
 
 
 @router.post("/commit", response_model=PricingCommitResult)

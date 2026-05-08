@@ -3,6 +3,32 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class PricingContextFactor(BaseModel):
+    type: str  # WEATHER | EVENT | FLIGHT | MARKET
+    label: str
+    value: str
+    score: float
+    weight: float
+
+
+class PricingContextItem(BaseModel):
+    """
+    Context feed item passed from the frontend (mock contextFeed.ts).
+    This is the ONLY source of mocked external context for pricing analysis.
+    """
+    id: str
+    kind: str  # WEATHER | TRAVEL | EVENT | MARKET
+    title: str
+    detail: str
+    severity: str  # INFO | ALERT
+    location: str | None = None
+    factors: list[PricingContextFactor] = []
+
+
+class PricingAnalyseRequest(BaseModel):
+    context_items: list[PricingContextItem]
+
+
 class PricingCalendarCell(BaseModel):
     date: str
     current_rate: float
