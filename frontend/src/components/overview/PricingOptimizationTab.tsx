@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
+import { commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
   HeatmapRow,
@@ -27,6 +27,7 @@ import { format, parseISO } from "date-fns";
 import type { ContextFeedItem } from "../../mock/contextFeed";
 import { scoreContextBundleWithAi } from "../../mock/aiContextScoring";
 import { useOverviewSignals } from "../../context/overviewSignals";
+import { getCompetitorRatePoint } from "../../mock/competitorPricing";
 import {
   overviewCardClass,
   overviewCardLgClass,
@@ -178,6 +179,79 @@ function computeCompositeFromFactors(factors: ContextFeedItem["factors"]): numbe
   if (ws <= 0) return 0;
   const weighted = factors.reduce((s, f) => s + clamp(f.score ?? 0, 0, 100) * (f.weight ?? 0), 0);
   return Math.round(weighted / ws);
+}
+
+function computeCategoryBaseRate(rows: HeatmapRow[], category: string): number {
+  const match = rows.find(r => String(r.category) === category);
+  return match ? Number(match.base_rate ?? 0) : 0;
+}
+
+function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: string): {
+  total: number;
+  otb: number;
+  occPct: number;
+  avgRate: number;
+  emptyRooms: number;
+  sandwichEmptyRooms: number;
+} {
+  const catRows = rows.filter(r => String(r.category) === category);
+  if (catRows.length === 0) return { total: 0, otb: 0, occPct: 0, avgRate: 0, emptyRooms: 0, sandwichEmptyRooms: 0 };
+
+  let total = 0;
+  let otb = 0;
+  let rateSum = 0;
+  let emptyRooms = 0;
+  let sandwichEmptyRooms = 0;
+
+  for (const row of catRows) {
+    const idx = row.cells.findIndex(c => c?.date === date);
+    if (idx < 0) continue;
+
+    const c = row.cells[idx];
+    if (!c) continue;
+    total += 1;
+    rateSum += Number(c.current_rate ?? 0);
+    if (c.block_type !== "EMPTY") otb += 1;
+    if (c.block_type === "EMPTY") {
+      emptyRooms += 1;
+      const before = row.cells[idx - 1];
+      const after = row.cells[idx + 1];
+      if (before && after && before.block_type !== "EMPTY" && after.block_type !== "EMPTY") {
+        sandwichEmptyRooms += 1;
+      }
+    }
+  }
+
+  const avgRate = total > 0 ? rateSum / total : 0;
+  const occPct = total > 0 ? (otb / total) * 100 : 0;
+  return { total, otb, occPct: Math.round(occPct * 10) / 10, avgRate: Math.round(avgRate * 100) / 100, emptyRooms, sandwichEmptyRooms };
+}
+
+function computeClearanceSuggestedRate(args: {
+  currentRate: number;
+  floorRate: number;
+  baseRate: number;
+  competitorMedian: number;
+  compositeScore: number; // 0..100
+  isSandwich: boolean;
+}): { suggestedRate: number; confidence: "LOW" | "MEDIUM" | "HIGH"; action: "DISCOUNT" | "MAINTAIN"; changePct: number } {
+  const { currentRate, floorRate, baseRate, competitorMedian, compositeScore, isSandwich } = args;
+
+  const heat = clamp(compositeScore / 100, 0, 1);
+  const targetVsComp = isSandwich ? 0.94 : 0.97;
+  const heatTighten = 0.06 * heat; // tighter discount when demand/market is hotter
+  const discountFactor = clamp(targetVsComp + heatTighten, 0.86, 1.02);
+
+  const raw = Math.min(currentRate, competitorMedian * discountFactor);
+  const protectedFloor = Math.max(floorRate > 0 ? floorRate : 0, baseRate * 0.55, 45);
+  const suggestedRate = roundTo5(Math.max(protectedFloor, raw));
+
+  const changePct = currentRate > 0 ? Math.round(((suggestedRate - currentRate) / currentRate) * 1000) / 10 : 0;
+  const action = suggestedRate < currentRate * 0.985 ? "DISCOUNT" : "MAINTAIN";
+  const confidence: "LOW" | "MEDIUM" | "HIGH" =
+    isSandwich && heat >= 0.75 ? "HIGH" : isSandwich || heat >= 0.6 ? "MEDIUM" : "LOW";
+
+  return { suggestedRate, confidence, action, changePct };
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -563,8 +637,109 @@ export function PricingOptimizationTab() {
     setSelectedCells(new Set());
     setCustomRates({});
     try {
-      const res = await analysePricing();
-      const data = res.data as PricingAnalyseResponse;
+      if (!heatmap) {
+        show("Heatmap not loaded yet — refresh and retry", "error");
+        return;
+      }
+
+      const today = new Date();
+      const analysisDate = today.toISOString().slice(0, 10);
+      const dates = heatmap.dates.slice(0, WINDOW_DAYS);
+
+      const categories = [...new Set(heatmap.rows.map(r => String(r.category)))].sort();
+      const calendar_rows = categories.map(category => {
+        const baseRate = computeCategoryBaseRate(heatmap.rows, category);
+        const cells: PricingCalendarCell[] = dates.map(d => {
+          const stats = computeCategoryDayStats(heatmap.rows, d, category);
+          const isUnsold = stats.emptyRooms > 0;
+          const isSandwich = stats.sandwichEmptyRooms > 0;
+
+          const competitor = getCompetitorRatePoint({
+            date: d,
+            category: category as any,
+            baseRate: baseRate || stats.avgRate || 0,
+            marketHeat: activeCompositeScore,
+          });
+
+          const floorRate = roundTo5(Math.max(45, baseRate * 0.55));
+          const currentRate = stats.avgRate || baseRate || competitor.competitorMedianRate;
+
+          const rec = isUnsold
+            ? computeClearanceSuggestedRate({
+                currentRate,
+                floorRate,
+                baseRate: baseRate || currentRate,
+                competitorMedian: competitor.competitorMedianRate,
+                compositeScore: activeCompositeScore,
+                isSandwich,
+              })
+            : { suggestedRate: roundTo5(currentRate), confidence: "LOW" as const, action: "MAINTAIN" as const, changePct: 0 };
+
+          const selectedBundle = [
+            selectedItems.EVENT?.title,
+            selectedItems.WEATHER?.title,
+            selectedItems.TRAVEL?.title,
+            selectedItems.MARKET?.title,
+          ].filter(Boolean).join(" · ");
+
+          const reason = !isUnsold
+            ? "On-books night — no clearance action."
+            : isSandwich
+              ? "Sandwich night gap detected. Recommend targeted clearance anchored to competitor median while protecting floor."
+              : "Unsold inventory detected. Recommend light clearance anchored to competitor median while protecting floor.";
+
+          return {
+            date: d,
+            current_rate: roundTo5(currentRate),
+            suggested_rate: rec.suggestedRate,
+            change_pct: rec.changePct,
+            action: rec.action,
+            confidence: rec.confidence,
+            reason: `${reason}${selectedBundle ? ` Signals: ${selectedBundle}.` : ""}`,
+            occupancy_pct: stats.occPct,
+            otb: stats.otb,
+            floor_rate: floorRate,
+            is_orphan: false,
+            weather_factor: selectedItems.WEATHER?.detail ?? "",
+            event_factor: selectedItems.EVENT?.detail ?? "",
+            news_factor: `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`,
+          };
+        });
+
+        return { category, cells };
+      });
+
+      const actionable = calendar_rows.flatMap(r =>
+        r.cells
+          .filter(c => c.action !== "MAINTAIN")
+          .map(c => ({
+            category: r.category,
+            date: c.date,
+            current_rate: c.current_rate,
+            suggested_rate: c.suggested_rate,
+            change_pct: c.change_pct,
+            action: c.action,
+            confidence: c.confidence,
+            reason: c.reason,
+            occupancy_pct: c.occupancy_pct,
+            otb: c.otb,
+          })),
+      );
+
+      const rescue_potential = Math.round(actionable.reduce((s, r) => s + Math.max(0, r.current_rate - r.suggested_rate), 0));
+
+      const data: PricingAnalyseResponse = {
+        hotel_name: "Occumax (demo)",
+        analysis_date: analysisDate,
+        summary:
+          `Clearance-focused analysis using Overview signals + competitor pricing research. ` +
+          `Recommendations are limited to unsold nights (including sandwich-night gaps).`,
+        calendar_rows,
+        recommendations: actionable,
+        dates,
+        rescue_potential,
+      };
+
       applyAnalysis(data);
       try { localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify(data)); } catch { /* quota */ }
       setHasCached(true);
@@ -574,7 +749,7 @@ export function PricingOptimizationTab() {
     } finally {
       setAnalysing(false);
     }
-  }, [applyAnalysis, show]);
+  }, [applyAnalysis, show, heatmap, activeCompositeScore, selectedItems]);
 
   // ── Toggle cell selection ─────────────────────────────────────────────────
 
