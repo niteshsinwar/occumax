@@ -21,6 +21,7 @@ from config import settings
 from core.models import Booking, Room, Slot
 from core.models.enums import BlockType
 from core.schemas.pricing import (
+    PricingAnalyseRequest,
     PricingAnalyseResponse,
     PricingCalendarCell,
     PricingCalendarRow,
@@ -292,6 +293,110 @@ async def analyse() -> PricingAnalyseResponse:
     rescue_potential = _compute_rescue_potential(calendar_map, snapshot)
 
     # Flat list for the review table — only actionable days (INCREASE or DISCOUNT)
+    recommendations: list[PricingRecommendation] = [
+        PricingRecommendation(
+            category=row.category,
+            date=cell.date,
+            current_rate=cell.current_rate,
+            suggested_rate=cell.suggested_rate,
+            change_pct=cell.change_pct,
+            action=cell.action,
+            confidence=cell.confidence,
+            reason=cell.reason,
+            occupancy_pct=cell.occupancy_pct,
+            otb=cell.otb,
+        )
+        for row in calendar_rows
+        for cell in row.cells
+        if cell.action != "MAINTAIN"
+    ]
+
+    return PricingAnalyseResponse(
+        hotel_name=settings.HOTEL_NAME,
+        analysis_date=today.isoformat(),
+        summary=result.get("summary", ""),
+        calendar_rows=calendar_rows,
+        recommendations=recommendations,
+        dates=dates,
+        rescue_potential=rescue_potential,
+    )
+
+
+async def analyse_with_context(body: PricingAnalyseRequest) -> PricingAnalyseResponse:
+    """
+    Same as analyse(), but the AI agent consumes ONLY the provided context feed bundle
+    (frontend mock contextFeed.ts) for external signal inputs.
+    """
+    today = date.today()
+    async with AsyncSessionLocal() as db:
+        snapshot = await _build_pricing_context(db, today)
+
+    context_text = _build_context_text(snapshot, today)
+    dates = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+
+    result = await run_pricing_agent(
+        snapshot=snapshot,
+        context_text=context_text,
+        today=today,
+        session_factory=AsyncSessionLocal,
+        context_items=[ci.model_dump() for ci in body.context_items],
+    )
+
+    calendar_map = result.get("calendar", {})
+
+    calendar_rows: list[PricingCalendarRow] = []
+    for cat in CATEGORY_ORDER:
+        snap_cat = snapshot.get(cat, {})
+        if not snap_cat:
+            continue
+
+        cells_by_date = {
+            cell.get("date"): cell
+            for cell in (calendar_map.get(cat) or [])
+            if isinstance(cell, dict) and cell.get("date")
+        }
+
+        cells: list[PricingCalendarCell] = []
+        for d in dates:
+            snap_day = snap_cat.get(d, {})
+            avg_rate = snap_day.get("avg_rate", 0.0)
+            floor_rate = snap_day.get("floor_rate", 0.0)
+            cell = cells_by_date.get(d, {})
+
+            suggested = float(cell.get("suggested_rate", avg_rate))
+            if floor_rate > 0 and suggested < floor_rate:
+                suggested = floor_rate
+
+            action = cell.get("action", "MAINTAIN")
+            if suggested > avg_rate * 1.02:
+                action = "INCREASE"
+            elif suggested < avg_rate * 0.98:
+                action = "DISCOUNT"
+            else:
+                action = "MAINTAIN"
+
+            cells.append(PricingCalendarCell(
+                date=d,
+                current_rate=avg_rate,
+                suggested_rate=round(suggested / 5) * 5,
+                change_pct=round((suggested - avg_rate) / avg_rate * 100, 1) if avg_rate else 0.0,
+                action=action,
+                confidence=cell.get("confidence", "MEDIUM"),
+                reason=cell.get("reason", ""),
+                occupancy_pct=snap_day.get("occ_pct", 0.0),
+                otb=int(snap_day.get("otb", 0)),
+                floor_rate=floor_rate,
+                is_orphan=False,
+                weather_factor=cell.get("weather_factor", "") or "",
+                event_factor=cell.get("event_factor", "") or "",
+                news_factor=cell.get("news_factor", "") or "",
+            ))
+
+        if any(c.current_rate > 0 for c in cells):
+            calendar_rows.append(PricingCalendarRow(category=cat, cells=cells))
+
+    rescue_potential = _compute_rescue_potential(calendar_map, snapshot)
+
     recommendations: list[PricingRecommendation] = [
         PricingRecommendation(
             category=row.category,
