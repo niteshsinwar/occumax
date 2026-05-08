@@ -62,10 +62,10 @@ export const contextFeed: ContextFeedItem[] = [
     ],
   },
   {
-    id: "bookingcom-24h-downtime",
+    id: "expedia-24h-downtime",
     kind: "MARKET",
     severity: "ALERT",
-    title: "Market: Booking.com experiencing 1-day API downtime (partner risk)",
+    title: "Market: Expedia experiencing 1-day API downtime (partner risk)",
     detail:
       "Social/news chatter indicates sustained outage. Treat as partner-health risk → shift flexible inventory away from high-risk channels to protect net margin.",
     factors: [
@@ -85,4 +85,3 @@ export function computeCompositeScore(item: ContextFeedItem): number {
 export function getPrimaryShockTrigger(): ContextFeedItem {
   return contextFeed.find(i => i.severity === "ALERT") ?? contextFeed[0]!;
 }
-

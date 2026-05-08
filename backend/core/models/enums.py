@@ -20,7 +20,7 @@ class Channel(str, PyEnum):
     OTA = "OTA"
     DIRECT = "DIRECT"
     GDS = "GDS"
-    WALKIN = "WALKIN"
+
     CLOSED = "CLOSED"
 
 

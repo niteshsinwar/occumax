@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Admin controller — room CRUD, slot manual patching, category stats.
 
@@ -5,7 +7,6 @@ No price overrides. No WebSocket.
 """
 
 from datetime import date, timedelta
-from typing import Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -208,7 +209,7 @@ class AdminBookingUpdate(BaseModel):
     category: Optional[str] = None
 
 
-def _parse_iso_date(value: str | None, name: str) -> Optional[date]:
+def _parse_iso_date(value: Optional[str], name: str) -> Optional[date]:
     if value is None:
         return None
     try:
@@ -217,7 +218,7 @@ def _parse_iso_date(value: str | None, name: str) -> Optional[date]:
         raise HTTPException(status_code=400, detail=f"{name} must be an ISO date (YYYY-MM-DD)")
 
 
-async def admin_list_bookings(db: AsyncSession, start: str | None, end: str | None) -> list[dict]:
+async def admin_list_bookings(db: AsyncSession, start: Optional[str], end: Optional[str]) -> list[dict]:
     """
     Admin list bookings with an optional stay-date overlap filter.
 

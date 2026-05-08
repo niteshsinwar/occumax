@@ -7,9 +7,11 @@ Flow:
 """
 
 from __future__ import annotations
+
 import logging
 import uuid
 from datetime import date, timedelta
+from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -18,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
 from core.schemas.manager import SwapStep, GapInfo, OptimiseResult, CommitRequest, CommitResult, ChannelAllocateRequest, ChannelAllocateResult
-from core.schemas.analytics import ChannelRecommendResponse, ChannelRecommendation
-from core.channel_config import OTA_PARTNER_NAMES, GDS_PARTNER_NAMES
+from core.schemas.analytics import ChannelRecommendResponse, ChannelRecommendation, ChannelPartnerInsight
+from core.channel_config import OTA_PARTNER_NAMES, OTA_PARTNER_NAMES_LIST
 from services.algorithm.calendar_optimiser import GapDetector, SlotInfo
 from services.ai.channel_agent import run_channel_agent
 from services.database import AsyncSessionLocal
@@ -191,19 +193,17 @@ async def commit_plan(body: CommitRequest, db: AsyncSession) -> CommitResult:
 
 # ── Booking source → channel enum mapping ─────────────────────────────────────
 
-def _resolve_channel(booking_source: str) -> tuple[Channel, str | None]:
+def _resolve_channel(booking_source: str) -> tuple[Channel, Optional[str]]:
     """
-    Map a single 'booking source' label to (Channel enum, partner name | None).
-    Business rule: there are only two routes — channel (OTA/GDS) or direct.
+    Map a single 'booking source' label to (Channel enum, partner Optional[name]).
+    Business rule: channel allocation only pushes inventory to OTA partners.
+    Anything not explicitly allocated to an OTA remains direct hotel/front-desk inventory.
     Partner lists come from core.channel_config — single source of truth.
     """
     if booking_source in OTA_PARTNER_NAMES:
         return Channel.OTA, booking_source
-    if booking_source in GDS_PARTNER_NAMES:
-        return Channel.GDS, booking_source
-    if booking_source == "Walk-in":
-        return Channel.WALKIN, None
-    return Channel.DIRECT, None  # "Direct" and anything else
+
+    return Channel.DIRECT, None
 
 
 async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> ChannelAllocateResult:
@@ -222,6 +222,12 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
         raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
 
     ch, partner = _resolve_channel(body.booking_source)
+    if ch != Channel.OTA or not partner:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail="Channel allocation only supports configured US/global OTA partners. Unallocated inventory remains Direct Hotel Front Desk.",
+        )
 
     check_in  = date.fromisoformat(body.check_in)
     check_out = date.fromisoformat(body.check_out)
@@ -266,7 +272,7 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
             continue
 
         bid = str(uuid.uuid4())[:8].upper()
-        label = partner or ("Walk-in" if ch == Channel.WALKIN else "Direct")
+        label = partner or "Direct Hotel Front Desk"
         from datetime import datetime as _dt
         booking = Booking(
             id=bid,
@@ -300,7 +306,7 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
 
     await db.commit()
 
-    source_label = partner or ("Walk-in" if ch == Channel.WALKIN else "Direct")
+    source_label = partner or "Direct Hotel Front Desk"
     if not booking_ids:
         msg = f"No free {body.category} rooms found for {body.check_in} → {body.check_out}."
     else:
@@ -322,6 +328,137 @@ def _iter_nights(start: date, end: date):
     while cur < end:
         yield cur
         cur += timedelta(days=1)
+
+
+def _channel_news_context_lines(today: date) -> list[str]:
+    """
+    Mock OTA news and campaign context for the Channel Strategy agent.
+    Occupancy, inventory, booking history, and channel performance are not mocked.
+    """
+    return [
+        f"Channel intelligence context as of {today.isoformat()}:",
+        "",
+        "Mock OTA news and campaign feed:",
+        "  2026-05-08..2026-05-09 | Expedia | API downtime reported in partner connectivity feed. Avoid incremental Expedia slot pushes until the downtime window clears.",
+        "  2026-05-08..2026-05-15 | Booking.com | Northeast Weekend Escape campaign active for US leisure and inbound city-drive demand.",
+        "  2026-05-10..2026-05-13 | Priceline | Weekday opaque-rate promotion active for price-sensitive Standard/Economy gaps.",
+        "  2026-05-13..2026-05-16 | Travelocity | US package leisure campaign starts; useful as a supplemental OTA for late-week leisure gaps.",
+        "  2026-05-14..2026-05-21 | Orbitz | Rewards-led US leisure campaign starts after the current Expedia downtime window.",
+        "  2026-05-05..2026-05-20 | Hotels.com | Loyalty campaign active, but shared Expedia Group infrastructure means monitor partner-health risk.",
+    ]
+
+
+def _confidence_rank(confidence: str | None) -> int:
+    if confidence == "HIGH":
+        return 90
+    if confidence == "MEDIUM":
+        return 70
+    if confidence == "LOW":
+        return 50
+    return 35
+
+
+def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], today: date) -> list[ChannelPartnerInsight]:
+    valid_preferences = {"PREFER", "WATCH", "HOLD", "AVOID"}
+    valid_health = {"GREEN", "AMBER", "RED"}
+    valid_confidence = {"HIGH", "MEDIUM", "LOW"}
+    insights: list[ChannelPartnerInsight] = []
+    seen: set[str] = set()
+
+    for item in raw.get("partner_insights", []) or []:
+        if not isinstance(item, dict):
+            continue
+        partner = str(item.get("partner", "")).strip()
+        if partner not in OTA_PARTNER_NAMES or partner in seen:
+            continue
+        preference = str(item.get("preference", "HOLD")).strip().upper()
+        health = str(item.get("health", "GREEN")).strip().upper()
+        confidence = str(item.get("confidence", "LOW")).strip().upper()
+        if preference not in valid_preferences:
+            preference = "HOLD"
+        if health not in valid_health:
+            health = "GREEN"
+        if confidence not in valid_confidence:
+            confidence = "LOW"
+        try:
+            score = float(item.get("score", _confidence_rank(confidence)))
+        except (TypeError, ValueError):
+            score = float(_confidence_rank(confidence))
+        category = item.get("category")
+        insights.append(ChannelPartnerInsight(
+            partner=partner,
+            preference=preference,
+            health=health,
+            confidence=confidence,
+            score=score,
+            reasoning=str(item.get("reasoning", "YieldIQ did not provide partner-specific reasoning.")).strip(),
+            category=str(category).upper() if category else None,
+            check_in=item.get("check_in") or None,
+            check_out=item.get("check_out") or None,
+            room_count=item.get("room_count") or None,
+            expected_net=item.get("expected_net") or None,
+        ))
+        seen.add(partner)
+
+    best_by_partner: dict[str, ChannelRecommendation] = {}
+    for rec in recs:
+        prev = best_by_partner.get(rec.booking_source)
+        prev_score = _confidence_rank(prev.confidence) + (prev.expected_net or 0) / 10000 if prev else -1
+        next_score = _confidence_rank(rec.confidence) + (rec.expected_net or 0) / 10000
+        if prev is None or next_score > prev_score:
+            best_by_partner[rec.booking_source] = rec
+
+    expedia_downtime_active = date(2026, 5, 8) <= today < date(2026, 5, 9)
+    hotels_watch_active = date(2026, 5, 8) <= today < date(2026, 5, 9)
+
+    for partner in OTA_PARTNER_NAMES_LIST:
+        if partner in seen:
+            continue
+        rec = best_by_partner.get(partner)
+        if rec:
+            preference = "PREFER" if rec.confidence == "HIGH" else "WATCH" if rec.confidence == "MEDIUM" else "HOLD"
+            insights.append(ChannelPartnerInsight(
+                partner=partner,
+                preference=preference,
+                health="GREEN",
+                confidence=rec.confidence,
+                score=_confidence_rank(rec.confidence) + (rec.expected_net or 0) / 10000,
+                reasoning=rec.reasoning,
+                category=rec.category,
+                check_in=rec.check_in,
+                check_out=rec.check_out,
+                room_count=rec.room_count,
+                expected_net=rec.expected_net,
+            ))
+        elif partner == "Expedia" and expedia_downtime_active:
+            insights.append(ChannelPartnerInsight(
+                partner=partner,
+                preference="AVOID",
+                health="RED",
+                confidence="HIGH",
+                score=0,
+                reasoning="OTA news feed shows Expedia API downtime on May 8-9; avoid incremental slot pushes until connectivity clears.",
+            ))
+        elif partner == "Hotels.com" and hotels_watch_active:
+            insights.append(ChannelPartnerInsight(
+                partner=partner,
+                preference="WATCH",
+                health="AMBER",
+                confidence="MEDIUM",
+                score=55,
+                reasoning="Hotels.com loyalty campaign is active, but shared Expedia Group connectivity keeps it on watch during the downtime window.",
+            ))
+        else:
+            insights.append(ChannelPartnerInsight(
+                partner=partner,
+                preference="HOLD",
+                health="GREEN",
+                confidence="LOW",
+                score=35,
+                reasoning="YieldIQ found no stronger date/category fit for this partner from current gaps, booking history, and OTA news.",
+            ))
+
+    return insights
 
 
 async def get_channel_recommendations() -> ChannelRecommendResponse:
@@ -364,17 +501,28 @@ async def get_channel_recommendations() -> ChannelRecommendResponse:
             dow = date.fromisoformat(ds).strftime("%a")
             lines.append(f"  {ds} ({dow}): {occ_pct}% occ, {empty}/{info['total']} empty")
 
-    context_text = "\n".join(lines) if lines else "No inventory data available."
+    inventory_text = "\n".join(lines) if lines else "No inventory data available."
+    context_text = "\n".join([
+        *_channel_news_context_lines(today),
+        "",
+        "Current inventory snapshot (next 14 days):",
+        inventory_text,
+    ])
 
     raw = await run_channel_agent(context_text, today, AsyncSessionLocal)
 
-    recs = [
-        ChannelRecommendation(**{**r, "category": str(r.get("category", "")).upper()})
-        for r in raw.get("recommendations", [])
-    ]
+    recs = []
+    for r in raw.get("recommendations", []):
+        booking_source = str(r.get("booking_source", "")).strip()
+        channel_type = str(r.get("channel_type", "")).strip().upper()
+        if booking_source not in OTA_PARTNER_NAMES or channel_type != "OTA":
+            continue
+        recs.append(ChannelRecommendation(**{**r, "category": str(r.get("category", "")).upper(), "channel_type": "OTA"}))
+    partner_insights = _normalise_partner_insights(raw, recs, today)
     return ChannelRecommendResponse(
         as_of=today.isoformat(),
         analysis_window_days=14,
         recommendations=recs,
+        partner_insights=partner_insights,
         summary=raw.get("summary", ""),
     )

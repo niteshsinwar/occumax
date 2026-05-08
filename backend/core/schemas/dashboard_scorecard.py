@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 
 from datetime import date
 
@@ -20,7 +21,7 @@ class DashboardScorecardRequest(BaseModel):
     end: date
     categories: list[RoomCategory] = Field(default_factory=list)
     k_nights: list[int] = Field(default_factory=lambda: [2, 3])
-    swap_plan: list[SwapStep] | None = None
+    swap_plan: Optional[list[SwapStep]] = None
 
 
 class CapacityScore(BaseModel):
@@ -37,7 +38,7 @@ class CapacityScore(BaseModel):
     orphan_nights: int
     revenue_at_risk: float
     k_windows: dict[int, int]
-    revenue_weighted_fill_pct: float | None = Field(
+    revenue_weighted_fill_pct: Optional[float] = Field(
         default=None,
         description="0–100. Weighted by (1-fill_prob)*rate*length per gap.",
     )
@@ -55,6 +56,6 @@ class DashboardScorecardResponse(BaseModel):
     categories: list[RoomCategory]
     k_nights: list[int]
     before: CapacityScore
-    after: CapacityScore | None = None
-    delta: CapacityDelta | None = None
+    after: Optional[CapacityScore] = None
+    delta: Optional[CapacityDelta] = None
 

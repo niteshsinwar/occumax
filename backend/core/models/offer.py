@@ -1,8 +1,8 @@
 from __future__ import annotations
+from typing import Optional
 
 import uuid
 from datetime import datetime as dt, date
-from typing import Optional
 
 from sqlalchemy import String, Float, DateTime, Date, Enum
 from sqlalchemy.orm import Mapped, mapped_column

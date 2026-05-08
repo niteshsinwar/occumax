@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Split-Stay Engine — Phase 2
 
@@ -16,11 +18,9 @@ Discount tiers:
   3 segments (2 handoffs) → 10 %
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional
 
 from core.models.enums import BlockType, RoomCategory
 from services.algorithm.calendar_optimiser import SlotInfo

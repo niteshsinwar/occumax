@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Flexible Split-Stay Engine — Phase 2 (cross-category)
  
@@ -12,11 +14,9 @@ Constraints:
   - Applies the same discount tiers as the standard split-stay engine.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional
 
 from core.models.enums import BlockType, RoomCategory
 from services.algorithm.calendar_optimiser import SlotInfo

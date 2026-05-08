@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Receptionist AI Agent — LangGraph + Gemini
 
@@ -9,7 +11,6 @@ Architecture:
   - action_data: structured payload returned alongside text reply for frontend cards
 """
 
-from __future__ import annotations
 
 import json
 import logging
@@ -71,7 +72,7 @@ New Jersey hotel market context (use this for AI insights and pricing commentary
   Asbury Park summer concert series; Atlantic City casino conventions.
 - NYC overflow: when NYC hotel rates spike above $400/night, NJ captures late-booking
   overflow (1–3 days out). Watch for sudden midnight pickup surges.
-- OTA pressure: Expedia, Booking.com, Priceline dominate. Rate pressure highest on
+- OTA pressure: Expedia, Hotels.com, Priceline dominate. Rate pressure highest on
   Standard Mon–Thu. Suites/Deluxe have fewer OTA competitors — hold and push direct.
 
 Available room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
@@ -902,7 +903,7 @@ async def run_agent(
 
     Returns
     -------
-    { reply: str, action_data: dict | None }
+    { reply: str, action_data: Optional[dict] }
     reply       : AI text to display as the next assistant bubble
     action_data : Optional structured payload for frontend to render a rich card
     """

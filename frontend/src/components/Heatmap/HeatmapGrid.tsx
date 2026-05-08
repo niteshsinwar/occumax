@@ -30,7 +30,7 @@ interface HeatmapGridProps {
   onCellClick?: (cell: CellClickInfo) => void;
 }
 
-const CHANNEL_BOOKING_CHANNELS = new Set(["OTA", "GDS"]);
+const CHANNEL_BOOKING_CHANNELS = new Set(["OTA"]);
 
 /** Base cell colors — `optihost` matches muted gold / blue / orange / green from dashboard mockup. */
 const PALETTE_STYLES: Record<

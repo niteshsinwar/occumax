@@ -30,7 +30,17 @@ from core.schemas.analytics import (
     PartnerStat,
     ChannelPerformanceResponse,
 )
+from core.channel_config import OTA_PARTNER_NAMES, OTA_PARTNER_NAMES_LIST
 from services.analytics.forecasting import build_expected_occupancy
+
+
+def _fallback_ota_partner(slot_id: str | None) -> str:
+    partners = OTA_PARTNER_NAMES_LIST
+    if not partners:
+        return "Unattributed OTA"
+    key = slot_id or ""
+    idx = sum(key.encode("utf-8")) % len(partners)
+    return partners[idx]
 
 
 def _as_of_dt(as_of: date) -> datetime:
@@ -654,11 +664,10 @@ async def get_revenue_summary(
     )
 
 
-# OTA commission rates by channel (industry standard for India)
+# Commission rates by channel for the US/NJ market.
 _COMMISSION: dict[str, float] = {
-    "OTA":    0.18,  # MakeMyTrip/Goibibo avg 18%
-    "GDS":    0.10,  # GDS global distribution avg 10%
-    "DIRECT": 0.00,  # Direct booking — zero commission
+    "OTA":    0.18,  # US OTA average across Expedia Group/Priceline brands
+    "DIRECT": 0.00,  # Hotel/front-desk selling — zero commission
     "WALKIN": 0.00,  # Walk-in — zero commission
     "CLOSED": 0.00,
 }
@@ -688,7 +697,7 @@ async def get_channel_performance(
         category_filter = [Room.category.in_(categories)]
 
     rows = (await db.execute(
-        select(Slot.channel, Slot.channel_partner, Slot.current_rate)
+        select(Slot.id, Slot.channel, Slot.channel_partner, Slot.current_rate)
         .join(Room, Room.id == Slot.room_id)
         .where(
             Room.is_active == True,
@@ -707,7 +716,14 @@ async def get_channel_performance(
 
     for row in rows:
         ch = row.channel.value if row.channel and hasattr(row.channel, "value") else "DIRECT"
-        pt = row.channel_partner or ("Direct" if ch == "DIRECT" else ("Walk-in" if ch == "WALKIN" else ch))
+        if ch == "OTA":
+            pt = row.channel_partner if row.channel_partner in OTA_PARTNER_NAMES else _fallback_ota_partner(row.id)
+        elif ch == "DIRECT":
+            pt = "Direct Hotel Front Desk"
+        elif ch == "WALKIN":
+            pt = "Walk-in"
+        else:
+            pt = row.channel_partner or ch
         channel_nights[ch] = channel_nights.get(ch, 0) + 1
         channel_gross[ch] = channel_gross.get(ch, 0.0) + float(row.current_rate)
         _pn = partner_nights.setdefault(ch, {})
@@ -769,13 +785,13 @@ async def get_channel_performance(
         recommendation = (
             f"OTA dependency is high at {ota_share}% of bookings. "
             f"${int(commission_leak):,} lost to commissions this period. "
-            "Offer a 5% direct booking discount to shift guests off OTA — net revenue improves immediately."
+            "Hold unallocated rooms for direct hotel selling and use OTA only for remaining demand gaps."
         )
     elif direct_share > 50:
         recommendation = (
-            f"Strong direct booking mix at {direct_share}%. "
+            f"Strong direct hotel/front-desk selling mix at {direct_share}%. "
             f"Net revenue is ${int(total_net):,} vs gross ${int(total_gross):,} — minimal commission drain. "
-            "Keep incentivising direct with loyalty perks or early-bird rates."
+            "Keep holding unallocated inventory for direct hotel selling on high-demand nights."
         )
     elif ota_stat and ota_stat.avg_rate < (total_gross / max(1, total_nights)) * 0.95:
         recommendation = (
@@ -786,7 +802,7 @@ async def get_channel_performance(
     else:
         recommendation = (
             f"Channel mix is balanced. Commission cost is ${int(commission_leak):,} this period. "
-            "Focus on pushing direct for high-value room categories (Deluxe/Suite) to maximise net yield."
+            "Use OTA only for real gaps; keep high-value room categories available for direct hotel selling."
         )
 
     return ChannelPerformanceResponse(

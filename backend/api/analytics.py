@@ -1,9 +1,10 @@
+from __future__ import annotations
+from typing import Optional
 """Analytics API routes — occupancy forecast, pace, and event insights.
 
 Additive-only endpoints used by the Bird's Eye Dashboard (`/dashboard`).
 """
 
-from __future__ import annotations
 
 from datetime import date
 
@@ -44,7 +45,7 @@ async def get_event_insights(
     start: date = Query(...),
     end: date = Query(...),
     as_of: date = Query(...),
-    category: str | None = Query(None),
+    category: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     return await ctrl.get_event_insights(db=db, start=start, end=end, as_of=as_of, category=category)
@@ -52,7 +53,7 @@ async def get_event_insights(
 
 @router.get("/revenue-summary", response_model=RevenueSummaryResponse)
 async def get_revenue_summary(
-    as_of: date | None = Query(None),
+    as_of: Optional[date] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import date as date_type
@@ -62,11 +63,11 @@ async def get_revenue_summary(
 
 @router.get("/channel-performance", response_model=ChannelPerformanceResponse)
 async def get_channel_performance(
-    as_of: date | None = Query(None),
+    as_of: Optional[date] = Query(None),
     window_days: int = Query(30, ge=7, le=90),
-    start: date | None = Query(None),
-    end: date | None = Query(None),
-    categories: list[RoomCategory] | None = Query(None),
+    start: Optional[date] = Query(None),
+    end: Optional[date] = Query(None),
+    categories: Optional[list[RoomCategory]] = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     from datetime import date as date_type

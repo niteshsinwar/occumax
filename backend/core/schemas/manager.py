@@ -36,7 +36,7 @@ class CommitResult(BaseModel):
 
 
 class ChannelAllocateRequest(BaseModel):
-    booking_source: str    # "MakeMyTrip" | "Goibibo" | "Direct" | "Walk-in" | "Amadeus" …
+    booking_source: str    # "Expedia" | "Hotels.com" | "Booking.com" | "Priceline" | ...
     category: str          # DELUXE | SUITE | etc.
     check_in: str          # ISO date
     check_out: str         # ISO date

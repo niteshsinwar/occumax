@@ -308,7 +308,7 @@ export function PricingPanel() {
                 </span>
               )}
               <span className="ml-auto text-[9px] text-text-muted font-medium shrink-0">
-                Pune market · {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+                NJ market · {new Date().toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short" })}
               </span>
             </div>
           )}

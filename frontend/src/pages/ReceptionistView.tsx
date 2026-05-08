@@ -1,21 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { format, addDays } from "date-fns";
 import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
-import type { ShuffleResult, RoomCategory, ComparisonTable, Alternative, SplitSegment } from "../types";
+import type { ShuffleResult, RoomCategory, ComparisonTable, SplitSegment } from "../types";
 import { useToast } from "../components/shared/Toast";
-import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User } from "lucide-react";
+import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User, X } from "lucide-react";
 
 const CATEGORIES: RoomCategory[] = ["STANDARD", "STUDIO", "DELUXE", "SUITE"];
 
-// Receptionist desk = direct routes only. OTA/GDS allocations happen in Manager → Channels.
-const BOOKING_SOURCES = [
-  { label: "Direct",   channel: "DIRECT", partner: null },
-  { label: "Walk-in",  channel: "WALKIN", partner: null },
-];
-
-function resolveSource(label: string) {
-  return BOOKING_SOURCES.find(s => s.label === label) ?? BOOKING_SOURCES[0];
-}
+// Receptionist desk = direct routes only. OTA allocations happen in Manager → Channels.
 
 // ── AI chat types ─────────────────────────────────────────────────────────────
 interface ChatMsg {
@@ -47,7 +39,7 @@ export function ReceptionistView() {
   const [checkIn,        setCheckIn]        = useState(today);
   const [checkOut,       setCheckOut]       = useState(defaultOut);
   const [guestName,      setGuestName]      = useState("");
-  const [bookingSource,  setBookingSource]  = useState("Direct");
+
   const [checking,       setChecking]       = useState(false);
   const [confirming,     setConfirming]     = useState(false);
   const [result,         setResult]         = useState<ShuffleResult | null>(null);
@@ -55,25 +47,17 @@ export function ReceptionistView() {
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
   const [loadingRecent,  setLoadingRecent]  = useState(false);
   const [lastConfirmed,  setLastConfirmed]  = useState<string | null>(null);
-  const [showFallback,   setShowFallback]   = useState(false);
-  const [showDeterministicAlternatives, setShowDeterministicAlternatives] = useState(false);
-  const [fallbackPrefs,  setFallbackPrefs]  = useState({
-    nearbyDatesPm1: true,
-    differentCategory: true,
-    splitStay: true,
-    allowMixedCategorySplit: false,
-  });
   const { show, Toasts } = useToast();
-  const timers    = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // ── AI chat state — always-on parallel assistant ─────────────────────────
-  const [aiGuided,     setAiGuided]    = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
-  const [chatInput,    setChatInput]   = useState("");
-  const [chatLoading,  setChatLoading] = useState(false);
-  const [hotelContext, setHotelContext] = useState<string | null>(null);
-  const chatEndRef  = useRef<HTMLDivElement>(null);
-  const aiPanelRef  = useRef<HTMLDivElement>(null);
+  // ── AI floating agent state ───────────────────────────────────────────────
+  const [chatMessages,    setChatMessages]    = useState<ChatMsg[]>([]);
+  const [chatInput,       setChatInput]       = useState("");
+  const [chatLoading,     setChatLoading]     = useState(false);
+  const [hotelContext,    setHotelContext]    = useState<string | null>(null);
+  const [aiOpen,          setAiOpen]          = useState(false);
+  const [aiHasProactive,  setAiHasProactive]  = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const loadRecent = async () => {
     setLoadingRecent(true);
@@ -99,10 +83,8 @@ export function ReceptionistView() {
     setChecking(true);
     setResult(null);
     setLastConfirmed(null);
-    setAiGuided(false);
     setChatMessages([]);
-    setShowFallback(false);
-    setShowDeterministicAlternatives(false);
+    setAiHasProactive(false);
 
     setSteps({ direct: "running", shuffle: "idle" });
     timers.current.push(setTimeout(() => {
@@ -111,18 +93,16 @@ export function ReceptionistView() {
 
     try {
       const res = await checkAvailability({
-        category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest",
+        category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Direct Guest",
       });
       const data = res.data as ShuffleResult;
       setSteps({ direct: "done", shuffle: data.state === "DIRECT_AVAILABLE" ? "skipped" : "done" });
       setResult(data);
       if (data.state === "NOT_POSSIBLE") {
-        // Do not pre-run split stay checks here — split is one of the selectable
-        // fallback options and should only run as part of guided agentic search.
-        setShowFallback(true);
-        // Auto handoff to AI using current default filter selections.
-        // Receptionist can toggle filters and re-run the guided handoff.
-        setTimeout(() => { handleExploreWithAi(); }, 0);
+        // Auto-open floating agent and proactively fire handoff
+        setAiOpen(true);
+        setAiHasProactive(true);
+        setTimeout(() => triggerAiHandoff(data), 100);
       }
     } catch {
       show("Failed to check availability", "error");
@@ -136,10 +116,9 @@ export function ReceptionistView() {
   const handleConfirm = async () => {
     if (!result?.room_id) return;
     setConfirming(true);
-    const src = resolveSource(bookingSource);
     try {
       const res = await confirmBooking({
-        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Walk-in Guest", channel: src.channel, channel_partner: src.partner },
+        request: { category, check_in: checkIn, check_out: checkOut, guest_name: guestName || "Direct Guest", channel: "DIRECT", channel_partner: null },
         room_id: result.room_id, swap_plan: result.swap_plan ?? undefined,
       });
       setLastConfirmed(res.data.booking_id);
@@ -197,16 +176,10 @@ export function ReceptionistView() {
     await fireAiMessage(text, chatMessages);
   };
 
-  const handleExploreWithAi = async () => {
-    if (!result || result.state !== "NOT_POSSIBLE") return;
-    const name = guestName.trim() || "Walk-in Guest";
-    const blocked = result.infeasible_dates?.join(", ") || `${checkIn} – ${checkOut}`;
-    const splitState = "NOT_CHECKED";
-
-    setChatMessages([]);
-    setAiGuided(true);
-    setTimeout(() => aiPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
-
+  // Proactive handoff — fires automatically when booking returns NOT_POSSIBLE
+  const triggerAiHandoff = async (data: ShuffleResult) => {
+    const name = guestName.trim() || "Direct Guest";
+    const blocked = data.infeasible_dates?.join(", ") || `${checkIn} – ${checkOut}`;
     const handoffLines = [
       "[HANDOFF]",
       `Guest="${name}"`,
@@ -215,16 +188,15 @@ export function ReceptionistView() {
       `check_out=${checkOut}`,
       `deterministic_check=NOT_POSSIBLE`,
       `infeasible_dates=${blocked}`,
-      `split_same_category=${splitState}`,
-      `options.nearby_dates_pm1=${fallbackPrefs.nearbyDatesPm1}`,
-      `options.different_category=${fallbackPrefs.differentCategory}`,
-      `options.split_stay=${fallbackPrefs.splitStay}`,
-      `options.mixed_category_split=${fallbackPrefs.allowMixedCategorySplit}`,
-      "Rules: Only explore selected options. Prefer exact dates first, then minimal category delta (±1), then other categories, then date shift (±1).",
-      "If mixed_category_split=true and split_stay=true, you may use find_split_stay_flex(preferred_category, same dates).",
+      `split_same_category=NOT_CHECKED`,
+      `options.nearby_dates_pm1=true`,
+      `options.different_category=true`,
+      `options.split_stay=true`,
+      `options.mixed_category_split=false`,
+      "Rules: Prefer exact dates first, then minimal category delta (±1), then other categories, then date shift (±1).",
+      "If split_stay=true, you may use find_split_stay_flex(preferred_category, same dates).",
       "Return the best actionable option as an action card.",
     ];
-
     await fireAiMessage(handoffLines.join("\n"), []);
   };
 
@@ -250,10 +222,7 @@ export function ReceptionistView() {
         </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-6 items-start">
-        <div className="min-w-0 space-y-8">
-          {/* ── Booking Form ─────────────────────────────────────────────────── */}
-          <>
+      <div className="space-y-6">
 
       {/* Booking Wizard */}
       <div className="bg-surface border border-border mt-4 shadow-subtle p-6 rounded-sm relative overflow-hidden group">
@@ -284,14 +253,9 @@ export function ReceptionistView() {
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Name</label>
-            <input type="text" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none font-serif" placeholder="Walk-in Guest" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
+            <input type="text" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none font-serif" placeholder="Direct Guest" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
           </div>
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Booking Source</label>
-            <select className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={bookingSource} onChange={e => setBookingSource(e.target.value)}>
-              {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
-            </select>
-          </div>
+
         </div>
 
         <div className="flex items-center justify-between pt-4">
@@ -354,131 +318,12 @@ export function ReceptionistView() {
           )}
 
           {result.state === "NOT_POSSIBLE" && (
-            <div className="mt-6 space-y-4">
-              {showFallback && (
-                <div className="bg-surface border border-border shadow-subtle">
-                  <div className="px-6 py-4 border-b border-border bg-surface-2/60">
-                    <div className="flex items-center justify-between gap-4 flex-wrap">
-                      <div>
-                        <h4 className="font-serif font-bold text-lg text-text">Explore alternatives</h4>
-                        <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest font-medium">
-                          Choose what the AI is allowed to search
-                        </p>
-                      </div>
-                      <button
-                        className="text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-3 py-2 bg-surface hover:bg-surface-2 shrink-0"
-                        onClick={() => setShowFallback(false)}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                          checked={fallbackPrefs.nearbyDatesPm1}
-                          onChange={(e) => {
-                            const next = { ...fallbackPrefs, nearbyDatesPm1: e.target.checked };
-                            setFallbackPrefs(next);
-                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${e.target.checked}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
-                          }}
-                        />
-                        <div className="leading-5">
-                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Nearby dates</div>
-                          <div className="text-text-muted">Search ±1 day (same stay length)</div>
-                        </div>
-                      </label>
-
-                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                          checked={fallbackPrefs.differentCategory}
-                          onChange={(e) => {
-                            const next = { ...fallbackPrefs, differentCategory: e.target.checked };
-                            setFallbackPrefs(next);
-                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${e.target.checked}, split_stay=${next.splitStay}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
-                          }}
-                        />
-                        <div className="leading-5">
-                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Different category</div>
-                          <div className="text-text-muted">Any category, prefer ±1</div>
-                        </div>
-                      </label>
-
-                      <label className="flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                          checked={fallbackPrefs.splitStay}
-                          onChange={(e) => {
-                            const next = { ...fallbackPrefs, splitStay: e.target.checked };
-                            setFallbackPrefs(next);
-                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${e.target.checked}, mixed_category_split=${next.allowMixedCategorySplit}`, chatMessages);
-                          }}
-                        />
-                        <div className="leading-5">
-                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Split stay</div>
-                          <div className="text-text-muted">2–3 rooms if needed</div>
-                        </div>
-                      </label>
-
-                      <label className={`flex items-start gap-3 border border-border bg-surface-2/40 px-4 py-3 ${!fallbackPrefs.splitStay ? "opacity-40" : ""}`}>
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 accent-[var(--accent)]"
-                          checked={fallbackPrefs.allowMixedCategorySplit}
-                          disabled={!fallbackPrefs.splitStay}
-                          onChange={(e) => {
-                            const next = { ...fallbackPrefs, allowMixedCategorySplit: e.target.checked };
-                            setFallbackPrefs(next);
-                            if (chatMessages.length > 0) fireAiMessage(`[PREFS] Guest options updated: nearby_dates=${next.nearbyDatesPm1}, different_category=${next.differentCategory}, split_stay=${next.splitStay}, mixed_category_split=${e.target.checked}`, chatMessages);
-                          }}
-                        />
-                        <div className="leading-5">
-                          <div className="font-bold uppercase tracking-widest text-[10px] text-text">Mixed-category split</div>
-                          <div className="text-text-muted">Allow room type changes between segments</div>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="mt-6 flex flex-wrap gap-3 border-t border-border/50 pt-5">
-                    <button
-                      className="bg-accent text-white font-bold uppercase tracking-widest text-[11px] px-6 py-3 hover:brightness-110 active:scale-95 disabled:opacity-40 transition-all"
-                      onClick={handleExploreWithAi}
-                      disabled={chatLoading || (!fallbackPrefs.nearbyDatesPm1 && !fallbackPrefs.differentCategory && !fallbackPrefs.splitStay)}
-                    >
-                      Explore selected with AI
-                    </button>
-                      {result.alternatives && result.alternatives.length > 0 && (
-                        <button
-                          className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
-                          onClick={() => setShowDeterministicAlternatives((v) => !v)}
-                        >
-                          {showDeterministicAlternatives ? "Hide deterministic suggestions" : "Show deterministic suggestions"}
-                        </button>
-                      )}
-                    <button
-                      className="bg-surface hover:bg-surface-2 border border-border text-text font-bold uppercase tracking-widest text-[11px] px-6 py-3 transition-colors"
-                      onClick={() => { setChatMessages([]); setAiGuided(false); }}
-                    >
-                      Close AI panel
-                    </button>
-                  </div>
-
-                    {showDeterministicAlternatives && result.alternatives && (
-                      <AlternativesSection
-                        alternatives={result.alternatives}
-                        onSelect={alt => { setCheckIn(alt.check_in); setCheckOut(alt.check_out); setCategory(alt.category as RoomCategory); setResult(null); setSteps({ direct: "idle", shuffle: "idle" }); }}
-                      />
-                    )}
-                </div>
-                </div>
-              )}
+            <div className="mt-6 flex items-center gap-3 bg-accent/5 border border-accent/20 px-5 py-4">
+              <Sparkles className="w-4 h-4 text-accent shrink-0 animate-pulse" />
+              <span className="text-xs text-accent">
+                No {category} rooms for <span className="font-bold">{checkIn} → {checkOut}</span> — AI assistant is finding the best alternative.
+                <span className="ml-1 text-text-muted">Check the chat bubble at the bottom right.</span>
+              </span>
             </div>
           )}
 
@@ -505,133 +350,54 @@ export function ReceptionistView() {
         </div>
       )}
 
-          </>
 
-      {/* ── AI PANEL — always-on parallel revenue assistant ──────────────── */}
-      <div ref={aiPanelRef} className="bg-surface border border-accent/30 shadow-subtle">
-          {/* Handoff banner — only shown on NOT_POSSIBLE */}
-          {aiGuided && result?.state === "NOT_POSSIBLE" && (
-          <div className="bg-occuorange/5 border-b border-occuorange/20 px-6 py-3 flex items-center gap-3">
-            <Sparkles className="w-3.5 h-3.5 text-occuorange shrink-0" />
-            <p className="text-xs text-occuorange font-medium">
-              No {category} rooms for <span className="font-bold">{checkIn} → {checkOut}</span> — AI is searching for the best alternative
-            </p>
-          </div>
-          )}
-
-          {/* Panel header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-2/60">
-            <div>
-              <div className="flex items-center gap-2">
-                <Bot className="w-4 h-4 text-accent" />
-                <h3 className="font-serif font-bold text-lg text-text">AI Revenue Assistant</h3>
-              </div>
-              <p className="text-[10px] text-text-muted mt-0.5 uppercase tracking-widest">
-                Concierge AI · Live hotel intelligence
-              </p>
-            </div>
-            {chatMessages.length > 0 && (
-              <button
-                onClick={() => { setChatMessages([]); setAiGuided(false); }}
-                className="text-[9px] font-bold text-text-muted uppercase tracking-widest hover:text-text border border-border px-2 py-1 bg-surface hover:bg-surface-2"
-              >
-                Clear chat
-              </button>
-            )}
-          </div>
-
-          {/* Message thread */}
-          <div className="h-[440px] overflow-y-auto p-6 space-y-4 flex flex-col">
-            {chatMessages.length === 0 && !chatLoading && (
-              <div className="flex-1 flex flex-col items-center justify-center text-center">
-                <Bot className="w-10 h-10 text-accent/25 mb-4" />
-                <p className="text-sm font-serif font-bold text-text mb-1">Always on. Ask anything.</p>
-                <p className="text-xs text-text-muted max-w-xs leading-relaxed">
-                  Ask about room availability, tonight's occupancy, which category to push, upgrade opportunities, or anything about today's bookings.
-                </p>
-                <div className="mt-4 grid grid-cols-1 gap-2 w-full max-w-xs">
-                  {["What's looking good to sell today?", "Any upgrades available tonight?", "How's our occupancy this week?"].map(q => (
-                    <button
-                      key={q}
-                      onClick={() => { setChatInput(q); }}
-                      className="text-left text-[10px] text-accent border border-accent/20 bg-accent/5 px-3 py-2 hover:bg-accent/10 transition-colors font-medium"
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {chatMessages.map((msg, i) => <ChatBubble key={i} msg={msg} />)}
-            {chatLoading && (
-              <div className="flex items-start gap-3">
-                <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 mt-0.5">
-                  <Bot className="w-3.5 h-3.5 text-accent" />
-                </div>
-                <div className="bg-surface-2 border border-border px-4 py-3 text-sm text-text-muted flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin text-accent" /> Thinking…
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Input bar */}
-          <div className="border-t border-border p-4 flex gap-3">
-            <input
-              type="text"
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendAiMessage(); } }}
-              placeholder="Describe the guest's request…"
-              className="flex-1 bg-surface-2 border border-border text-sm px-4 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none"
-              disabled={chatLoading}
-            />
-            <button
-              onClick={handleSendAiMessage}
-              disabled={chatLoading || !chatInput.trim()}
-              className="bg-accent text-white px-5 py-3 font-bold hover:brightness-110 active:scale-95 disabled:opacity-40 transition-all flex items-center gap-2 text-sm"
-            >
-              {chatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-            </button>
-          </div>
+      {/* Recent Bookings — full-width 4-col grid */}
+      <div className="bg-surface border border-border shadow-subtle p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-serif font-bold text-lg text-text">Recent Bookings</h3>
+          <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-3 py-1.5 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
+            {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Refresh"}
+          </button>
         </div>
-        </div>
-
-      {/* Recent Bookings Sidebar */}
-        <aside className="min-w-0">
-          <div className="bg-surface border border-border shadow-subtle p-5 lg:sticky lg:top-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-serif font-bold text-lg text-text">Recent Bookings</h3>
-              <button className="text-[10px] font-bold uppercase tracking-widest text-text-muted hover:text-text flex items-center gap-1 bg-surface-2 border border-border px-3 py-1.5 transition-colors" onClick={loadRecent} disabled={loadingRecent}>
-                {loadingRecent ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : "Refresh"}
-              </button>
-            </div>
-            {recentBookings.length === 0 ? (
-              <div className="py-10 text-center text-text-muted font-medium text-sm border-t border-border/50">No recent bookings.</div>
-            ) : (
-              <div className="space-y-2">
-                {recentBookings.map((b) => (
-                  <div key={b.id} className="border border-border bg-surface-2/40 px-4 py-3 hover:bg-surface-2/70 transition-colors">
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <span className="font-serif font-medium text-sm text-text truncate">{b.guest_name}</span>
-                      <span className={`shrink-0 inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text-muted border-border'}`}>
-                        {b.is_live ? "IN-HOUSE" : "CONFIRMED"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono">
-                      <span className="font-bold text-text">Room {b.room_id}</span>
-                      <span className="text-border">·</span>
-                      <span>{b.check_in}</span>
-                    </div>
-                    <div className="text-[10px] text-text-muted mt-0.5 font-mono">{b.id}</div>
-                  </div>
-                ))}
+        {recentBookings.length === 0 ? (
+          <div className="py-8 text-center text-text-muted font-medium text-sm border-t border-border/50">No recent bookings.</div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {recentBookings.map((b) => (
+              <div key={b.id} className="border border-border bg-surface-2/40 px-4 py-3 hover:bg-surface-2/70 transition-colors">
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <span className="font-serif font-medium text-sm text-text truncate">{b.guest_name}</span>
+                  <span className={`shrink-0 inline-flex items-center px-2 py-0.5 border text-[9px] font-bold tracking-[0.1em] uppercase ${
+                    b.is_live ? 'bg-occugreen/10 text-occugreen border-occugreen/20' : 'bg-surface-2 text-text-muted border-border'
+                  }`}>{b.is_live ? "IN-HOUSE" : "CONFIRMED"}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono">
+                  <span className="font-bold text-text">Room {b.room_id}</span>
+                  <span className="text-border">·</span>
+                  <span>{b.category}</span>
+                </div>
+                <div className="text-[10px] text-text-muted mt-1 font-mono">{b.check_in} → {b.check_out}</div>
+                <div className="text-[9px] text-text-muted/60 mt-0.5 font-mono truncate">{b.id}</div>
               </div>
-            )}
+            ))}
           </div>
-        </aside>
+        )}
       </div>
+
+      </div>
+
+      <FloatingAiWidget
+        chatMessages={chatMessages}
+        chatInput={chatInput}
+        setChatInput={setChatInput}
+        chatLoading={chatLoading}
+        chatEndRef={chatEndRef}
+        onSend={handleSendAiMessage}
+        aiOpen={aiOpen}
+        setAiOpen={setAiOpen}
+        hasProactive={aiHasProactive}
+        setHasProactive={setAiHasProactive}
+      />
     </div>
   );
 }
@@ -747,24 +513,7 @@ function ComparisonSection({ comparison }: { comparison: ComparisonTable }) {
   );
 }
 
-function AlternativesSection({ alternatives, onSelect }: { alternatives: Alternative[]; onSelect: (alt: Alternative) => void }) {
-  return (
-    <div className="bg-surface border border-border p-5 mt-6">
-      <h4 className="text-[10px] font-bold text-text uppercase tracking-[0.15em] mb-4">Fallback Suggestions</h4>
-      <div className="space-y-3">
-        {alternatives.map((alt, i) => (
-          <div key={i} className="flex items-center justify-between p-4 border border-border bg-surface-2 hover:bg-border transition-colors">
-            <div>
-              <span className={`text-[9px] font-bold px-2 py-1 uppercase tracking-widest mr-3 border ${alt.type === "ALT_CATEGORY" ? 'bg-accent/10 border-accent/20 text-accent' : 'bg-surface border-border text-text-muted'}`}>{alt.type === "ALT_CATEGORY" ? alt.category : "Date Shift"}</span>
-              <span className="text-sm font-serif text-text">{alt.message}</span>
-            </div>
-            <button className="text-[10px] font-bold uppercase tracking-widest text-text hover:text-accent flex items-center gap-1 border-b border-text hover:border-accent pb-0.5" onClick={() => onSelect(alt)}>Execute <ArrowRight className="w-3 h-3"/></button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+
 
 function StepPill({ label, state }: { label: string; state: StepState }) {
   return (
@@ -782,7 +531,6 @@ function StepPill({ label, state }: { label: string; state: StepState }) {
 function ActionCard({ data }: { data: { type: string; data: Record<string, unknown> } }) {
   // Confirm-from-chat state — agent only recommends; receptionist must click to commit
   const [guestName,      setGuestName]      = useState("");
-  const [bookingSource,  setBookingSource]  = useState("Direct");
   const [confirming,     setConfirming]     = useState(false);
   const [confirmed,      setConfirmed]      = useState<{ booking_id: string; room_id: string } | null>(null);
   const [confirmErr,     setConfirmErr]     = useState<string | null>(null);
@@ -830,15 +578,14 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!d.segments?.length) return;
       setConfirmErr(null);
       setConfirming(true);
-      const splitSrc = resolveSource(bookingSource);
       try {
         const r = await confirmSplitStay({
           guest_name:      guestName.trim(),
           category:        d.category,
           discount_pct:    d.discount_pct,
           segments:        d.segments,
-          channel:         splitSrc.channel,
-          channel_partner: splitSrc.partner,
+          channel:         "DIRECT",
+          channel_partner: null,
         });
         setConfirmed({ booking_id: r.data.stay_group_id, room_id: `${d.segments.length} rooms` });
         show(`Split stay confirmed — Group ${r.data.stay_group_id}`, "success");
@@ -942,7 +689,6 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       if (!guestName.trim()) { setConfirmErr("Enter guest name to confirm."); return; }
       setConfirmErr(null);
       setConfirming(true);
-      const src = resolveSource(bookingSource);
       try {
         const r = await confirmBooking({
           request: {
@@ -950,8 +696,8 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
             check_in:        d.request.check_in,
             check_out:       d.request.check_out,
             guest_name:      guestName.trim(),
-            channel:         src.channel,
-            channel_partner: src.partner,
+            channel:         "DIRECT",
+            channel_partner: null,
           },
           room_id:   d.room_id,
           swap_plan: (d.swap_plan ?? []) as unknown[],
@@ -1020,13 +766,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
                   onKeyDown={e => e.key === "Enter" && handleConfirm()}
                   className="flex-1 min-w-32 bg-surface border border-border px-3 py-1.5 text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
                 />
-                <select
-                  value={bookingSource}
-                  onChange={e => setBookingSource(e.target.value)}
-                  className="bg-surface border border-border px-2 py-1.5 text-xs text-text focus:outline-none focus:border-accent"
-                >
-                  {BOOKING_SOURCES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
-                </select>
+
                 <button
                   onClick={handleConfirm}
                   disabled={confirming}
@@ -1072,6 +812,112 @@ function ChatBubble({ msg }: { msg: ChatMsg }) {
         </div>
         {msg.action_data && <ActionCard data={msg.action_data} />}
       </div>
+    </div>
+  );
+}
+
+interface FloatingAiWidgetProps {
+  chatMessages: ChatMsg[];
+  chatInput: string;
+  setChatInput: (v: string) => void;
+  chatLoading: boolean;
+  chatEndRef: React.RefObject<HTMLDivElement | null>;
+  onSend: () => void;
+  aiOpen: boolean;
+  setAiOpen: (v: boolean) => void;
+  hasProactive: boolean;
+  setHasProactive: (v: boolean) => void;
+}
+
+function FloatingAiWidget({
+  chatMessages, chatInput, setChatInput, chatLoading, chatEndRef,
+  onSend, aiOpen, setAiOpen, hasProactive, setHasProactive,
+}: FloatingAiWidgetProps) {
+  const handleToggle = () => {
+    setAiOpen(!aiOpen);
+    if (hasProactive) setHasProactive(false);
+  };
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {aiOpen && (
+        <div className="w-[380px] flex flex-col bg-surface border border-border shadow-2xl rounded-sm overflow-hidden" style={{ height: '520px' }}>
+          <div className="flex items-center justify-between px-4 py-3 bg-surface-2 border-b border-border shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 bg-accent flex items-center justify-center rounded-sm shrink-0">
+                <Bot className="w-4 h-4 text-white" />
+              </div>
+              <div>
+                <div className="text-sm font-serif font-bold text-text leading-tight">AI Revenue Assistant</div>
+                <div className="text-[9px] text-text-muted uppercase tracking-widest">Live hotel intelligence</div>
+              </div>
+            </div>
+            <button onClick={handleToggle} className="w-7 h-7 flex items-center justify-center text-text-muted hover:text-text hover:bg-border rounded-sm transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col">
+            {chatMessages.length === 0 && !chatLoading && (
+              <div className="flex-1 flex flex-col items-center justify-center text-center">
+                <Bot className="w-9 h-9 text-accent/25 mb-3" />
+                <p className="text-sm font-serif font-bold text-text mb-1">Always on. Ask anything.</p>
+                <p className="text-xs text-text-muted max-w-[220px] leading-relaxed">
+                  Ask about availability, upgrades, occupancy, or tonight's best rooms to sell.
+                </p>
+                <div className="mt-4 space-y-1.5 w-full max-w-[240px]">
+                  {["What's looking good to sell today?", "Any upgrades available tonight?", "How's occupancy this week?"].map(q => (
+                    <button key={q} onClick={() => setChatInput(q)}
+                      className="w-full text-left text-[10px] text-accent border border-accent/20 bg-accent/5 px-3 py-2 hover:bg-accent/10 transition-colors font-medium">
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {chatMessages.map((msg, i) => <ChatBubble key={i} msg={msg} />)}
+            {chatLoading && (
+              <div className="flex items-start gap-2.5">
+                <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 mt-0.5 rounded-sm">
+                  <Bot className="w-3.5 h-3.5 text-accent" />
+                </div>
+                <div className="bg-surface-2 border border-border px-3 py-2.5 text-sm text-text-muted flex items-center gap-2 rounded-sm">
+                  <Loader2 className="w-3 h-3 animate-spin text-accent" /> Thinking…
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="border-t border-border p-3 flex gap-2 shrink-0">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+              placeholder="Ask about rooms or guests…"
+              className="flex-1 bg-surface-2 border border-border text-sm px-3 py-2.5 focus:border-accent focus:ring-1 focus:ring-accent outline-none"
+              disabled={chatLoading}
+            />
+            <button onClick={onSend} disabled={chatLoading || !chatInput.trim()}
+              className="bg-accent text-white px-4 py-2.5 font-bold hover:brightness-110 active:scale-95 disabled:opacity-40 transition-all flex items-center">
+              {chatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={handleToggle}
+        className={`w-14 h-14 rounded-full bg-accent text-white shadow-xl flex items-center justify-center hover:brightness-110 active:scale-95 transition-all relative ${
+          hasProactive ? 'ring-2 ring-occuorange ring-offset-2 ring-offset-surface' : ''
+        }`}
+      >
+        <Bot className="w-6 h-6" />
+        {hasProactive && (
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-occuorange rounded-full border-2 border-surface animate-bounce" />
+        )}
+      </button>
     </div>
   );
 }

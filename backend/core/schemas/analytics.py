@@ -1,7 +1,7 @@
 from __future__ import annotations
+from typing import Optional
 
 from datetime import date
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -113,8 +113,8 @@ class ChannelPerformanceResponse(BaseModel):
 
 
 class ChannelRecommendation(BaseModel):
-    booking_source: str        # "MakeMyTrip" | "Direct" | etc.
-    channel_type: str          # OTA | GDS | DIRECT | WALKIN
+    booking_source: str        # "Expedia" | "Hotels.com" | "Booking.com" | "Priceline" | etc.
+    channel_type: str          # OTA
     category: str
     check_in: str              # ISO date
     check_out: str             # ISO date
@@ -126,10 +126,25 @@ class ChannelRecommendation(BaseModel):
     reasoning: str             # human-readable explanation
 
 
+class ChannelPartnerInsight(BaseModel):
+    partner: str
+    preference: str             # PREFER | WATCH | HOLD | AVOID
+    health: str                 # GREEN | AMBER | RED
+    confidence: str             # HIGH | MEDIUM | LOW
+    score: float
+    reasoning: str
+    category: Optional[str] = None
+    check_in: Optional[str] = None
+    check_out: Optional[str] = None
+    room_count: Optional[int] = None
+    expected_net: Optional[float] = None
+
+
 class ChannelRecommendResponse(BaseModel):
     as_of: str
     analysis_window_days: int
     recommendations: list[ChannelRecommendation]
+    partner_insights: list[ChannelPartnerInsight] = []
     summary: str
 
 

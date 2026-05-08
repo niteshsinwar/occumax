@@ -1,6 +1,6 @@
 from __future__ import annotations
-from datetime import date
 from typing import Optional
+from datetime import date
 from pydantic import BaseModel
 from core.models.enums import BlockType, Channel, RoomCategory
 
@@ -16,7 +16,7 @@ class HeatmapCell(BaseModel):
     channel: Optional[Channel] = None
     min_stay_active: bool = False
     min_stay_nights: int = 1
-    offer_type: str | None = None
+    offer_type: Optional[str] = None
 
 
 class HeatmapRow(BaseModel):

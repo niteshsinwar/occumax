@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 AI routes — Receptionist conversational agent (LangGraph + Poly AI).
 
@@ -8,11 +10,9 @@ GET  /ai/context  — returns live hotel state for the frontend to embed
                     in the first message so the AI always has current context
 """
 
-from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel

@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Dashboard controller — heatmap and live gap summary.
 
@@ -5,7 +7,6 @@ All data is computed live from the slots table.
 No recommendation or trigger_run tables involved.
 """
 
-from __future__ import annotations
 from collections import Counter
 from datetime import date, timedelta
 
@@ -32,7 +33,7 @@ from core.schemas.dashboard_scorecard import (
 from services.ai.occupancy_predictive_los import run_predict_optimal_los_llm
 def _apply_swap_plan_in_memory(
     slot_infos: list[SlotInfo],
-    swap_plan: list[SwapStep] | None,
+    swap_plan: Optional[list[SwapStep]],
 ) -> list[SlotInfo]:
     """
     Apply swap steps to SlotInfo list in-memory (no DB writes).
@@ -116,7 +117,7 @@ def _calc_revenue_at_risk(gaps: list) -> float:
     ), 2)
 
 
-def _revenue_weighted_fill_pct(gaps: list) -> float | None:
+def _revenue_weighted_fill_pct(gaps: list) -> Optional[float]:
     """
     Average implied fill probability weighted by each gap's contribution to revenue_at_risk.
 
@@ -145,7 +146,7 @@ async def get_scorecard(
     end: date,
     categories: list[RoomCategory],
     k_nights: list[int],
-    swap_plan: list[SwapStep] | None = None,
+    swap_plan: Optional[list[SwapStep]] = None,
 ) -> DashboardScorecardResponse:
     """
     Compute before/after capacity KPIs for the hackathon storyline.

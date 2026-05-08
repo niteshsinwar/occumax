@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """Phase 2 occupancy forecasting (lightweight, heuristic).
 
 Approach:
@@ -6,12 +8,10 @@ Approach:
 - Emit a simple empirical confidence band from historical dispersion.
 """
 
-from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, timedelta
 from statistics import mean, pstdev
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 """
 Calendar Optimiser — Trigger 1 (Checkout / Cancellation)
 
@@ -16,7 +17,6 @@ Algorithm (Global DP with Symmetry Breaking & Bounded Horizon):
 
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Optional
 
 from config import settings
 from core.models import BlockType, RoomCategory

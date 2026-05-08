@@ -8,9 +8,9 @@ class BookingRequestIn(BaseModel):
     category: RoomCategory
     check_in: date
     check_out: date
-    guest_name: str = "Walk-in Guest"
-    channel: Optional[str] = "DIRECT"        # OTA | DIRECT | GDS | WALKIN
-    channel_partner: Optional[str] = None    # MakeMyTrip, Goibibo, Amadeus, etc.
+    guest_name: str = "Direct Guest"
+    channel: Optional[str] = "DIRECT"        # OTA | DIRECT
+    channel_partner: Optional[str] = None    # Expedia, Hotels.com, Booking.com, Priceline, etc.
 
 
 class ShuffleResult(BaseModel):

@@ -2,17 +2,17 @@
 Channel Allocation AI Agent — LangGraph + Gemini 2.5 Flash
 
 Single-shot agent:
-  1. Manager clicks "Run AI Analysis" in the Channels tab
-  2. Agent receives occupancy snapshot + channel performance history
-  3. Agent calls tools to inspect gaps, historical patterns, and partner sentiment
+  1. Manager clicks "Run Channel Intelligence" in the Channels tab
+  2. Agent receives a consolidated channel context bundle
+  3. Agent calls tools to inspect gaps, historical patterns, and partner health
   4. Returns structured channel allocation recommendations
 
 Tools:
   get_occupancy_gaps(category, look_ahead_days)  — empty nights per category
-  get_channel_history(category, days_back)        — OTA/GDS share and ADR history
+  get_channel_history(category, days_back)        — OTA partner share and ADR history
   get_weekly_pattern(category)                    — DOW booking distribution
-  get_channel_sentiment(partner_name)             — live sentiment: news, data breaches,
-                                                    review trends → PREFER/NEUTRAL/PENALIZE
+  get_channel_news(partner_name)                  — date-aware OTA news/campaign health
+                                                    signal → PREFER/NEUTRAL/PENALIZE
 
 Output: JSON array of recommendations with reasoning.
 """
@@ -32,8 +32,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
-from core.models import Room, Slot, BlockType
-from services.ai.channel_sentiment import get_sentiment
+from core.models import Room, Slot, BlockType, Channel
+from services.ai.channel_news import get_partner_news
 
 logger = logging.getLogger(__name__)
 
@@ -44,46 +44,63 @@ _SYSTEM = """\
 You are the Channel Strategy AI (YieldIQ) for {hotel_name}, a hotel in New Jersey, USA.
 Today is {today}.
 
-Your job: analyse inventory gaps and historical booking channel data to recommend
-which booking sources (OTA partners or Direct) should receive inventory allocation
+Your job: analyze inventory gaps and historical booking channel data to recommend
+which US-active OTA partners should receive inventory allocation
 for specific upcoming dates and room categories.
 
-Current inventory snapshot (next 14 days):
+Consolidated channel intelligence context:
 {context}
 
 ── New Jersey Channel Market Context ─────────────────────────────────────────
-Two routes for every booking: either via a Channel (OTA/GDS partner) or Direct.
+Two routes for every room night: OTA allocation or direct hotel/front-desk selling.
+This agent only recommends OTA allocation. Inventory not allocated to OTA remains
+direct hotel/front-desk inventory and should be used as the benchmark, not as a
+recommendation target.
 
-OTA partners (with standard US commission rates):
+US-active OTA partners (with standard US commission rates):
   Expedia & Hotels.com  — 18% commission, highest volume in NJ/NYC-metro market
-  Booking.com           — 18% commission, strong for Deluxe/Suite upgrades and
-                          international guests transiting NYC
+  Booking.com           — 18% commission, global OTA with strong US inbound and leisure demand
   Priceline             — 18% commission, opaque/flash deals dominate Standard
-  Agoda                 — 15% commission, Asia-Pacific business + international
-  Amadeus/Sabre         — 10% commission (GDS), corporate travel management firms
+  Travelocity           — 18% commission, US leisure package demand
+  Orbitz                — 18% commission, US rewards-led leisure demand
 
-Direct booking — 0% commission; works best when demand already exists or for
-  high-value Suite/Deluxe with a negotiated corporate rate offer.
+Direct hotel/front-desk selling — 0% commission; works best when demand already
+exists or for high-value Suite/Deluxe. Treat it as the holdout/comparison path.
 
 Business logic:
+  • Treat the consolidated context plus tool outputs as the single decision surface.
+    Reconcile real inventory gaps, real historical channel performance, date-aware
+    OTA news/campaign and partner-health signals inside this response.
+  • Do not rely on separate UI scoring.
+  • Only the OTA news/campaign feed is mocked. Do not invent non-channel
+    external demand shocks unless they appear in the context or a tool result.
+  • Apply campaign windows by date: only use a partner campaign as positive
+    evidence when its active dates overlap the recommended stay dates.
+  • If the consolidated context or partner-health tool mentions a partner outage,
+    downtime, CRITICAL/HIGH impact event, or explicit partner-health risk, avoid
+    incremental slot pushes to that partner this run unless there is no viable safer OTA alternative.
+    The summary must name the risk and say which safer partners replace it.
   • PUSH to OTA when occupancy < 50% for weekday, < 65% for weekend — fill the gap.
-  • HOLD for Direct when occupancy > 70% — retain full margin on high-demand nights.
+  • HOLD for direct hotel selling when occupancy > 70% — do not recommend OTA.
   • Never allocate OTA for a date that is already > 80% occupied — diminishing returns.
-  • Suite/Deluxe gaps with < 30 days lead: consider Direct + NYC overflow rate offer.
+  • Suite/Deluxe gaps with < 30 days lead: recommend OTA only when the gap is material.
   • Standard gaps: OTA almost always better — high volume, price-sensitive segment.
 
   Partner selection — work through this cascade for every gap, skipping PENALIZE/AVOID:
   • Weekend gaps (Fri/Sat leisure):
-      1st choice → Booking.com   (drive-to leisure, NJ tri-state audience)
-      2nd choice → Expedia        (highest NJ/NYC-metro volume)
-      3rd choice → Priceline      (flash deals fill remaining leisure gaps)
-      4th choice → Agoda          (Asia-Pacific weekend travelers transiting NYC)
+      1st choice → Expedia       (highest NJ/NYC-metro volume)
+      2nd choice → Booking.com   (global brand, strong US inbound and leisure conversion)
+      3rd choice → Hotels.com    (loyalty-led repeat leisure demand)
+      4th choice → Priceline     (flash deals fill remaining leisure gaps)
+      5th choice → Travelocity   (US package leisure)
+      6th choice → Orbitz        (rewards-led leisure)
   • Weekday gaps (Mon–Thu corporate):
-      1st choice → Amadeus/Sabre  (pharma/finance corporate TMCs)
-      2nd choice → Expedia         (broadest corporate reach if GDS unavailable)
-      3rd choice → Priceline       (opaque deals for Standard low-occ weekday)
-      4th choice → Booking.com     (business traveler segment on Booking for Work)
-  • High-occ or event-adjacent nights → Direct first, then 1st-choice OTA above.
+      1st choice → Expedia       (broadest US corporate/leisure reach)
+      2nd choice → Priceline     (opaque deals for Standard low-occ weekday)
+      3rd choice → Booking.com   (business traveler segment and inbound overflow)
+      4th choice → Hotels.com    (loyalty-segment weekday demand)
+      5th choice → Orbitz        (price-sensitive weekday demand)
+  • High-occupancy nights → hold for direct hotel selling; do not recommend OTA unless occupancy is below threshold.
   • Spread recommendations across AT LEAST 3 different partners per analysis run.
     Do not assign more than 40% of total recommendations to any single partner.
 
@@ -98,16 +115,16 @@ get_channel_history(category, days_back)
 get_weekly_pattern(category)
   → DOW distribution of past bookings. Use to judge weekend vs weekday demand.
 
-get_channel_sentiment(partner_name)
-  → Returns live sentiment for a partner: news events (data breaches, campaigns,
-    outages), review trend (improving/stable/declining), avg user rating, and a
-    signal: PREFER / NEUTRAL / PENALIZE / AVOID.
+get_channel_news(partner_name)
+  → Returns mocked, date-aware OTA news/campaign and partner-health signals:
+    campaigns, outages, connectivity watches, and a signal:
+    PREFER / NEUTRAL / PENALIZE / AVOID.
   → ALWAYS call this for the top 2–3 partners you are about to recommend.
   → PENALIZE: lower confidence to LOW or MEDIUM, flag the risk in reasoning,
     route volume to a safer alternative instead.
   → PREFER: raise confidence, mention the positive signal in reasoning.
   → AVOID: do not recommend that partner at all this cycle.
-  → Reasoning MUST mention any CRITICAL or HIGH-impact sentiment event by name.
+  → Reasoning MUST mention any CRITICAL or HIGH-impact OTA news item by name.
 
 ── Output format ─────────────────────────────────────────────────────────────
 After calling the tools, output a JSON object (no markdown fence, no extra text):
@@ -124,22 +141,43 @@ After calling the tools, output a JSON object (no markdown fence, no extra text)
       "commission_cost": 135.0,
       "expected_net": 615.0,
       "confidence": "HIGH",
-      "reasoning": "15-25 words: WHY this partner for this category on these dates, using NJ market context."
+      "reasoning": "15-25 words: WHY this partner for this category on these dates, using booking history, occupancy gap, or OTA news."
     }}
   ],
-  "summary": "2-3 sentences: overall channel strategy for the week, referencing NJ demand signals and any partner sentiment events."
+  "partner_insights": [
+    {{
+      "partner": "Booking.com",
+      "preference": "PREFER",
+      "health": "GREEN",
+      "confidence": "HIGH",
+      "score": 94,
+      "reasoning": "One best manager-facing suggestion or feedback item for this OTA partner.",
+      "category": "ECONOMY",
+      "check_in": "2026-05-08",
+      "check_out": "2026-05-09",
+      "room_count": 1,
+      "expected_net": 615.0
+    }}
+  ],
+    "summary": "2-3 sentences: overall OTA strategy for the week, referencing real gap/history signals and relevant mock OTA news/campaign or partner-health dates."
 }}
 
 Rules:
   - Produce 3–8 recommendations covering the most impactful gaps.
+  - Produce exactly one partner_insights item for each OTA partner: Expedia, Hotels.com, Booking.com, Priceline, Travelocity, Orbitz.
+  - partner_insights is the manager-facing ranking source. Use PREFER for the best push, WATCH for usable secondary options, HOLD when no push is recommended, and AVOID for active partner risk.
+  - partner_insights.health must be GREEN, AMBER, or RED. Use RED for active outage/downtime/avoid, AMBER for watch/penalized, GREEN otherwise.
+  - Each partner_insights reasoning must be one concise partner-specific recommendation or feedback item. Do not create multiple insight cards for the same partner.
+  - Every recommendation must have channel_type="OTA".
+  - booking_source must be one of: Expedia, Hotels.com, Booking.com, Priceline, Travelocity, Orbitz.
+  - Never recommend Direct or any non-OTA partner.
   - Sort by confidence descending, then expected_net descending.
   - Only recommend dates with ≥1 empty night for the category.
   - room_count = 1 unless you have strong evidence for more (e.g., very low occ + long gap).
   - Confidence: HIGH if strong OTA history + low occ, MEDIUM if moderate gap, LOW if uncertain.
-  - reasoning MUST mention the specific NJ demand context (weekday pharma/finance corporate,
-    weekend NYC-drive leisure, MetLife event, graduation season, shore season, NYC overflow,
-    etc.) — never just "low occupancy."
-  - commission_cost = expected_gross × commission_rate (OTA=0.18, GDS=0.10, Agoda=0.15, Direct=0.0).
+  - reasoning MUST mention either channel history, occupancy gap timing, an active OTA campaign/news item,
+    or partner-health signal. Never invent non-channel events or say only "low occupancy."
+  - commission_cost = expected_gross × 0.18.
   - Output ONLY the JSON object. No preamble, no trailing text.
   - If a partner has signal=PENALIZE or AVOID, do NOT recommend them — substitute
     the next best alternative and explain the switch in the reasoning field.
@@ -230,6 +268,7 @@ def _make_tools(session_factory: async_sessionmaker, today: date):
                         Slot.date >= hist_start,
                         Slot.date < today,
                         Slot.block_type != BlockType.EMPTY,
+                        Slot.channel == Channel.OTA,
                     )
                 )).all()
         except Exception as e:
@@ -299,33 +338,29 @@ def _make_tools(session_factory: async_sessionmaker, today: date):
         })
 
     @tool
-    async def get_channel_sentiment(partner_name: str) -> str:
+    async def get_channel_news(partner_name: str) -> str:
         """
-        Return sentiment intelligence for a channel partner.
+        Return date-aware OTA news/campaign intelligence for a channel partner.
 
-        Simulates data pulled from OTA review portals, news aggregators,
-        and social listening tools.
+        Simulates data pulled from OTA partner portals and news aggregators.
 
         Returns:
-          sentiment_score   : float -1.0 (very negative) to +1.0 (very positive)
-          sentiment_label   : POSITIVE / NEUTRAL / NEGATIVE / CRITICAL
+          news_score        : float -1.0 (very negative) to +1.0 (very positive)
+          news_label        : POSITIVE / NEUTRAL / NEGATIVE / CRITICAL
           signal            : PREFER / NEUTRAL / PENALIZE / AVOID
-          review_trend      : improving / stable / declining
-          avg_user_rating   : float out of 5.0
-          negative_review_pct : % of reviews rated ≤2 stars in last 30 days
-          recent_events     : list of news items (data breaches, campaigns, outages)
+          recent_events     : list of news/campaign items with date windows
           signal_reason     : plain-English allocation guidance for this partner
 
-        Call this for every partner you are about to recommend before finalising
+        Call this for every partner you are about to recommend before finalizing
         the output. If signal is PENALIZE or AVOID, route volume elsewhere.
 
-        partner_name: e.g. "Booking.com", "Expedia", "Hotels.com", "Priceline",
-                      "Agoda", "Amadeus", "Sabre", "Direct"
+        partner_name: e.g. "Expedia", "Hotels.com", "Booking.com", "Priceline",
+                      "Travelocity", "Orbitz"
         """
-        data = get_sentiment(partner_name)
+        data = get_partner_news(partner_name)
         return json.dumps(data)
 
-    return [get_occupancy_gaps, get_channel_history, get_weekly_pattern, get_channel_sentiment]
+    return [get_occupancy_gaps, get_channel_history, get_weekly_pattern, get_channel_news]
 
 
 # ── Agent state ────────────────────────────────────────────────────────────────
@@ -429,7 +464,7 @@ async def run_channel_agent(
     )
 
     prompt = (
-        "Analyse inventory gaps and historical channel data for all room categories. "
+        "Analyze inventory gaps and historical channel data for all room categories. "
         "Use the tools to inspect each category's gaps and historical partner performance. "
         "Then output the final JSON recommendations object."
     )

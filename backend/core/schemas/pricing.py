@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -21,7 +22,7 @@ class PricingContextItem(BaseModel):
     title: str
     detail: str
     severity: str  # INFO | ALERT
-    location: str | None = None
+    location: Optional[str] = None
     factors: list[PricingContextFactor] = []
 
 

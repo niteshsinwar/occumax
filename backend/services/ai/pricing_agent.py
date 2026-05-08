@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 """
 Pricing AI Agent — Multi-call strategy with Poly AI
 
@@ -10,7 +12,6 @@ Strategy:
 Categories priced: ECONOMY, STANDARD, STUDIO  (extend SYNTHESIS_CATEGORIES to add more)
 """
 
-from __future__ import annotations
 
 import asyncio
 import json
@@ -419,7 +420,7 @@ async def _call_synthesis_agent(
     events_analysis: dict,
     market_analysis: dict,
     history_analysis: dict,
-    context_items: list[dict] | None = None,
+    context_items: Optional[list[dict]] = None,
 ) -> dict:
     dates_window = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
 
@@ -586,7 +587,7 @@ async def run_pricing_agent(
     context_text: str,  # noqa: ARG001 — kept for API compat; multi-call strategy builds its own
     today: date,
     session_factory: async_sessionmaker,
-    context_items: list[dict] | None = None,
+    context_items: Optional[list[dict]] = None,
 ) -> dict:
     """
     Run multi-call pricing analysis. Returns:

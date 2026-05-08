@@ -1,3 +1,6 @@
+from __future__ import annotations
+from typing import Optional
+
 """Seed demo analytics data (past or future) for demo + forecasting.
 
 This is used by:
@@ -13,11 +16,10 @@ Realism model (v2):
 - Seasonal multipliers: summer peak (Jul–Aug 1.25×), Christmas (Dec 1.15×),
   shoulder (Apr–Jun, Sep–Oct 1.05×), low (Jan–Mar, Nov 0.85×)
 - LOS mix: 1n 10%, 2n 28%, 3n 30%, 4n 18%, 5–7n 14%
-- Channel mix: OTA 60%, DIRECT 25%, GDS 10%, WALKIN 5%
+- Channel mix: OTA 65%, DIRECT 35%
 - Lead time: short stays (1–2n) booked 2–12 days out; long stays 14–60 days
 """
 
-from __future__ import annotations
 
 import random
 import uuid
@@ -28,7 +30,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Room, Slot, Booking, BlockType, Channel, RoomCategory
-from core.channel_config import OTA_PARTNER_NAMES_LIST, GDS_PARTNER_NAMES_LIST
+from core.channel_config import OTA_PARTNER_NAMES_LIST
 
 
 DEMO_PREFIX = "DEMO_ANALYTICS"
@@ -50,14 +52,12 @@ _LOS_CHOICES  = [1, 2, 3, 4, 5, 6, 7]
 _LOS_WEIGHTS  = [10, 28, 30, 18, 7, 4, 3]
 
 # Channel distribution
-_CHANNELS     = [Channel.OTA, Channel.DIRECT, Channel.GDS, Channel.WALKIN]
-_CHAN_WEIGHTS  = [60, 25, 10, 5]
+_CHANNELS     = [Channel.OTA, Channel.DIRECT]
+_CHAN_WEIGHTS  = [65, 35]
 
 # Named partners per channel — imported from single source of truth
-_OTA_PARTNERS   = OTA_PARTNER_NAMES_LIST   # ["MakeMyTrip", "Goibibo", "Agoda", "Booking.com", "Expedia"]
-_OTA_P_WEIGHTS  = [35, 25, 20, 15, 5]
-_GDS_PARTNERS   = GDS_PARTNER_NAMES_LIST   # ["Amadeus", "Sabre", "Travelport"]
-_GDS_P_WEIGHTS  = [55, 30, 15]
+_OTA_PARTNERS   = OTA_PARTNER_NAMES_LIST   # US-active OTA partners from channel_config
+_OTA_P_WEIGHTS  = [26, 19, 18, 17, 11, 9]
 
 
 def _target_fill(d: date) -> float:
@@ -105,8 +105,8 @@ def _iter_days(start: date, end: date):
 async def seed_analytics_history(
     db: AsyncSession,
     window_days: int = 21,
-    target_start: date | None = None,
-    target_end: date | None = None,
+    target_start: Optional[date] = None,
+    target_end: Optional[date] = None,
     seed: int = 42,
     fill_pct: int = 35,  # scales the realistic model: 35 = default, 60 = busier hotel
 ) -> dict[str, int]:
@@ -235,17 +235,13 @@ async def seed_analytics_history(
                     channel   = room_rng.choices(_CHANNELS, weights=_CHAN_WEIGHTS, k=1)[0]
                     if channel == Channel.OTA:
                         partner = room_rng.choices(_OTA_PARTNERS, weights=_OTA_P_WEIGHTS, k=1)[0]
-                    elif channel == Channel.GDS:
-                        partner = room_rng.choices(_GDS_PARTNERS, weights=_GDS_P_WEIGHTS, k=1)[0]
                     else:
                         partner = None
 
-                    # Rate variation: OTA/GDS gets slight discount, DIRECT/WALKIN can go higher
+                    # Rate variation: OTA gets slight discount, DIRECT can go higher
                     rate_mul = {
                         Channel.OTA:    room_rng.uniform(0.92, 1.00),
                         Channel.DIRECT: room_rng.uniform(0.97, 1.08),
-                        Channel.GDS:    room_rng.uniform(0.88, 0.96),
-                        Channel.WALKIN: room_rng.uniform(1.00, 1.12),
                     }.get(channel, 1.0)
                     effective_rate = round(base_rate * rate_mul, -1)  # round to nearest 10
 

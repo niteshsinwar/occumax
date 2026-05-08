@@ -70,7 +70,7 @@ Key endpoint groups:
 | `PATCH /admin/rooms/{id}` | Update room config |
 | `DELETE /admin/rooms/{id}` | Deactivate a room (`is_active=False`) |
 | `GET /admin/categories` | List room categories |
-| `GET /admin/channel-partners` | List known OTA/GDS partner names |
+| `GET /admin/channel-partners` | List known OTA partner names |
 | `PATCH /admin/slots/{id}` | Override a specific night's block type or reason |
 | `POST /admin/seed-analytics-history` | Seed historical occupancy data for analytics |
 | `POST /receptionist/check` | Find best room for a booking request (returns room_id + swap_plan) |
@@ -85,11 +85,11 @@ Key endpoint groups:
 | `GET /analytics/pace` | Booking pace analytics (pickup lead-day curves) |
 | `GET /analytics/event-insights` | AI-generated demand event commentary for a date range |
 | `GET /analytics/revenue-summary` | Revenue KPIs: total, ADR, RevPAR, channel mix |
-| `GET /analytics/channel-performance` | Historical revenue by channel/partner, net of commission (OTA 18%, GDS 10%) |
+| `GET /analytics/channel-performance` | Historical revenue by channel/partner, net of commission (OTA 18%; direct hotel selling 0%) |
 | `POST /manager/optimise` | Run the yield optimisation algorithm — returns swap plan, does NOT write to DB |
 | `POST /manager/commit` | Apply a swap plan from /optimise to the DB (two-pass vacate→fill) |
 | `POST /manager/channel-allocate` | Pre-block inventory for a specific OTA partner (creates SOFT placeholder bookings) |
-| `GET /manager/channel-recommend` | Run Poly AI channel agent — returns ranked OTA/GDS allocation recommendations |
+| `GET /manager/channel-recommend` | Run Poly AI channel agent — returns ranked OTA allocation recommendations |
 | `GET /manager/pricing/analyse` | Run Poly AI pricing agent — returns per-category-per-date rate recommendations plus a **predictive what-if** discount ladder (demand lift, net price index, revenue index; `services/ai/pricing_what_if_agent.py`, heuristic fallback) |
 | `POST /manager/pricing/commit` | Apply pricing recommendations — batch-updates `slot.current_rate` |
 | `POST /ai/chat` | AI receptionist agent (Poly AI-backed, full conversation history, returns action_data card) |
@@ -149,7 +149,7 @@ The agent returns `action_data: { type, data }` alongside its text reply. The fr
 
 **Pricing what-if** (`services/ai/pricing_what_if_agent.py`) — single-shot AI JSON (or deterministic heuristic) that simulates a 0–40% discount ladder: `demand_lift_pct`, `net_price_index` (baseline 100), `revenue_index`, and `recommended_index`. Bundled on the same `GET /manager/pricing/analyse` response as `what_if` for the Pricing UI.
 
-**Channel agent** (`services/ai/channel_agent.py`) — OTA/GDS allocation analysis. 3 tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`.
+**Channel agent** (`services/ai/channel_agent.py`) — OTA-only allocation analysis. 3 tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`.
 
 All agents share the same pattern: LangGraph `StateGraph` with a tool node + Poly AI with `bind_tools`. Each is invoked via a single async `run_*_agent()` entry point called from the controller layer.
 
@@ -173,10 +173,10 @@ These are non-obvious facts derived from the codebase. A coding agent must respe
 
 ## Channel Attribution
 
-Every `Slot` row carries `channel` (enum: OTA/GDS/DIRECT/WALKIN) and `channel_partner` (nullable string: "MakeMyTrip", "Amadeus", etc.). Two booking routes exist:
+Every `Slot` row carries `channel` (enum: OTA/DIRECT/WALKIN, with legacy GDS enum support) and `channel_partner` (nullable string: "Expedia", "Hotels.com", "Booking.com", etc.). Two booking routes exist:
 
 - **Direct/Walk-in**: set at receptionist desk, `channel_partner = NULL`
-- **Channel (OTA/GDS)**: set via Manager → Channels allocation, `channel_partner` = named partner
+- **Channel (OTA)**: set via Manager → Channels allocation, `channel_partner` = named US/global OTA partner
 
 The `channel_partner` column was added in migration `b227ced3351d`.
 

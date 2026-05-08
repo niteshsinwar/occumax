@@ -1,8 +1,8 @@
 from __future__ import annotations
+from typing import Optional
 import datetime
 
 from sqlalchemy import String, Integer, Float, Boolean, Date, Enum, ForeignKey
-from typing import Optional
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from services.database import Base

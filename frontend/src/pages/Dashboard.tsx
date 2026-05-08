@@ -142,7 +142,6 @@ function estimatedCancellationRate(mix: ChannelMix): number | null {
   const rates: Record<string, number> = {
     OTA: 0.18,
     DIRECT: 0.08,
-    GDS: 0.12,
     WALKIN: 0.03,
     CLOSED: 0.0,
     UNKNOWN: 0.1,
@@ -527,12 +526,12 @@ export function Dashboard() {
     if (paceDelta !== null && paceDelta < -5)
       items.push({ priority: "HIGH", category: "Channels", tab: "channels", title: `Pace ${Math.abs(Math.round(paceDelta))} occ-pts behind 2yr baseline`, detail: "Pickup is significantly softer than expected — review channel mix and consider promotional activation." });
     else if (paceDelta !== null && paceDelta < -2)
-      items.push({ priority: "MED", category: "Channels", tab: "channels", title: `Pace slightly behind baseline (${Math.abs(Math.round(paceDelta))} occ-pts)`, detail: "Monitor demand — consider activating OTA promotions or GDS preferred rates." });
+      items.push({ priority: "MED", category: "Channels", tab: "channels", title: `Pace slightly behind baseline (${Math.abs(Math.round(paceDelta))} occ-pts)`, detail: "Monitor demand — consider activating US-active OTA promotions while holding stronger nights for direct hotel selling." });
 
     const mixTotal = v2ChannelMix ? Object.values(v2ChannelMix).reduce((s, n) => s + n, 0) : 0;
     const otaShare = mixTotal > 0 ? Math.round(((v2ChannelMix?.["OTA"] ?? 0) / mixTotal) * 100) : 0;
     if (otaShare > 65 && mixTotal > 0)
-      items.push({ priority: "MED", category: "Channels", tab: "channels", title: `OTA concentration at ${otaShare}%`, detail: "Heavy OTA dependency compresses net margin — shift incremental demand to direct and GDS channels." });
+      items.push({ priority: "MED", category: "Channels", tab: "channels", title: `OTA concentration at ${otaShare}%`, detail: "Heavy OTA dependency compresses net margin — hold unallocated inventory for direct hotel selling." });
 
     items.push({ priority: "MED", category: "Pricing", tab: "pricing", title: "Run RateIQ pricing analysis", detail: "AI agent synthesizes weather, events, market signals and live occupancy to surface rate and discount opportunities." });
 
@@ -986,7 +985,7 @@ export function Dashboard() {
 
                   {v2ChannelMix && Object.keys(v2ChannelMix).length > 0 ? (() => {
                     const total = Object.values(v2ChannelMix).reduce((s, n) => s + n, 0);
-                    const CH_COLOR: Record<string, string> = { OTA: "bg-accent/55", DIRECT: "bg-occugreen/55", GDS: "bg-violet-400/50", WALKIN: "bg-amber-400/55" };
+                    const CH_COLOR: Record<string, string> = { OTA: "bg-accent/55", DIRECT: "bg-occugreen/55", WALKIN: "bg-amber-400/55" };
                     return (
                       <>
                         <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Booked nights by channel</div>

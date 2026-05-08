@@ -1,5 +1,8 @@
-from __future__ import annotations
 """Admin API routes — room management, categories, slot patching."""
+
+from __future__ import annotations
+
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +11,7 @@ from services.database import get_db
 from core.schemas import RoomCreate, RoomUpdate
 from controllers.admin import SlotPatch, SeedAnalyticsHistoryRequest, AdminBookingUpdate
 from controllers import admin as ctrl
-from core.channel_config import OTA_PARTNERS, GDS_PARTNERS, DIRECT_SOURCES
+from core.channel_config import OTA_PARTNERS, DIRECT_SOURCES
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -49,8 +52,8 @@ async def patch_slot(
 
 @router.get("/bookings")
 async def list_bookings(
-    start: str | None = None,
-    end: str | None = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
     return await ctrl.admin_list_bookings(db=db, start=start, end=end)
@@ -81,11 +84,10 @@ async def seed_analytics_history(body: SeedAnalyticsHistoryRequest, db: AsyncSes
 @router.get("/channel-partners")
 async def list_channel_partners():
     """
-    Return all supported booking channel partners with their commission rates.
+    Return supported OTA channel partners with their commission rates.
     Frontend uses this instead of hardcoding partner names.
     """
     return {
         "ota": OTA_PARTNERS,
-        "gds": GDS_PARTNERS,
         "direct": DIRECT_SOURCES,
     }

@@ -7,8 +7,8 @@ Usage:
 
 What it seeds:
   1. 21 rooms across 6 categories (Economy → Suite)
-  2. 50+ forward bookings with realistic channel mix (OTA / Direct / Walk-in)
-  3. 18 months of analytics history at realistic Pune market fill rates
+  2. 50+ forward bookings with realistic channel mix (OTA / Direct)
+  3. 18 months of analytics history at realistic USA/NJ market fill rates
 """
 import sys
 import json
@@ -82,14 +82,14 @@ ROOMS = [
     {"id": "302", "category": "DELUXE",   "base_rate": 5800, "floor_number": 3},
     {"id": "303", "category": "DELUXE",   "base_rate": 6200, "floor_number": 3},
     {"id": "304", "category": "DELUXE",   "base_rate": 6200, "floor_number": 3},
-    # Floor 4 — Premium (corporate accounts + GDS)
+    # Floor 4 — Premium (corporate accounts + direct hotel selling)
     {"id": "401", "category": "PREMIUM",  "base_rate": 8500, "floor_number": 4},
     {"id": "402", "category": "PREMIUM",  "base_rate": 9000, "floor_number": 4},
     {"id": "403", "category": "PREMIUM",  "base_rate": 9500, "floor_number": 4},
     # Floor 5 — Studio (extended stay, families)
     {"id": "501", "category": "STUDIO",   "base_rate": 7200, "floor_number": 5},
     {"id": "502", "category": "STUDIO",   "base_rate": 7800, "floor_number": 5},
-    # Floor 6 — Suite (luxury, direct + Agoda international)
+    # Floor 6 — Suite (luxury, direct + US-active OTA overflow)
     {"id": "601", "category": "SUITE",    "base_rate": 15000, "floor_number": 6},
     {"id": "602", "category": "SUITE",    "base_rate": 18000, "floor_number": 6},
 ]
@@ -114,15 +114,15 @@ def seed_rooms():
 
 # ── 2. BOOKINGS ───────────────────────────────────────────────────────────────
 
-# Channel mix for forward bookings — mirrors Pune market
+# Channel mix for forward bookings — USA/NJ market, OTA plus direct hotel selling.
 _CHANNEL_MIX = [
-    ("Direct",      None,           40),
-    ("Walk-in",     None,           10),
-    ("MakeMyTrip",  "MakeMyTrip",   20),
-    ("Goibibo",     "Goibibo",      12),
-    ("Agoda",       "Agoda",         8),
-    ("Booking.com", "Booking.com",   5),
-    ("Amadeus",     "Amadeus",       5),
+    ("Direct Hotel Front Desk", None,           50),
+    ("Expedia",                 "Expedia",      16),
+    ("Hotels.com",              "Hotels.com",   12),
+    ("Booking.com",             "Booking.com",  10),
+    ("Priceline",               "Priceline",    12),
+    ("Travelocity",             "Travelocity",   6),
+    ("Orbitz",                  "Orbitz",        4),
 ]
 _MIX_LABELS   = [x[0] for x in _CHANNEL_MIX]
 _MIX_CHANNELS = [x[1] for x in _CHANNEL_MIX]
@@ -135,11 +135,10 @@ def _pick_channel() -> tuple[str, Optional[str]]:
     choice = rng.choices(range(len(_MIX_LABELS)), weights=_MIX_WEIGHTS, k=1)[0]
     label   = _MIX_LABELS[choice]
     partner = _MIX_CHANNELS[choice]
-    if label == "Direct":
+    if label == "Direct Hotel Front Desk":
         return "DIRECT", None
-    if label == "Walk-in":
-        return "WALKIN", None
-    return "OTA" if label not in ("Amadeus", "Sabre", "Travelport") else "GDS", partner
+
+    return "OTA", partner
 
 
 def book(category: str, check_in: str, check_out: str, guest: str) -> Optional[str]:
@@ -181,9 +180,9 @@ def book(category: str, check_in: str, check_out: str, guest: str) -> Optional[s
     return None
 
 
-# Forward bookings — realistic Pune hotel demand pattern
+# Forward bookings — realistic USA/NJ hotel demand pattern
 BOOKINGS = [
-    # Economy — high-volume budget segment (mostly OTA / walk-in)
+    # Economy — high-volume budget segment (mostly OTA / direct)
     ("ECONOMY",  d(1),  d(3),  "Priya Sharma"),
     ("ECONOMY",  d(1),  d(4),  "Carlos Mendes"),
     ("ECONOMY",  d(4),  d(7),  "Ravi Kumar"),
@@ -198,7 +197,7 @@ BOOKINGS = [
     ("ECONOMY",  d(16), d(19), "Sofia Rossi"),
     ("ECONOMY",  d(3),  d(6),  "Anjali Singh"),
     ("ECONOMY",  d(13), d(16), "Mohammed Al-Farsi"),
-    # Standard — IT corridor weekday corporate
+    # Standard — NJ/NYC-metro weekday corporate
     ("STANDARD", d(1),  d(4),  "Emma Johansson"),
     ("STANDARD", d(1),  d(3),  "Kwame Asante"),
     ("STANDARD", d(4),  d(7),  "Valentina Cruz"),
@@ -221,7 +220,7 @@ BOOKINGS = [
     ("DELUXE",   d(14), d(17), "David Okonkwo"),
     ("DELUXE",   d(15), d(18), "Mei Lin Wang"),
     ("DELUXE",   d(7),  d(11), "Pablo Rodriguez"),
-    # Premium — corporate + GDS accounts
+    # Premium — corporate + direct hotel selling
     ("PREMIUM",  d(1),  d(5),  "Victoria Blackwood"),
     ("PREMIUM",  d(2),  d(6),  "Alexander Volkov"),
     ("PREMIUM",  d(6),  d(10), "Isabelle Dupont"),
@@ -237,7 +236,7 @@ BOOKINGS = [
     ("STUDIO",   d(11), d(15), "Priya Iyer"),
     ("STUDIO",   d(12), d(16), "Björn Lindqvist"),
     ("STUDIO",   d(16), d(19), "Sun Wei"),
-    # Suite — luxury, mostly direct + Agoda international
+    # Suite — luxury, mostly direct + US-active OTA overflow
     ("SUITE",    d(2),  d(6),  "Lord Ashworth"),
     ("SUITE",    d(3),  d(7),  "Contessa Romano"),
     ("SUITE",    d(8),  d(12), "Sheikh Al-Maktoum"),

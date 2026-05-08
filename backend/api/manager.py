@@ -37,7 +37,7 @@ async def commit_plan(body: CommitRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/channel-allocate", response_model=ChannelAllocateResult)
 async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession = Depends(get_db)):
     """
-    Pre-allocate inventory to a booking source (OTA partner or Direct) for a date range.
+    Pre-allocate inventory to a US-active OTA partner for a date range.
     Creates placeholder SOFT-blocked bookings tagged with the correct channel attribution.
     """
     return await ctrl.channel_allocate(body, db)
@@ -48,6 +48,6 @@ async def channel_recommend():
     """
     Run the channel allocation AI agent.
     Analyses 14-day occupancy gaps and historical partner performance to return
-    ranked recommendations for which OTA/GDS partners should receive inventory.
+    ranked recommendations for which US-active OTA partners should receive inventory.
     """
     return await ctrl.get_channel_recommendations()

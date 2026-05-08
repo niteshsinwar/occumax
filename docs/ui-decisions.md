@@ -168,13 +168,13 @@ Then we ask the AI to:
 
 - **Placement**: First section at the top of the Channels subtab
 - **Header**: “Strategic Channel Resilience”
-- **Subtitle**: “Market Radar monitors partner health and shifts flexible inventory away from high-risk channels to protect net margin.”
+- **Subtitle**: “Market Radar monitors US-active OTA partner health. Inventory not assigned to OTA remains Direct Hotel Front Desk selling.”
 - **Why**: Demonstrates the ability to protect net margin from partner contagion (downtime / poor sentiment) without violating contract-locked inventory constraints
 - **Signal source of truth**: Mock context feed (Market kind) in `frontend/src/mock/contextFeed.ts`
-  - Demo scenario: `bookingcom-24h-downtime` (“Booking.com experiencing 1-day API downtime”)
+  - Demo scenario: `expedia-24h-downtime` (“Expedia experiencing 1-day API downtime”)
 - **Interaction**:
   - Partner Pulse dashboard displays partners with health status rings (Green/Amber/Red)
-  - Triggering the mock event turns Booking.com **RED**
+  - Triggering the mock event turns Expedia **RED**
   - Running Market Radar uses the existing async mock AI scoring (`scoreContextWithAi`) to determine **impact** and whether a **flexible inventory** pivot is needed
 - **Constraint rule**: Only flexible inventory is shifted; contract-locked inventory is not modified
 - **Where implemented**: `frontend/src/components/overview/ChannelOptimizationTab.tsx`
@@ -210,4 +210,3 @@ Then we ask the AI to:
 ## Notes / open questions
 
 - (Add items as they come up)
-

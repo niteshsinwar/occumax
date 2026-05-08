@@ -166,10 +166,10 @@ def get_market_news() -> list[dict]:
             "note": "Leisure segment outperforming; weekend demand strong through June",
         },
         {
-            "headline": "Expedia flash sale period ending — direct booking window reopening",
+            "headline": "Expedia flash sale period ending — direct hotel selling window reopening",
             "source": "OTA Channel Intelligence",
             "impact": "neutral",
-            "note": "Post-flash-sale period favors direct and GDS; hold rates on Deluxe/Suite",
+            "note": "Post-flash-sale period favors direct hotel selling; hold rates on Deluxe/Suite",
         },
         {
             "headline": "NJ pharma corridor hiring surge — extended-stay corporate demand up Q2",

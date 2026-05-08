@@ -78,10 +78,10 @@ This doc defines **which mock “context feed” events** (weather / flights / m
 ### Channels subtab — “Strategic Channel Resilience”
 
 - **Uses**: the shared `contextFeed` as the single source of mock “social sentiment/news” signals (Market kind)
-- **Demo trigger**: `bookingcom-24h-downtime` (Market) simulates partner-risk conditions via market/news sentiment
+- **Demo trigger**: `expedia-24h-downtime` (Market) simulates partner-risk conditions via market/news sentiment
 - **UI**: `frontend/src/components/overview/ChannelOptimizationTab.tsx`
   - Partner Pulse renders partners with health rings
-  - A mock scenario can set Booking.com → **RED**
+  - A mock scenario can set Expedia → **RED**
   - Market Radar action runs `scoreContextWithAi({ item })` and recommends whether to pivot **flexible inventory** away from the high-risk partner
 
 ---
@@ -94,4 +94,3 @@ This doc defines **which mock “context feed” events** (weather / flights / m
   - include factor `score` + `weight` per factor
   - verify it renders in `ContextFeedPanel`
   - confirm Pricing simulation still runs and Occupancy still displays the same feed
-

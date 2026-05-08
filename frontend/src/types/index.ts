@@ -355,10 +355,25 @@ export interface ChannelRecommendation {
   reasoning: string;
 }
 
+export interface ChannelPartnerInsight {
+  partner: string;
+  preference: "PREFER" | "WATCH" | "HOLD" | "AVOID";
+  health: "GREEN" | "AMBER" | "RED";
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  score: number;
+  reasoning: string;
+  category?: string | null;
+  check_in?: string | null;
+  check_out?: string | null;
+  room_count?: number | null;
+  expected_net?: number | null;
+}
+
 export interface ChannelRecommendResponse {
   as_of: string;
   analysis_window_days: number;
   recommendations: ChannelRecommendation[];
+  partner_insights?: ChannelPartnerInsight[];
   summary: string;
 }
 
@@ -390,4 +405,3 @@ export interface AdminBookingRow {
   segment_index: number | null;
   discount_pct: number;
 }
-
