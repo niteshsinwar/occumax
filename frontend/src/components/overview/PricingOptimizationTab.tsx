@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { commitPricing, getHeatmap } from "../../api/client";
+import { analysePricing, commitPricing, getHeatmap } from "../../api/client";
 import type {
   HeatmapResponse,
   HeatmapRow,
@@ -181,11 +181,6 @@ function computeCompositeFromFactors(factors: ContextFeedItem["factors"]): numbe
   return Math.round(weighted / ws);
 }
 
-function computeCategoryBaseRate(rows: HeatmapRow[], category: string): number {
-  const match = rows.find(r => String(r.category) === category);
-  return match ? Number(match.base_rate ?? 0) : 0;
-}
-
 function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: string): {
   total: number;
   otb: number;
@@ -225,33 +220,6 @@ function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: str
   const avgRate = total > 0 ? rateSum / total : 0;
   const occPct = total > 0 ? (otb / total) * 100 : 0;
   return { total, otb, occPct: Math.round(occPct * 10) / 10, avgRate: Math.round(avgRate * 100) / 100, emptyRooms, sandwichEmptyRooms };
-}
-
-function computeClearanceSuggestedRate(args: {
-  currentRate: number;
-  floorRate: number;
-  baseRate: number;
-  competitorMedian: number;
-  compositeScore: number; // 0..100
-  isSandwich: boolean;
-}): { suggestedRate: number; confidence: "LOW" | "MEDIUM" | "HIGH"; action: "DISCOUNT" | "MAINTAIN"; changePct: number } {
-  const { currentRate, floorRate, baseRate, competitorMedian, compositeScore, isSandwich } = args;
-
-  const heat = clamp(compositeScore / 100, 0, 1);
-  const targetVsComp = isSandwich ? 0.94 : 0.97;
-  const heatTighten = 0.06 * heat; // tighter discount when demand/market is hotter
-  const discountFactor = clamp(targetVsComp + heatTighten, 0.86, 1.02);
-
-  const raw = Math.min(currentRate, competitorMedian * discountFactor);
-  const protectedFloor = Math.max(floorRate > 0 ? floorRate : 0, baseRate * 0.55, 45);
-  const suggestedRate = roundTo5(Math.max(protectedFloor, raw));
-
-  const changePct = currentRate > 0 ? Math.round(((suggestedRate - currentRate) / currentRate) * 1000) / 10 : 0;
-  const action = suggestedRate < currentRate * 0.985 ? "DISCOUNT" : "MAINTAIN";
-  const confidence: "LOW" | "MEDIUM" | "HIGH" =
-    isSandwich && heat >= 0.75 ? "HIGH" : isSandwich || heat >= 0.6 ? "MEDIUM" : "LOW";
-
-  return { suggestedRate, confidence, action, changePct };
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -446,7 +414,7 @@ export function PricingOptimizationTab() {
   const [scoredFactors, setScoredFactors] = useState<ContextFeedItem["factors"] | null>(null);
   const aiCacheRef = useRef<Record<string, { factors: ContextFeedItem["factors"]; rationale: string; confidence: "LOW" | "MEDIUM" | "HIGH" }>>({});
 
-  const WINDOW_DAYS = 20; // RateIQ pricing calendar window
+  const WINDOW_DAYS = 15; // Align with Occupancy/Overview 15-day window
   const CLEARANCE_WINDOW_DAYS = 15; // Align with Occupancy heatmap visible days
   const activeSignalBundle = useMemo(
     () => [selectedItems.EVENT, selectedItems.WEATHER, selectedItems.TRAVEL, selectedItems.MARKET],
@@ -642,74 +610,74 @@ export function PricingOptimizationTab() {
         return;
       }
 
-      const today = new Date();
-      const analysisDate = today.toISOString().slice(0, 10);
-      const dates = heatmap.dates.slice(0, WINDOW_DAYS);
+      const res = await analysePricing();
+      const aiData = res.data as PricingAnalyseResponse;
+      const aiWindowed: PricingAnalyseResponse = {
+        ...aiData,
+        dates: (aiData.dates ?? []).slice(0, WINDOW_DAYS),
+        calendar_rows: (aiData.calendar_rows ?? []).map(r => ({ ...r, cells: (r.cells ?? []).slice(0, WINDOW_DAYS) })),
+      };
 
-      const categories = [...new Set(heatmap.rows.map(r => String(r.category)))].sort();
-      const calendar_rows = categories.map(category => {
-        const baseRate = computeCategoryBaseRate(heatmap.rows, category);
-        const cells: PricingCalendarCell[] = dates.map(d => {
-          const stats = computeCategoryDayStats(heatmap.rows, d, category);
+      const selectedBundle = [
+        selectedItems.EVENT?.title,
+        selectedItems.WEATHER?.title,
+        selectedItems.TRAVEL?.title,
+        selectedItems.MARKET?.title,
+      ].filter(Boolean).join(" · ");
+
+      // Keep AI rates/reasons, but:
+      // - only allow actions on unsold nights (EMPTY exists in that category/date)
+      // - emphasize sandwich nights
+      // - overwrite tooltip factor strings with mocked contextFeed + mocked competitor pricing
+      const nextCalendarRows = aiWindowed.calendar_rows.map(row => {
+        const cells = row.cells.map(cell => {
+          const stats = computeCategoryDayStats(heatmap.rows, cell.date, row.category);
           const isUnsold = stats.emptyRooms > 0;
           const isSandwich = stats.sandwichEmptyRooms > 0;
 
           const competitor = getCompetitorRatePoint({
-            date: d,
-            category: category as any,
-            baseRate: baseRate || stats.avgRate || 0,
+            date: cell.date,
+            category: row.category as any,
+            baseRate: cell.current_rate || 0,
             marketHeat: activeCompositeScore,
           });
 
-          const floorRate = roundTo5(Math.max(45, baseRate * 0.55));
-          const currentRate = stats.avgRate || baseRate || competitor.competitorMedianRate;
-
-          const rec = isUnsold
-            ? computeClearanceSuggestedRate({
-                currentRate,
-                floorRate,
-                baseRate: baseRate || currentRate,
-                competitorMedian: competitor.competitorMedianRate,
-                compositeScore: activeCompositeScore,
-                isSandwich,
-              })
-            : { suggestedRate: roundTo5(currentRate), confidence: "LOW" as const, action: "MAINTAIN" as const, changePct: 0 };
-
-          const selectedBundle = [
-            selectedItems.EVENT?.title,
-            selectedItems.WEATHER?.title,
-            selectedItems.TRAVEL?.title,
-            selectedItems.MARKET?.title,
-          ].filter(Boolean).join(" · ");
-
-          const reason = !isUnsold
+          const baseReason = cell.reason || "";
+          const scopeReason = !isUnsold
             ? "On-books night — no clearance action."
             : isSandwich
-              ? "Sandwich night gap detected. Recommend targeted clearance anchored to competitor median while protecting floor."
-              : "Unsold inventory detected. Recommend light clearance anchored to competitor median while protecting floor.";
+              ? "Sandwich night gap detected. Clearance prioritized."
+              : "Unsold inventory detected. Clearance eligible.";
 
+          const mergedReason = `${scopeReason} ${baseReason}${selectedBundle ? ` Signals: ${selectedBundle}.` : ""}`.trim();
+
+          if (!isUnsold) {
+            return {
+              ...cell,
+              suggested_rate: cell.current_rate,
+              change_pct: 0,
+              action: "MAINTAIN" as const,
+              reason: mergedReason,
+              weather_factor: selectedItems.WEATHER?.detail ?? "",
+              event_factor: selectedItems.EVENT?.detail ?? "",
+              news_factor: `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`,
+            };
+          }
+
+          // Unsold night: keep AI suggested_rate/confidence/reason, but replace factor strings.
           return {
-            date: d,
-            current_rate: roundTo5(currentRate),
-            suggested_rate: rec.suggestedRate,
-            change_pct: rec.changePct,
-            action: rec.action,
-            confidence: rec.confidence,
-            reason: `${reason}${selectedBundle ? ` Signals: ${selectedBundle}.` : ""}`,
-            occupancy_pct: stats.occPct,
-            otb: stats.otb,
-            floor_rate: floorRate,
-            is_orphan: false,
-            weather_factor: selectedItems.WEATHER?.detail ?? "",
-            event_factor: selectedItems.EVENT?.detail ?? "",
+            ...cell,
+            reason: mergedReason,
+            weather_factor: selectedItems.WEATHER?.detail ?? cell.weather_factor ?? "",
+            event_factor: selectedItems.EVENT?.detail ?? cell.event_factor ?? "",
             news_factor: `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`,
           };
         });
 
-        return { category, cells };
+        return { ...row, cells };
       });
 
-      const actionable = calendar_rows.flatMap(r =>
+      const nextRecommendations = nextCalendarRows.flatMap(r =>
         r.cells
           .filter(c => c.action !== "MAINTAIN")
           .map(c => ({
@@ -726,18 +694,11 @@ export function PricingOptimizationTab() {
           })),
       );
 
-      const rescue_potential = Math.round(actionable.reduce((s, r) => s + Math.max(0, r.current_rate - r.suggested_rate), 0));
-
       const data: PricingAnalyseResponse = {
-        hotel_name: "Occumax (demo)",
-        analysis_date: analysisDate,
-        summary:
-          `Clearance-focused analysis using Overview signals + competitor pricing research. ` +
-          `Recommendations are limited to unsold nights (including sandwich-night gaps).`,
-        calendar_rows,
-        recommendations: actionable,
-        dates,
-        rescue_potential,
+        ...aiWindowed,
+        summary: `${aiWindowed.summary} (15-day window · filtered to unsold nights · competitor pricing + context events shown in tooltip.)`,
+        calendar_rows: nextCalendarRows,
+        recommendations: nextRecommendations,
       };
 
       applyAnalysis(data);
