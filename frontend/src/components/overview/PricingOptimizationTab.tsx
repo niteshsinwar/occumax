@@ -46,12 +46,13 @@ const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
 const LOADING_MESSAGES = [
   "Connecting to market data feeds...",
-  "Analyzing weather patterns for next 20 days...",
+  "Analyzing weather patterns for next 15 days...",
   "Scanning NJ events and conference calendar...",
   "Processing market sentiment and travel trends...",
   "Evaluating occupancy and orphan room patterns...",
   "Reviewing 2-year historical booking trends...",
-  "Synthesizing all pricing signals...",
+  "Benchmarking competitor pricing (market research)...",
+  "Synthesizing all pricing signals (AI)...",
   "Finalizing recommendations...",
 ];
 
@@ -828,7 +829,7 @@ export function PricingOptimizationTab() {
                 <div className="text-[11px] text-text-muted mt-1 leading-relaxed">
                   {firstSandwich
                     ? <>Highlighted candidate: <span className="font-bold text-text">{firstSandwich.category}</span> · <span className="font-mono font-bold text-text">{firstSandwich.date}</span></>
-                    : "No sandwich night found in the current 20-day slice (refresh heatmap and retry)."}
+                    : "No sandwich night found in the current 15-day slice (refresh heatmap and retry)."}
                 </div>
                 <div className="mt-2 text-[10px] uppercase tracking-widest font-bold text-text-muted">
                   Considering weather pattern · flight disruption · big events · market sentiment (from Overview header)
@@ -959,10 +960,10 @@ export function PricingOptimizationTab() {
             <div>
               <div className="text-sm font-bold text-text flex items-center gap-2">
                 RateIQ Pricing Optimization{" "}
-                <AiTag title="RateIQ runs 5 parallel AI calls — weather, events, market news, historical trends, occupancy — then synthesizes into a 20-day pricing calendar per room category." />
+                <AiTag title="RateIQ runs parallel AI calls (weather, events, market, historical, occupancy) then synthesizes into a 15-day pricing calendar per room category. Tooltip overlays use Overview context + competitor pricing (demo)." />
               </div>
               <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-                Existing features · multi-signal AI · 20-day calendar · click cells to select for commit
+                Existing features · multi-signal AI · 15-day calendar · click cells to select for commit
               </div>
             </div>
           </div>
@@ -1094,7 +1095,7 @@ export function PricingOptimizationTab() {
             <div className="text-xs text-text-muted max-w-md leading-relaxed">
               Click <span className="font-bold text-text">Run Analysis</span> to launch the multi-signal AI engine.
               It will analyze weather, local events, market news, and occupancy patterns to
-              generate a 20-day pricing calendar per room category.
+              generate a 15-day pricing calendar per room category (filtered to unsold nights).
             </div>
           </div>
         )}
@@ -1125,7 +1126,7 @@ export function PricingOptimizationTab() {
               ))}
             </div>
             <div className="mt-6 text-[10px] text-text-muted uppercase tracking-widest">
-              Analyzing 5 signals · building 20-day calendar
+              Analyzing signals · building 15-day calendar
             </div>
           </div>
         )}
