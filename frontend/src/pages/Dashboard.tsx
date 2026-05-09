@@ -495,11 +495,6 @@ export function Dashboard() {
     return count > 0 ? total / count : null;
   }, [pace]);
 
-  const v2MostCommonLos = useMemo(() => {
-    if (eventInsights?.most_common_los_nights != null) return eventInsights.most_common_los_nights;
-    return mostCommonLosFallback;
-  }, [eventInsights, mostCommonLosFallback]);
-
   const pricingExposure = useMemo(() => {
     if (!heatmap || allRows.length === 0 || spanDays === 0) {
       return { unsoldRoomNights: 0, revenueAtRisk: 0, revenueOnBooks: 0, discountedRoomNights: 0 };
