@@ -23,7 +23,6 @@ import type {
 } from "../types";
 import type { BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
-import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
 import { OCCUPANCY_HEATMAP_VISIBLE_DAYS, useOccupancyPredictiveLos } from "../hooks/useOccupancyPredictiveLos";
@@ -169,7 +168,6 @@ export function DashboardV2() {
   const [kNightCommitLoading, setKNightCommitLoading] = useState(false);
   const [scorecard, setScorecard] = useState<DashboardScorecardResponse | null>(null);
   const [scorecardLoading, setScorecardLoading] = useState(false);
-  const [showInsights, setShowInsights] = useState(true);
   const [eventInsights, setEventInsights] = useState<EventInsightsResponse | null>(null);
   const [pace, setPace] = useState<PaceResponse | null>(null);
   const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
@@ -361,48 +359,6 @@ export function DashboardV2() {
     if (activeTab !== "occupancy" || !heatmap || heatmapCategories.length === 0) return;
     void occupancyPredictive.reloadPredictiveLos();
   }, [activeTab, heatmap?.dates?.[0], heatmapCategories.join("|"), occupancyPredictive.reloadPredictiveLos]);
-
-  // Snapshot for intelligence feed
-  const snapshot = useMemo(() => {
-    if (!heatmap) return null;
-    return computeEmptyRunInventory(allRows, spanDays);
-  }, [heatmap, allRows, spanDays]);
-
-  // Intelligence feed (same logic as Dashboard v1)
-  const intelligenceFeed = useMemo(() => {
-    if (!snapshot || spanDays === 0) return [];
-    const out: string[] = [];
-    if (eventInsights?.most_common_los_nights != null)
-      out.push(`Most likely length of stay: ${eventInsights.most_common_los_nights} nights.`);
-    else if (losFromSlice != null)
-      out.push(`Most likely length of stay: ${losFromSlice} nights (inferred from current bookings in this window).`);
-
-    if (channelPerf?.channels && channelPerf.channels.length > 0) {
-      const best = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
-      const partner = best.partners?.length ? [...best.partners].sort((a, b) => b.room_nights - a.room_nights)[0] : null;
-      out.push(partner
-        ? `Channel leader: ${best.channel}. Top partner: ${partner.partner} (${partner.share_of_channel_pct}% of ${best.channel} nights).`
-        : `Channel leader: ${best.channel} with ${best.share_pct}% of booked nights in this window.`);
-    } else if (topCh) {
-      out.push(`Channel mix: ${topCh.channel} leads at ~${topCh.sharePct}% of booked nights in this window.`);
-    }
-
-    if (pace?.series?.length) {
-      const pts = pace.series[0]?.points ?? [];
-      if (pts.length > 0) {
-        const avg = pts.reduce((s, p) => s + (p.on_books_occ_pct - p.expected_on_books_occ_pct), 0) / pts.length;
-        out.push(`Booking pace vs 2yr baseline: ${avg >= 0 ? "ahead" : "behind"} by ~${Math.abs(Math.round(avg))} occ-pts.`);
-      }
-    }
-
-    if (cancelRate != null)
-      out.push(`Estimated cancellation rate (modelled from channel mix): ~${cancelRate}%.`);
-
-    if (kpis?.sandwichMinlosBlockedNights)
-      out.push(`${kpis.sandwichMinlosBlockedNights} orphan night(s) are blocked by MinLOS rules — go to Occupancy to recover them.`);
-
-    return out.slice(0, 5);
-  }, [snapshot, spanDays, eventInsights, losFromSlice, channelPerf, topCh, pace, cancelRate, kpis]);
 
   // Prioritised action queue — derived entirely from real data
   const actionQueue = useMemo((): ActionItem[] => {
@@ -847,44 +803,6 @@ export function DashboardV2() {
                   )}
                 </div>
               </div>
-
-              {/* ── INTELLIGENCE FEED ─────────────────────────────────────────── */}
-              {intelligenceFeed.length > 0 && (
-                <div className={`border p-5 transition-colors ${showInsights ? "bg-accent/5 border-accent/20" : "bg-surface border-border"}`}>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-3.5 h-3.5 text-accent" />
-                      </div>
-                      <div>
-                        <div className="text-[9px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
-                          Intelligence Feed
-                          <AiTag title="Combines real slice metrics with clearly-labelled estimates where live data is unavailable." />
-                        </div>
-                        {!showInsights && (
-                          <div className="text-[11px] text-text-muted mt-0.5">{intelligenceFeed.length} signal{intelligenceFeed.length !== 1 ? "s" : ""} from this {weekSpan}W window</div>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowInsights(v => !v)}
-                      className="text-[9px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-                    >
-                      {showInsights ? "Collapse" : "Expand"}
-                    </button>
-                  </div>
-                  {showInsights && (
-                    <ul className="mt-4 space-y-2.5 pl-10">
-                      {intelligenceFeed.map((line, i) => (
-                        <li key={i} className="text-sm text-text leading-relaxed flex items-start gap-2">
-                          <span className="text-accent/70 mt-1 text-xs shrink-0">→</span>
-                          {line}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
 
             </>
           )}

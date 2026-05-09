@@ -6,16 +6,17 @@ import {
   getHeatmap,
   dashboardOptimisePreview,
   dashboardScorecard,
-  getEventInsights,
+  getOccupancyForecast,
   getPace,
   getChannelPerformance,
 } from "../api/client";
 import type {
   DashboardOptimisePreviewResponse,
   DashboardScorecardResponse,
-  EventInsightsResponse,
   HeatmapResponse,
   HeatmapRow,
+  OccupancyForecastResponse,
+  OccupancyPoint,
   RoomCategory,
   SwapStep,
   ChannelPerformanceResponse,
@@ -23,7 +24,6 @@ import type {
 } from "../types";
 import { type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
-import { computeEmptyRunInventory } from "../utils/inventoryAvailability";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
 import { OCCUPANCY_HEATMAP_VISIBLE_DAYS, useOccupancyPredictiveLos } from "../hooks/useOccupancyPredictiveLos";
@@ -32,14 +32,12 @@ import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimi
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
 import { ExogenousDemandSignals } from "../components/overview/ExogenousDemandSignals";
 import { OverviewSignalsProvider } from "../context/overviewSignals";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, AlertTriangle, Zap, Sparkles, ArrowRight } from "lucide-react";
-import { addDays, formatISO, parseISO } from "date-fns";
-import { AiTag } from "../components/shared/AiTag";
+import { BarChart2, Bed, DollarSign, Grid3x3, RefreshCw, AlertTriangle, TrendingDown, TrendingUp, Zap, ArrowRight } from "lucide-react";
+import { addDays, formatISO, parseISO, subDays, subYears } from "date-fns";
 import {
   overviewCardClass,
   overviewCardLgClass,
   overviewEyebrowClass,
-  overviewInsightBannerClass,
   overviewSecondaryBtnClass,
   overviewStackClass,
   overviewTitleClass,
@@ -93,47 +91,6 @@ function computeChannelMix(rows: HeatmapRow[], maxDays: number): ChannelMix {
     }
   }
   return mix;
-}
-
-function computeMostCommonLosFromSlice(rows: HeatmapRow[], maxDays: number): number | null {
-  // Extract LOS from SOFT booking runs within each room row (by booking_id).
-  // This is a fallback when /analytics/event-insights is unavailable.
-  const counts = new Map<number, number>();
-  for (const r of rows) {
-    const cells = r.cells.slice(0, maxDays);
-    let i = 0;
-    while (i < cells.length) {
-      const c = cells[i];
-      if (!c || c.block_type !== "SOFT" || !c.booking_id) { i++; continue; }
-      const bid = c.booking_id;
-      const start = i;
-      while (i < cells.length) {
-        const cc = cells[i];
-        if (!cc || cc.block_type !== "SOFT" || cc.booking_id !== bid) break;
-        i++;
-      }
-      const len = i - start;
-      if (len > 0 && len <= 30) counts.set(len, (counts.get(len) ?? 0) + 1);
-    }
-  }
-  if (counts.size === 0) return null;
-  let bestLos: number | null = null;
-  let bestCount = -1;
-  for (const [los, n] of counts.entries()) {
-    if (n > bestCount || (n === bestCount && (bestLos == null || los < bestLos))) {
-      bestLos = los;
-      bestCount = n;
-    }
-  }
-  return bestLos;
-}
-
-function topChannelInsight(mix: ChannelMix): { channel: string; sharePct: number; total: number } | null {
-  const entries = Object.entries(mix);
-  const total = entries.reduce((s, [, n]) => s + n, 0);
-  if (total <= 0) return null;
-  const [channel, nights] = entries.sort((a, b) => b[1] - a[1])[0]!;
-  return { channel, sharePct: Math.round((nights / total) * 100), total };
 }
 
 function estimatedCancellationRate(mix: ChannelMix): number | null {
@@ -275,6 +232,51 @@ function computeBirdseyeDashboardKpis(
   };
 }
 
+/** Hotel-wide rollup series (`category == null`) from occupancy forecast. */
+function rollupOccupancyPoints(forecast: OccupancyForecastResponse | null): OccupancyPoint[] {
+  if (!forecast?.series?.length) return [];
+  const rolled = forecast.series.find(s => s.category == null);
+  return rolled?.points ?? [];
+}
+
+/**
+ * Maps calendar dates to realized occupancy % using `occupied_rooms_actual` / `total_rooms`
+ * (populated by the API for historical nights).
+ */
+function actualOccPctByDateMap(points: OccupancyPoint[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of points) {
+    if (p.occupied_rooms_actual == null || p.total_rooms <= 0) continue;
+    m.set(String(p.date), (p.occupied_rooms_actual / p.total_rooms) * 100);
+  }
+  return m;
+}
+
+/**
+ * Simple normalized sparkline for compact KPI cards (daily totals in property currency units).
+ */
+function MiniRevenueSparkline({ values, className }: { values: number[]; className?: string }) {
+  if (values.length < 2) return <div className={className} aria-hidden />;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const w = 112;
+  const h = 32;
+  const pad = 3;
+  const span = max - min || 1;
+  const pts = values
+    .map((v, i) => {
+      const x = pad + (i / (values.length - 1)) * (w - 2 * pad);
+      const y = pad + (1 - (v - min) / span) * (h - 2 * pad);
+      return `${x},${y}`;
+    })
+    .join(" ");
+  return (
+    <svg className={className} width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden>
+      <polyline fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" points={pts} className="text-accent/75" />
+    </svg>
+  );
+}
+
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
@@ -319,10 +321,10 @@ export function Dashboard() {
   const { show, Toasts } = useToast();
 
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
-  const [eventInsights, setEventInsights] = useState<EventInsightsResponse | null>(null);
-  const [showInsightsV2, setShowInsightsV2] = useState(true);
   const [pace, setPace] = useState<PaceResponse | null>(null);
   const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
+  /** Used for yesterday / same-date-last-year occupancy (realized counts from analytics). */
+  const [occupancyForecast, setOccupancyForecast] = useState<OccupancyForecastResponse | null>(null);
 
   const loadHeatmap = useCallback(async (): Promise<HeatmapResponse | null> => {
     setIsHeatmapLoading(true);
@@ -380,14 +382,9 @@ export function Dashboard() {
     };
   }, [heatmap, spanDays]);
 
-  // Lightweight analytics backing the AI insights panel (when available).
   useEffect(() => {
     if (!scorecardSlice) return;
     const { startStr, endStr } = scorecardSlice;
-
-    getEventInsights({ start: startStr, end: endStr, as_of: todayStr })
-      .then(res => setEventInsights(res.data))
-      .catch(() => setEventInsights(null));
 
     getPace({ start: startStr, end: endStr, as_of: todayStr })
       .then(res => setPace(res.data as PaceResponse))
@@ -397,6 +394,34 @@ export function Dashboard() {
       .then(res => setChannelPerf(res.data as ChannelPerformanceResponse))
       .catch(() => setChannelPerf(null));
   }, [scorecardSlice?.endStr, scorecardSlice?.startStr, selectedCategories, todayStr]);
+
+  /** Load a tight calendar window covering last night + same calendar date last year through the heatmap anchor night. */
+  useEffect(() => {
+    if (!heatmap?.dates?.[0]) {
+      setOccupancyForecast(null);
+      return;
+    }
+    const firstNight = parseISO(String(heatmap.dates[0]));
+    const yesterday = subDays(firstNight, 1);
+    const lastYearNight = subYears(firstNight, 1);
+    const rangeStart = yesterday.getTime() <= lastYearNight.getTime() ? yesterday : lastYearNight;
+    const rangeEnd = firstNight;
+    let cancelled = false;
+    getOccupancyForecast({
+      start: formatISO(rangeStart, { representation: "date" }),
+      end: formatISO(rangeEnd, { representation: "date" }),
+      as_of: todayStr,
+    })
+      .then(res => {
+        if (!cancelled) setOccupancyForecast(res.data as OccupancyForecastResponse);
+      })
+      .catch(() => {
+        if (!cancelled) setOccupancyForecast(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [heatmap?.dates?.[0], todayStr]);
 
   const refreshScorecard = useCallback(async (plan?: SwapStep[] | null) => {
     if (!scorecardSlice) return;
@@ -416,16 +441,6 @@ export function Dashboard() {
       setScorecardLoading(false);
     }
   }, [scorecardSlice, selectedCategories]);
-
-  const snapshot = useMemo(() => {
-    if (!heatmap) return null;
-    return computeEmptyRunInventory(filteredRows, spanDays);
-  }, [heatmap, filteredRows, spanDays]);
-
-  const mostCommonLosFallback = useMemo(() => {
-    if (!heatmap || filteredRows.length === 0 || spanDays === 0) return null;
-    return computeMostCommonLosFromSlice(filteredRows, spanDays);
-  }, [heatmap, filteredRows, spanDays]);
 
   const simulatedRows = useMemo(() => {
     const plan = (kNightSwapPlan && kNightSwapPlan.length > 0) ? kNightSwapPlan : swapPlan;
@@ -485,7 +500,6 @@ export function Dashboard() {
     return computeChannelMix(allRows, spanDays);
   }, [heatmap, allRows, spanDays]);
 
-  const v2TopChannel = useMemo(() => (v2ChannelMix ? topChannelInsight(v2ChannelMix) : null), [v2ChannelMix]);
   const v2CancelRate = useMemo(() => (v2ChannelMix ? estimatedCancellationRate(v2ChannelMix) : null), [v2ChannelMix]);
 
   const paceDelta = useMemo(() => {
@@ -566,6 +580,58 @@ export function Dashboard() {
     };
   }, [channelPerf]);
 
+  /** Daily on-books revenue by heatmap column (SOFT/HARD rate sum) for the KPI window sparkline. */
+  const revenueOnBooksByDay = useMemo(() => {
+    if (!heatmap || allRows.length === 0 || spanDays === 0) return [];
+    const days = Math.min(spanDays, heatmap.dates.length);
+    const out: number[] = [];
+    for (let d = 0; d < days; d++) {
+      let sum = 0;
+      for (const row of allRows) {
+        const c = row.cells[d];
+        if (c && c.block_type !== "EMPTY") sum += Number(c.current_rate ?? 0);
+      }
+      out.push(sum);
+    }
+    return out;
+  }, [heatmap, allRows, spanDays]);
+
+  /** Yesterday vs same calendar date last year — realized occupancy from forecast rollup (null when not in history yet). */
+  const histOccContext = useMemo(() => {
+    const pts = rollupOccupancyPoints(occupancyForecast);
+    const byDate = actualOccPctByDateMap(pts);
+    if (!heatmap?.dates?.[0])
+      return { yesterdayPct: null as number | null, lyPct: null as number | null, vsLyPpt: null as number | null };
+    const anchor = parseISO(String(heatmap.dates[0]));
+    const yKey = formatISO(subDays(anchor, 1), { representation: "date" });
+    const lyKey = formatISO(subYears(anchor, 1), { representation: "date" });
+    const yesterdayPct = byDate.get(yKey) ?? null;
+    const lyPct = byDate.get(lyKey) ?? null;
+    const tonightPct = v2Kpis?.tonightOccupancyPct;
+    const vsLyPpt =
+      tonightPct != null && lyPct != null ? Math.round(tonightPct - lyPct) : null;
+    return { yesterdayPct, lyPct, vsLyPpt };
+  }, [occupancyForecast, heatmap?.dates?.[0], v2Kpis?.tonightOccupancyPct]);
+
+  /** Top partners with paired net revenue + net ADR for the grouped spotlight card. */
+  const dashboardPartnerSpotlight = useMemo(() => {
+    const tops = channelProfitKpis.partnerNetRevenueTop.slice(0, 3);
+    const adrByName = new Map(channelProfitKpis.partnerNetAdrTop.map(p => [p.partner, p.value]));
+    const dotClass = ["bg-accent", "bg-violet-500", "bg-rose-500"];
+    return tops.map((p, i) => ({
+      partner: p.partner,
+      net: p.value,
+      adr: adrByName.get(p.partner) ?? 0,
+      dotClass: dotClass[i % dotClass.length]!,
+    }));
+  }, [channelProfitKpis]);
+
+  const revenueAtRiskThresholdUsd = 250_000;
+  const revenueAtRiskBarPct = Math.min(
+    100,
+    pricingExposure.revenueAtRisk > 0 ? (pricingExposure.revenueAtRisk / revenueAtRiskThresholdUsd) * 100 : 0,
+  );
+
   type ActionItem = { priority: "HIGH" | "MED" | "LOW"; category: string; tab: OverviewTab; title: string; detail: string };
 
   const actionQueue = useMemo((): ActionItem[] => {
@@ -595,41 +661,6 @@ export function Dashboard() {
 
     return items.slice(0, 5);
   }, [scorecard, v2Kpis, paceDelta, v2ChannelMix, v2CancelRate]);
-
-  const intelligenceFeedV2 = useMemo(() => {
-    if (!snapshot || spanDays === 0) return [];
-    const out: string[] = [];
-    if (eventInsights?.most_common_los_nights != null)
-      out.push(`Most likely length of stay: ${eventInsights.most_common_los_nights} nights.`);
-    else if (mostCommonLosFallback != null)
-      out.push(`Most likely length of stay: ${mostCommonLosFallback} nights (inferred from current bookings in this window).`);
-
-    if (channelPerf?.channels && channelPerf.channels.length > 0) {
-      const best = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
-      const partner = best.partners?.length ? [...best.partners].sort((a, b) => b.room_nights - a.room_nights)[0] : null;
-      out.push(partner
-        ? `Channel leader: ${best.channel}. Top partner: ${partner.partner} (${partner.share_of_channel_pct}% of ${best.channel} nights).`
-        : `Channel leader: ${best.channel} with ${best.share_pct}% of booked nights in this window.`);
-    } else if (v2TopChannel) {
-      out.push(`Channel mix: ${v2TopChannel.channel} leads at ~${v2TopChannel.sharePct}% of booked nights in this window.`);
-    }
-
-    if (pace?.series?.length) {
-      const pts = pace.series[0]?.points ?? [];
-      if (pts.length > 0) {
-        const avg = pts.reduce((s, p) => s + (p.on_books_occ_pct - p.expected_on_books_occ_pct), 0) / pts.length;
-        out.push(`Booking pace vs 2yr baseline: ${avg >= 0 ? "ahead" : "behind"} by ~${Math.abs(Math.round(avg))} occ-pts.`);
-      }
-    }
-
-    if (v2CancelRate != null)
-      out.push(`Estimated cancellation rate (modelled from channel mix): ~${v2CancelRate}%.`);
-
-    if (v2Kpis?.sandwichMinlosBlockedNights)
-      out.push(`${v2Kpis.sandwichMinlosBlockedNights} orphan night(s) are blocked by MinLOS rules — go to Occupancy to recover them.`);
-
-    return out.slice(0, 5);
-  }, [snapshot, spanDays, eventInsights, mostCommonLosFallback, channelPerf, v2TopChannel, pace, v2CancelRate, v2Kpis]);
 
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
@@ -855,156 +886,159 @@ export function Dashboard() {
 
           {heatmap && (
             <div className="space-y-6">
-              {/* ── KPI STRIP (12 cards) ─────────────────────────────────────── */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-                {/* 1) Tonight occupancy % */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Tonight occupancy</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {v2Kpis ? `${Math.round(v2Kpis.tonightOccupancyPct)}%` : "—"}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">
-                    {v2Kpis ? `${v2Kpis.tonightRoomsOccupied} / ${v2Kpis.tonightTotalRooms} rooms` : "—"}
-                  </div>
-                </div>
-
-                {/* 2) Orphan nights */}
-                {(() => {
-                  const n = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
-                  const isRisk = n > 0;
-                  return (
-                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isRisk ? "!border-occuorange/50" : ""}`}>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan nights</div>
-                      <div className={`text-2xl font-serif font-bold tabular-nums ${isRisk ? "text-occuorange" : "text-text"}`}>{n}</div>
-                      <div className="text-[10px] text-text-muted mt-0.5">sandwich gaps</div>
-                    </div>
-                  );
-                })()}
-
-                {/* 3) Orphan gaps */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan gaps</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {v2RunMetrics ? v2RunMetrics.orphanGaps : "—"}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">trapped runs</div>
-                </div>
-
-                {/* 4) k=2 windows */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=2 windows</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[2] ?? "—")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">2-night bookable</div>
-                </div>
-
-                {/* 5) k=3 windows */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=3 windows</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[3] ?? "—")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">3-night bookable</div>
-                </div>
-
-                {/* 6) Unsold room-nights */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Unsold room-nights</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {pricingExposure.unsoldRoomNights.toLocaleString("en-US")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">{spanDays}-day window</div>
-                </div>
-
-                {/* 7) Revenue at risk */}
-                <div className={`${overviewCardClass} p-4 sm:p-5 ${pricingExposure.revenueAtRisk > 0 ? "!border-occuorange/35" : ""}`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Revenue at risk</div>
-                  <div className={`text-2xl font-serif font-bold tabular-nums ${pricingExposure.revenueAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
-                    ${pricingExposure.revenueAtRisk.toLocaleString("en-US")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">unsold value</div>
-                </div>
-
-                {/* 8) Revenue on books */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Revenue on books</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    ${pricingExposure.revenueOnBooks.toLocaleString("en-US")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">{spanDays}-day window</div>
-                </div>
-
-                {/* 9) Discounted rooms */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Discounted nights</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {pricingExposure.discountedRoomNights.toLocaleString("en-US")}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">below base rate</div>
-                </div>
-
-                {/* 10) Top channel partners by net revenue */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Top partners · net $</div>
-                  {channelProfitKpis.partnerNetRevenueTop.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {channelProfitKpis.partnerNetRevenueTop.map(p => {
-                        const pct = Math.max(0, Math.min(100, (p.value / channelProfitKpis.maxPartnerNetRevenue) * 100));
-                        return (
-                          <div key={p.partner} className="grid grid-cols-[74px_1fr_56px] gap-2 items-center">
-                            <div className="text-[10px] font-bold text-text-muted truncate">{p.partner}</div>
-                            <div className="h-2.5 bg-surface-2 border border-border/40 overflow-hidden">
-                              <div className="h-full bg-accent/55" style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }} />
-                            </div>
-                            <div className="text-[10px] font-mono font-bold text-text text-right">{formatUsdShort(p.value)}</div>
+              {/* ── KPI layout: hero row + grouped metrics (same 12 signals as docs/kpis.md) ── */}
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Hero — tonight occupancy (heatmap col 0) + historical context from forecast */}
+                  <div className={`relative overflow-hidden ${overviewCardLgClass} border-l-[5px] border-l-accent pl-5 sm:pl-6 pr-5 sm:pr-6 pt-5 pb-5`}>
+                    <Bed className="pointer-events-none absolute right-4 top-4 w-24 h-24 text-accent/[0.07]" strokeWidth={1} aria-hidden />
+                    <div className="relative">
+                      <div className={`${overviewEyebrowClass} text-accent`}>Tonight&apos;s occupancy</div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] font-bold text-text-muted mt-1">Live portfolio saturation · {v2Kpis?.firstNightLabel ?? "first night"}</div>
+                      <div className="mt-4 flex flex-wrap items-end gap-3">
+                        <div className="text-5xl sm:text-[3.25rem] font-serif font-bold text-accent tabular-nums leading-none">
+                          {v2Kpis ? `${Math.round(v2Kpis.tonightOccupancyPct)}%` : "—"}
+                        </div>
+                        <div className="text-[11px] text-text-muted pb-1">
+                          {v2Kpis ? `${v2Kpis.tonightRoomsOccupied} / ${v2Kpis.tonightTotalRooms} rooms on calendar` : ""}
+                        </div>
+                      </div>
+                      <div className="mt-6 pt-4 border-t border-border/60 grid grid-cols-2 gap-3 text-[11px]">
+                        <div>
+                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Yester-night</div>
+                          <div className="font-serif font-bold text-text tabular-nums mt-1">
+                            {histOccContext.yesterdayPct != null ? `${Math.round(histOccContext.yesterdayPct)}%` : "—"}
                           </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] text-text-muted">—</div>
-                  )}
-                  <div className="mt-2 text-[9px] uppercase tracking-widest font-bold text-text-muted">
-                    {channelProfitKpis.ota ? `OTA window ${channelProfitKpis.ota.room_nights} nights` : "OTA window —"}
-                  </div>
-                </div>
-
-                {/* 11) Top channel partners by net ADR */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Top partners · net ADR</div>
-                  {channelProfitKpis.partnerNetAdrTop.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {channelProfitKpis.partnerNetAdrTop.map(p => {
-                        const pct = Math.max(0, Math.min(100, (p.value / channelProfitKpis.maxPartnerNetAdr) * 100));
-                        return (
-                          <div key={p.partner} className="grid grid-cols-[74px_1fr_56px] gap-2 items-center">
-                            <div className="text-[10px] font-bold text-text-muted truncate">{p.partner}</div>
-                            <div className="h-2.5 bg-surface-2 border border-border/40 overflow-hidden">
-                              <div className="h-full bg-occugreen/55" style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }} />
-                            </div>
-                            <div className="text-[10px] font-mono font-bold text-text text-right">{`$${Math.round(p.value).toLocaleString("en-US")}`}</div>
+                        </div>
+                        <div>
+                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted flex items-center gap-2">
+                            Same date · prior year
+                            {histOccContext.vsLyPpt != null && histOccContext.vsLyPpt !== 0 && (
+                              <span className={`inline-flex items-center gap-0.5 font-mono text-[10px] ${histOccContext.vsLyPpt > 0 ? "text-occugreen" : "text-occuorange"}`}>
+                                {histOccContext.vsLyPpt > 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                {histOccContext.vsLyPpt > 0 ? "+" : ""}{histOccContext.vsLyPpt} pts
+                              </span>
+                            )}
                           </div>
-                        );
-                      })}
+                          <div className="font-serif font-bold text-text tabular-nums mt-1">
+                            {histOccContext.lyPct != null ? `${Math.round(histOccContext.lyPct)}%` : "—"}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  ) : (
-                    <div className="text-[11px] text-text-muted">—</div>
-                  )}
-                  <div className="mt-2 text-[9px] uppercase tracking-widest font-bold text-text-muted">net / room-night</div>
+                  </div>
+
+                  {/* Hero — revenue at risk vs operating threshold */}
+                  <div className={`relative overflow-hidden ${overviewCardLgClass} border-l-[5px] border-l-occuorange pl-5 sm:pl-6 pr-5 sm:pr-6 pt-5 pb-5`}>
+                    <AlertTriangle className="pointer-events-none absolute right-4 top-4 w-9 h-9 text-occuorange/35" aria-hidden />
+                    <div className="relative">
+                      <div className={`${overviewEyebrowClass} text-occuorange`}>Revenue at risk</div>
+                      <div className="text-[10px] uppercase tracking-[0.14em] font-bold text-text-muted mt-1">
+                        Unsold slot value · {spanDays}-night window
+                      </div>
+                      <div className={`mt-4 text-4xl sm:text-[2.75rem] font-serif font-bold tabular-nums leading-none ${pricingExposure.revenueAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
+                        ${pricingExposure.revenueAtRisk.toLocaleString("en-US")}
+                      </div>
+                      <div className="mt-4">
+                        <div className="h-2 rounded-full bg-surface-2 border border-border/50 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-occuorange/70 to-occuorange rounded-full transition-[width]"
+                            style={{ width: `${revenueAtRiskBarPct}%` }}
+                          />
+                        </div>
+                        <div className="mt-2 flex flex-wrap justify-between gap-2 text-[10px] text-text-muted">
+                          <span>Operating threshold · ${revenueAtRiskThresholdUsd.toLocaleString("en-US")}</span>
+                          <span className="font-mono font-bold text-occuorange">{Math.round(revenueAtRiskBarPct)}% to threshold</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
-                {/* 12) Gross → net leakage (OTA) */}
-                <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">OTA leakage</div>
-                  <div className="text-xl font-serif font-bold text-text tabular-nums">
-                    {channelProfitKpis.otaLeakage != null ? `$${Math.round(channelProfitKpis.otaLeakage).toLocaleString("en-US")}` : "—"}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Inventory gaps — orphan nights, gaps, k-windows */}
+                  <div className={`${overviewCardClass} p-5 sm:p-6 flex flex-col min-h-[220px]`}>
+                    <div className={`${overviewEyebrowClass} mb-4`}>Inventory gaps</div>
+                    <div className="grid grid-cols-2 gap-4 flex-1">
+                      {(() => {
+                        const orphanN = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
+                        return (
+                          <>
+                            <div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Orphan nights</div>
+                              <div className={`text-3xl font-serif font-bold tabular-nums mt-1 ${orphanN > 0 ? "text-occuorange" : "text-text"}`}>{orphanN}</div>
+                            </div>
+                            <div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Orphan gaps</div>
+                              <div className="text-3xl font-serif font-bold text-text tabular-nums mt-1">{v2RunMetrics ? v2RunMetrics.orphanGaps : "—"}</div>
+                            </div>
+                            <div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k=2 windows</div>
+                              <div className="text-2xl font-serif font-bold text-text tabular-nums mt-1">{scorecardLoading ? "…" : (scorecard?.before.k_windows?.[2] ?? "—")}</div>
+                            </div>
+                            <div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k=3 windows</div>
+                              <div className="text-2xl font-serif font-bold text-text tabular-nums mt-1">{scorecardLoading ? "…" : (scorecard?.before.k_windows?.[3] ?? "—")}</div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
-                    <span>gross→net</span>
-                    <span className="font-mono font-bold text-text">
-                      {channelProfitKpis.otaLeakagePct != null ? `${Math.round(channelProfitKpis.otaLeakagePct)}%` : "—"}
-                    </span>
+
+                  {/* Revenue health — on-books, unsold, leakage */}
+                  <div className={`${overviewCardClass} p-5 sm:p-6 flex flex-col gap-4 min-h-[220px]`}>
+                    <div className={`${overviewEyebrowClass}`}>Revenue health</div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Revenue on books</div>
+                        <div className="text-2xl sm:text-3xl font-serif font-bold text-text tabular-nums mt-1">
+                          ${pricingExposure.revenueOnBooks.toLocaleString("en-US")}
+                        </div>
+                        <div className="text-[10px] text-text-muted mt-0.5">{spanDays}-night window</div>
+                      </div>
+                      <MiniRevenueSparkline values={revenueOnBooksByDay} className="shrink-0 opacity-90" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border/60">
+                      <div>
+                        <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Unsold room-nights</div>
+                        <div className="text-xl font-serif font-bold text-text tabular-nums mt-1">{pricingExposure.unsoldRoomNights.toLocaleString("en-US")}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">OTA leakage</div>
+                        <div className="text-xl font-serif font-bold text-rose-600 tabular-nums mt-1">
+                          {channelProfitKpis.otaLeakage != null ? `$${Math.round(channelProfitKpis.otaLeakage).toLocaleString("en-US")}` : "—"}
+                        </div>
+                        <div className="text-[10px] font-mono text-text-muted mt-0.5">
+                          {channelProfitKpis.otaLeakagePct != null ? `${Math.round(channelProfitKpis.otaLeakagePct)}% of gross` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Partners spotlight */}
+                  <div className={`${overviewCardClass} border-l-[4px] border-l-accent/40 p-5 sm:p-6 flex flex-col min-h-[220px]`}>
+                    <div className={`${overviewEyebrowClass} mb-3`}>Top partners</div>
+                    <div className="space-y-4 flex-1">
+                      {dashboardPartnerSpotlight.length > 0 ? (
+                        dashboardPartnerSpotlight.map(row => (
+                          <div key={row.partner} className="flex gap-3 items-start">
+                            <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${row.dotClass}`} aria-hidden />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-bold text-text truncate">{row.partner}</div>
+                              <div className="text-sm font-serif font-bold text-text tabular-nums">{formatUsdShort(row.net)} net</div>
+                              <div className="text-[10px] text-text-muted font-mono">${Math.round(row.adr).toLocaleString("en-US")} net ADR</div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[11px] text-text-muted py-6">No partner breakdown for this window.</div>
+                      )}
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-border/60 text-[10px] text-text-muted flex justify-between gap-2">
+                      <span className="font-bold uppercase tracking-widest">Discounted nights</span>
+                      <span className="font-mono font-bold text-text">{pricingExposure.discountedRoomNights.toLocaleString("en-US")}</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1057,44 +1091,6 @@ export function Dashboard() {
                   )}
                 </div>
               </div>
-
-              {/* ── INTELLIGENCE FEED ─────────────────────────────────────────── */}
-              {intelligenceFeedV2.length > 0 && (
-                <div className={`p-5 sm:p-6 ${showInsightsV2 ? overviewInsightBannerClass : overviewCardLgClass}`}>
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-3.5 h-3.5 text-accent" />
-                      </div>
-                      <div>
-                        <div className="text-[9px] font-bold uppercase tracking-widest text-accent flex items-center gap-2">
-                          Intelligence Feed
-                          <AiTag title="Combines real slice metrics with clearly-labelled estimates where live data is unavailable." />
-                        </div>
-                        {!showInsightsV2 && (
-                          <div className="text-[11px] text-text-muted mt-0.5">{intelligenceFeedV2.length} signal{intelligenceFeedV2.length !== 1 ? "s" : ""} from this {weekSpan}W window</div>
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowInsightsV2(v => !v)}
-                      className="text-[9px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface hover:bg-surface-2 text-text-muted hover:text-text transition-colors"
-                    >
-                      {showInsightsV2 ? "Collapse" : "Expand"}
-                    </button>
-                  </div>
-                  {showInsightsV2 && (
-                    <ul className="mt-4 space-y-2.5 pl-10">
-                      {intelligenceFeedV2.map((line, i) => (
-                        <li key={i} className="text-sm text-text leading-relaxed flex items-start gap-2">
-                          <span className="text-accent/70 mt-1 text-xs shrink-0">→</span>
-                          {line}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
