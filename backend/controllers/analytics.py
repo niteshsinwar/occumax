@@ -287,7 +287,14 @@ async def get_occupancy_forecast(
     totals = await _get_room_totals(db)
     days = _date_range(start, end)
 
-    actual_counts = await _get_actual_occupied_counts(db, start=min(start, as_of - timedelta(days=365)), end=min(end, as_of + timedelta(days=1)))
+    # Realized night occupancy from current slots (non-EMPTY). Use the same [start, end) window as
+    # `on_books_counts`, not clipped by `as_of`: callers often compare heatmap anchor nights to
+    # browser `as_of`, and clipping dropped “yester-night” when the board calendar ran ahead of UTC.
+    actual_counts = await _get_actual_occupied_counts(
+        db,
+        start=min(start, as_of - timedelta(days=365)),
+        end=end,
+    )
     # Calendar occupancy (guest SOFT + blocks HARD); matches heatmap, not Booking.created_at.
     on_books_counts = await _get_actual_occupied_counts(db, start=start, end=end)
 
