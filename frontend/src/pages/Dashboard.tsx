@@ -495,17 +495,6 @@ export function Dashboard() {
     return count > 0 ? total / count : null;
   }, [pace]);
 
-  const dailyOccupancy = useMemo(() => {
-    if (!heatmap) return [];
-    const days = Math.min(14, heatmap.dates.length);
-    return heatmap.dates.slice(0, days).map((date, idx) => {
-      const total = heatmap.rows.length;
-      const soft = heatmap.rows.filter(r => r.cells[idx]?.block_type === "SOFT").length;
-      const hard = heatmap.rows.filter(r => r.cells[idx]?.block_type === "HARD").length;
-      return { date: String(date), total, soft, hard, occPct: total > 0 ? ((soft + hard) / total) * 100 : 0 };
-    });
-  }, [heatmap]);
-
   const v2MostCommonLos = useMemo(() => {
     if (eventInsights?.most_common_los_nights != null) return eventInsights.most_common_los_nights;
     return mostCommonLosFallback;
@@ -543,21 +532,42 @@ export function Dashboard() {
     };
   }, [heatmap, allRows, spanDays]);
 
+  function formatUsdShort(n: number): string {
+    const v = Math.round(n);
+    if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(v) >= 1_000) return `$${Math.round(v / 1_000)}k`;
+    return `$${v.toLocaleString("en-US")}`;
+  }
+
   const channelProfitKpis = useMemo(() => {
     const ota = channelPerf?.channels?.find(c => String(c.channel).toUpperCase() === "OTA");
-    const direct = channelPerf?.channels?.find(c => String(c.channel).toUpperCase() === "DIRECT");
-    const otaNetAdr = ota && ota.room_nights > 0 ? ota.net_revenue / ota.room_nights : null;
-    const directNetAdr = direct && direct.room_nights > 0 ? direct.net_revenue / direct.room_nights : null;
+    const partners = ota?.partners ?? [];
+    const partnerNetRevenueTop = [...partners]
+      .filter(p => (p.net_revenue ?? 0) > 0)
+      .sort((a, b) => (b.net_revenue ?? 0) - (a.net_revenue ?? 0))
+      .slice(0, 4)
+      .map(p => ({ partner: p.partner, value: p.net_revenue }));
+
+    const partnerNetAdrTop = [...partners]
+      .filter(p => (p.room_nights ?? 0) > 0)
+      .map(p => ({ partner: p.partner, value: p.net_revenue / Math.max(1, p.room_nights) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 4);
+
+    const maxPartnerNetRevenue = Math.max(1, ...partnerNetRevenueTop.map(p => p.value));
+    const maxPartnerNetAdr = Math.max(1, ...partnerNetAdrTop.map(p => p.value));
+
     const otaLeakage = ota ? ota.gross_revenue - ota.net_revenue : null;
     const otaLeakagePct = ota && ota.gross_revenue > 0 ? (otaLeakage! / ota.gross_revenue) * 100 : null;
 
     return {
       ota,
-      direct,
-      otaNetAdr,
-      directNetAdr,
       otaLeakage,
       otaLeakagePct,
+      partnerNetRevenueTop,
+      partnerNetAdrTop,
+      maxPartnerNetRevenue,
+      maxPartnerNetAdr,
     };
   }, [channelPerf]);
 
@@ -939,30 +949,54 @@ export function Dashboard() {
                   <div className="text-[10px] text-text-muted mt-0.5">below base rate</div>
                 </div>
 
-                {/* 10) Net revenue by channel */}
+                {/* 10) Top channel partners by net revenue */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Net revenue</div>
-                  <div className="text-xl font-serif font-bold text-text tabular-nums">
-                    {channelProfitKpis.ota || channelProfitKpis.direct
-                      ? `$${Math.round((channelProfitKpis.ota?.net_revenue ?? 0) + (channelProfitKpis.direct?.net_revenue ?? 0)).toLocaleString("en-US")}`
-                      : "—"}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
-                    <span>OTA ${Math.round(channelProfitKpis.ota?.net_revenue ?? 0).toLocaleString("en-US")}</span>
-                    <span>Direct ${Math.round(channelProfitKpis.direct?.net_revenue ?? 0).toLocaleString("en-US")}</span>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Top partners · net $</div>
+                  {channelProfitKpis.partnerNetRevenueTop.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {channelProfitKpis.partnerNetRevenueTop.map(p => {
+                        const pct = Math.max(0, Math.min(100, (p.value / channelProfitKpis.maxPartnerNetRevenue) * 100));
+                        return (
+                          <div key={p.partner} className="grid grid-cols-[74px_1fr_56px] gap-2 items-center">
+                            <div className="text-[10px] font-bold text-text-muted truncate">{p.partner}</div>
+                            <div className="h-2.5 bg-surface-2 border border-border/40 overflow-hidden">
+                              <div className="h-full bg-accent/55" style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }} />
+                            </div>
+                            <div className="text-[10px] font-mono font-bold text-text text-right">{formatUsdShort(p.value)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-text-muted">—</div>
+                  )}
+                  <div className="mt-2 text-[9px] uppercase tracking-widest font-bold text-text-muted">
+                    {channelProfitKpis.ota ? `OTA window ${channelProfitKpis.ota.room_nights} nights` : "OTA window —"}
                   </div>
                 </div>
 
-                {/* 11) Net ADR by channel */}
+                {/* 11) Top channel partners by net ADR */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Net ADR</div>
-                  <div className="text-xl font-serif font-bold text-text tabular-nums">
-                    {channelProfitKpis.otaNetAdr != null || channelProfitKpis.directNetAdr != null ? "by channel" : "—"}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
-                    <span>OTA {channelProfitKpis.otaNetAdr != null ? `$${Math.round(channelProfitKpis.otaNetAdr).toLocaleString("en-US")}` : "—"}</span>
-                    <span>Direct {channelProfitKpis.directNetAdr != null ? `$${Math.round(channelProfitKpis.directNetAdr).toLocaleString("en-US")}` : "—"}</span>
-                  </div>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Top partners · net ADR</div>
+                  {channelProfitKpis.partnerNetAdrTop.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {channelProfitKpis.partnerNetAdrTop.map(p => {
+                        const pct = Math.max(0, Math.min(100, (p.value / channelProfitKpis.maxPartnerNetAdr) * 100));
+                        return (
+                          <div key={p.partner} className="grid grid-cols-[74px_1fr_56px] gap-2 items-center">
+                            <div className="text-[10px] font-bold text-text-muted truncate">{p.partner}</div>
+                            <div className="h-2.5 bg-surface-2 border border-border/40 overflow-hidden">
+                              <div className="h-full bg-occugreen/55" style={{ width: `${Math.max(pct, pct > 0 ? 4 : 0)}%` }} />
+                            </div>
+                            <div className="text-[10px] font-mono font-bold text-text text-right">{`$${Math.round(p.value).toLocaleString("en-US")}`}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-text-muted">—</div>
+                  )}
+                  <div className="mt-2 text-[9px] uppercase tracking-widest font-bold text-text-muted">net / room-night</div>
                 </div>
 
                 {/* 12) Gross → net leakage (OTA) */}
@@ -976,164 +1010,6 @@ export function Dashboard() {
                     <span className="font-mono font-bold text-text">
                       {channelProfitKpis.otaLeakagePct != null ? `${Math.round(channelProfitKpis.otaLeakagePct)}%` : "—"}
                     </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* ── MIDDLE: 3-column visual section ─────────────────────────── */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-                {/* Col 1: 14-Night Occupancy Trend */}
-                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
-                  <div className="mb-4 pb-3 border-b border-border/60">
-                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Next 14 Nights</div>
-                    <div className="font-serif font-bold text-base text-text mt-0.5">Occupancy Trend</div>
-                  </div>
-                  <div className="space-y-1.5">
-                    {dailyOccupancy.map(day => {
-                      const softPct = day.total > 0 ? (day.soft / day.total) * 100 : 0;
-                      const hardPct = day.total > 0 ? (day.hard / day.total) * 100 : 0;
-                      const occPct = softPct + hardPct;
-                      return (
-                        <div key={day.date} className="grid grid-cols-[48px_1fr_34px] gap-2 items-center">
-                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted text-right tabular-nums">{calendarDayKey(day.date)}</div>
-                          <div className="h-3.5 bg-surface-2 border border-border/40 overflow-hidden flex">
-                            <div className="h-full bg-occugreen/55 transition-all" style={{ width: `${softPct}%` }} />
-                            <div className="h-full bg-text/20 transition-all" style={{ width: `${hardPct}%` }} />
-                          </div>
-                          <div className={`text-[10px] font-bold tabular-nums text-right ${occPct < 40 ? "text-occuorange" : occPct >= 80 ? "text-occugreen" : "text-text"}`}>
-                            {Math.round(occPct)}%
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-border/60 flex gap-5 text-[9px] font-bold uppercase tracking-widest text-text-muted">
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-occugreen/55 inline-block" /> Booked</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-text/20 inline-block" /> Blocked</span>
-                    <span className="flex items-center gap-1.5"><span className="w-3 h-2 bg-surface-2 border border-border inline-block" /> Empty</span>
-                  </div>
-                </div>
-
-                {/* Col 2: Gap & Capacity Analysis */}
-                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
-                  <div className="mb-4 pb-3 border-b border-border/60">
-                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Capacity</div>
-                    <div className="font-serif font-bold text-base text-text mt-0.5">Gap Analysis</div>
-                  </div>
-
-                  {v2RunMetrics && (() => {
-                    const maxGap = Math.max(v2RunMetrics.dist.n1, v2RunMetrics.dist.n2_3, v2RunMetrics.dist.n4_7, v2RunMetrics.dist.n8p, 1);
-                    const bars = [
-                      { label: "1-night", count: v2RunMetrics.dist.n1, color: "bg-occuorange", note: "hardest to sell" },
-                      { label: "2–3 night", count: v2RunMetrics.dist.n2_3, color: "bg-occuorange/50", note: "hard to fill" },
-                      { label: "4–7 night", count: v2RunMetrics.dist.n4_7, color: "bg-text/25", note: "convertible" },
-                      { label: "8+ night", count: v2RunMetrics.dist.n8p, color: "bg-occugreen/45", note: "easy to sell" },
-                    ];
-                    return (
-                      <>
-                        <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Empty gap distribution</div>
-                        <div className="space-y-2 mb-5">
-                          {bars.map(({ label, count, color, note }) => (
-                            <div key={label} className="grid grid-cols-[58px_1fr_24px] gap-2 items-center">
-                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted text-right">{label}</div>
-                              <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden relative group">
-                                <div className={`h-full ${color} transition-all`} style={{ width: `${count > 0 ? Math.max((count / maxGap) * 100, 5) : 0}%` }} />
-                                <span className="absolute right-1 top-0 h-full hidden group-hover:flex items-center text-[8px] text-text-muted">{note}</span>
-                              </div>
-                              <div className="text-[10px] font-bold text-text tabular-nums">{count}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </>
-                    );
-                  })()}
-
-                  <div className="pt-3 border-t border-border/60">
-                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Bookable windows</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[2, 3].map(k => (
-                        <div key={k} className="bg-surface-2 border border-border px-3 py-2.5">
-                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k={k} nights</div>
-                          <div className="text-xl font-serif font-bold text-text tabular-nums mt-1">
-                            {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[k] ?? "—")}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    {v2RunMetrics && (
-                      <div className="mt-3 pt-2 border-t border-border/40 text-[10px] text-text-muted">
-                        <span className="font-bold text-text">{v2RunMetrics.orphanNights}</span> orphan night{v2RunMetrics.orphanNights !== 1 ? "s" : ""} in{" "}
-                        <span className="font-bold text-text">{v2RunMetrics.orphanGaps}</span> gap{v2RunMetrics.orphanGaps !== 1 ? "s" : ""} across {spanDays}-day window
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Col 3: Channel Intelligence */}
-                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
-                  <div className="mb-4 pb-3 border-b border-border/60">
-                    <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Distribution</div>
-                    <div className="font-serif font-bold text-base text-text mt-0.5">Channel Intelligence</div>
-                  </div>
-
-                  {v2ChannelMix && Object.keys(v2ChannelMix).length > 0 ? (() => {
-                    const total = Object.values(v2ChannelMix).reduce((s, n) => s + n, 0);
-                    const CH_COLOR: Record<string, string> = { OTA: "bg-accent/55", DIRECT: "bg-occugreen/55", WALKIN: "bg-amber-400/55" };
-                    return (
-                      <>
-                        <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-2">Booked nights by channel</div>
-                        <div className="space-y-2 mb-4">
-                          {Object.entries(v2ChannelMix).sort((a, b) => b[1] - a[1]).map(([ch, n]) => {
-                            const pct = total > 0 ? (n / total) * 100 : 0;
-                            return (
-                              <div key={ch} className="grid grid-cols-[54px_1fr_36px] gap-2 items-center">
-                                <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted text-right">{ch}</div>
-                                <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden">
-                                  <div className={`h-full ${CH_COLOR[ch] ?? "bg-text/20"} transition-all`} style={{ width: `${Math.max(pct, pct > 0 ? 3 : 0)}%` }} />
-                                </div>
-                                <div className="text-[10px] font-bold text-text tabular-nums">{Math.round(pct)}%</div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </>
-                    );
-                  })() : (
-                    <p className="text-xs text-text-muted mb-4">No booked nights in this window.</p>
-                  )}
-
-                  <div className="pt-3 border-t border-border/60 space-y-2.5">
-                    {v2TopChannel && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-text-muted">Top channel</span>
-                        <span className="font-bold text-text">{v2TopChannel.channel} · {v2TopChannel.sharePct}%</span>
-                      </div>
-                    )}
-                    {channelPerf?.channels && channelPerf.channels.length > 0 && (() => {
-                      const best = [...channelPerf.channels].sort((a, b) => b.room_nights - a.room_nights)[0]!;
-                      const partner = best.partners?.length ? [...best.partners].sort((a, b) => b.room_nights - a.room_nights)[0] : null;
-                      return partner ? (
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-text-muted">Top partner</span>
-                          <span className="font-bold text-text">{partner.partner}</span>
-                        </div>
-                      ) : null;
-                    })()}
-                    {v2CancelRate !== null && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-text-muted flex items-center gap-1">
-                          Est. cancel rate <AiTag title="Modelled from channel mix heuristics — not historical data." />
-                        </span>
-                        <span className={`font-bold ${v2CancelRate > 15 ? "text-occuorange" : "text-text"}`}>~{v2CancelRate}%</span>
-                      </div>
-                    )}
-                    {v2MostCommonLos !== null && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-text-muted">Common LOS</span>
-                        <span className="font-bold text-text">{v2MostCommonLos} night{v2MostCommonLos !== 1 ? "s" : ""}</span>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>

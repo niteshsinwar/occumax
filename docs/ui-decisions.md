@@ -134,10 +134,19 @@ Then we ask the AI to:
   7) **Revenue at risk (window)**
   8) **Revenue on books (window)**
   9) **Discounted nights (window)**
-  10) **Net revenue by channel** (OTA vs Direct)
-  11) **Net ADR by channel** (OTA vs Direct)
+  10) **Top channel partners by net revenue ($)** (bar chart)
+  11) **Top channel partners by net ADR ($/night)** (bar chart)
   12) **Gross → net leakage (OTA)** ($ and %)
 - **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab KPI strip).
+
+### Decision: Dashboard removes secondary analytics panels (Trend / Gap / Channel intelligence)
+
+- **What**: Dashboard no longer shows the three “secondary analytics” panels:
+  - Occupancy Trend
+  - Gap Analysis
+  - Channel Intelligence
+- **Why**: Keep Dashboard focused on **Top 12 KPIs + Action Queue + Capacity Scorecard + Intelligence Feed**. Detailed analysis lives in the subtabs.
+- **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab body).
 
 ### Decision: Dashboard consumes Exogenous Demand Signals (but does not display them)
 
