@@ -86,8 +86,11 @@ export const sendAiMessage = (messages: { role: string; content: string }[], hot
 
 // Pricing AI
 export const analysePricing = () => api.get("/manager/pricing/analyse");
-export const analysePricingWithContext = (body: { context_items: any[] }) =>
-  api.post("/manager/pricing/analyse-context", body);
+export const analysePricingWithContext = (body: {
+  context_items: unknown[];
+  window_days?: number;
+  empty_nights_only?: boolean;
+}) => api.post("/manager/pricing/analyse-context", body);
 export const commitPricing  = (items: { category: string; date: string; new_rate: number }[]) =>
   api.post("/manager/pricing/commit", { items });
 

@@ -219,19 +219,19 @@ async def _call_history_agent(llm: ChatOpenAI, history: dict, today: date) -> di
 
 _SHARD_SYSTEM = """\
 You are a hotel revenue manager for {hotel_name} (New Jersey, USA). Today: {today}.
-Price {category} rooms for the next 20 days using the occupancy data and demand signals provided.
+Price {category} rooms ONLY on the dates given in the input JSON ("days" array). These dates already reflect nights with unsold inventory — do not add extra dates.
 
 Output ONLY a raw JSON array — no fences, no extra text:
 [{{"date":"YYYY-MM-DD","rate":149,"action":"INCREASE","conf":"HIGH"}}, ...]
 
 Rules:
-- action: INCREASE or DISCOUNT only — omit dates where rate should hold flat
-- INCREASE when: event day/lead-in OR weekend (Fri/Sat/Sun) OR occ >= 55%
-- DISCOUNT when: occ < 40% AND weekday AND no event signal
-- rate: integer, must be >= floor_rate, rounded to nearest $5
-- INCREASE: rate >= base_rate * 1.05; DISCOUNT: rate <= base_rate * 0.95
-- conf: HIGH (occ>80% or <25% or named event), MEDIUM (occ 55-80% or 25-40%), LOW otherwise
-- Aim for 12-16 actionable dates out of 20
+- Output one entry per input date unless holding flat is optimal — then omit that date.
+- action: INCREASE or DISCOUNT only (omit dates where BAR should hold unchanged).
+- INCREASE when: weekend pickup strength OR category occ_pct suggests compression OR demand signals warrant uplift.
+- DISCOUNT when: weak pickup AND discretionary/unsold inventory should clear faster — prioritize realistic BAR reductions vs OTB/floor.
+- rate: integer, must be >= floor_rate from payload, rounded to nearest $5
+- conf: HIGH / MEDIUM / LOW based on confidence given occupancy totals vs OTB in payload.
+- Keep JSON compact — fewer dates analyzed means shorter arrays are acceptable.
 - Output ONLY the JSON array
 """
 
@@ -308,11 +308,13 @@ async def _synthesis_shard(
         b = snap_cat.get(d, {})
         ev = events_analysis.get(d, {})
         wx = weather_analysis.get(d, {})
+        remaining = int(b.get("total", 0) or 0) - int(b.get("otb", 0) or 0)
         day_rows.append({
             "date": d,
             "occ_pct": b.get("occ_pct", 0),
             "otb": b.get("otb", 0),
             "total": b.get("total", 0),
+            "remaining_inventory": max(0, remaining),
             "avg_rate": b.get("avg_rate", 0),
             "floor_rate": b.get("floor_rate", 0),
             "base_rate": b.get("base_rate", 0),
@@ -387,6 +389,19 @@ async def _call_summary_agent(
     return (text or "").strip() or "Analysis complete."
 
 
+def _dates_with_unsold_inventory(snapshot: dict, cat: str, dates_window: list[str]) -> list[str]:
+    """Dates in window where category aggregate snapshot shows unsold rooms (total > OTB)."""
+    snap_cat = snapshot.get(cat, {})
+    out: list[str] = []
+    for d in dates_window:
+        b = snap_cat.get(d, {})
+        total = int(b.get("total", 0) or 0)
+        otb = int(b.get("otb", 0) or 0)
+        if total > otb:
+            out.append(d)
+    return out
+
+
 async def _call_summary_agent_from_context(
     llm: ChatOpenAI,
     context_items: list[dict],
@@ -421,12 +436,21 @@ async def _call_synthesis_agent(
     market_analysis: dict,
     history_analysis: dict,
     context_items: Optional[list[dict]] = None,
+    analysis_window_days: int = WINDOW_DAYS,
+    empty_nights_only: bool = False,
 ) -> dict:
-    dates_window = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+    dates_window_full = [(today + timedelta(days=i)).isoformat() for i in range(analysis_window_days)]
 
-    compact_snapshot = {
-        cat: {
-            d: {
+    compact_snapshot: dict[str, dict] = {}
+    for cat, dates_data in snapshot.items():
+        if not dates_data:
+            continue
+        compact_snapshot[cat] = {}
+        for d in dates_window_full:
+            b = dates_data.get(d)
+            if not b:
+                continue
+            compact_snapshot[cat][d] = {
                 "occ_pct": b.get("occ_pct"),
                 "otb": b.get("otb"),
                 "total": b.get("total"),
@@ -434,15 +458,8 @@ async def _call_synthesis_agent(
                 "floor_rate": b.get("floor_rate"),
                 "base_rate": b.get("base_rate"),
             }
-            for d, b in list(dates_data.items())[:WINDOW_DAYS]
-        }
-        for cat, dates_data in snapshot.items()
-        if snapshot.get(cat)
-    }
 
-    # 1 shard per category (ECONOMY, STANDARD, STUDIO) + 1 summary call — all parallel
-    shard_args = dict(
-        dates_window=dates_window,
+    shard_args_base = dict(
         weather_analysis=weather_analysis,
         events_analysis=events_analysis,
         market_analysis=market_analysis,
@@ -450,11 +467,27 @@ async def _call_synthesis_agent(
         today=today,
     )
 
-    tasks = [
-        _synthesis_shard(llm, cat, snap_cat=compact_snapshot.get(cat, {}), **shard_args)
-        for cat in SYNTHESIS_CATEGORIES
-        if compact_snapshot.get(cat)
-    ]
+    tasks = []
+    for cat in SYNTHESIS_CATEGORIES:
+        snap_c = compact_snapshot.get(cat)
+        if not snap_c:
+            continue
+        dates_for_shard = (
+            _dates_with_unsold_inventory(snapshot, cat, dates_window_full)
+            if empty_nights_only
+            else dates_window_full
+        )
+        if not dates_for_shard:
+            continue
+        tasks.append(
+            _synthesis_shard(
+                llm,
+                cat,
+                dates_window=dates_for_shard,
+                snap_cat=snap_c,
+                **shard_args_base,
+            )
+        )
     if context_items:
         tasks.append(_call_summary_agent_from_context(llm, context_items, today))  # type: ignore[arg-type]
     else:
@@ -588,6 +621,8 @@ async def run_pricing_agent(
     today: date,
     session_factory: async_sessionmaker,
     context_items: Optional[list[dict]] = None,
+    analysis_window_days: int = WINDOW_DAYS,
+    empty_nights_only: bool = False,
 ) -> dict:
     """
     Run multi-call pricing analysis. Returns:
@@ -621,8 +656,8 @@ async def run_pricing_agent(
             get_weather_forecast,
         )
 
-        weather = get_weather_forecast(today, WINDOW_DAYS)
-        events = get_events_for_window(today, WINDOW_DAYS)
+        weather = get_weather_forecast(today, analysis_window_days)
+        events = get_events_for_window(today, analysis_window_days)
         news = get_market_news()
 
         # Phase 1a: weather + events (parallel)
@@ -659,6 +694,8 @@ async def run_pricing_agent(
                 llm, snapshot, today,
                 weather_analysis, events_analysis, market_analysis, history_analysis,
                 context_items=context_items,
+                analysis_window_days=analysis_window_days,
+                empty_nights_only=empty_nights_only,
             ),
             timeout=300,
         )
