@@ -120,6 +120,25 @@ Then we ask the AI to:
 - **Primary job**: summarize the current operating window and point to the next best action
 - **Must remain lightweight**: no deep workflows; those belong in Occupancy / Pricing / Channels
 
+### Decision: Dashboard KPI strip uses the “Top 12” KPIs (from subtabs)
+
+- **What**: The Dashboard subtab KPI strip shows **12 cards** (not 6–7) matching `docs/kpis.md` “Top 12 dashboard KPIs”.
+- **Why**: The dashboard should reflect what the three execution subtabs already compute (Occupancy, Pricing, Channels) and stay **live-data-first** (no AI-only KPIs required).
+- **KPIs shown (12)**:
+  1) **Tonight occupancy %**
+  2) **Orphan nights (sandwich gaps)**
+  3) **Orphan gaps (runs of orphanable empties)**
+  4) **k=2 windows (2-night bookable)**
+  5) **k=3 windows (3-night bookable)**
+  6) **Unsold room-nights (window)**
+  7) **Revenue at risk (window)**
+  8) **Revenue on books (window)**
+  9) **Discounted nights (window)**
+  10) **Net revenue by channel** (OTA vs Direct)
+  11) **Net ADR by channel** (OTA vs Direct)
+  12) **Gross → net leakage (OTA)** ($ and %)
+- **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab KPI strip).
+
 ### Decision: Dashboard consumes Exogenous Demand Signals (but does not display them)
 
 - **Input**: the shared “Exogenous Demand Signals” section at the top of Overview (Big Event / Weather / Flight / Market)
