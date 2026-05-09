@@ -241,15 +241,26 @@ function rollupOccupancyPoints(forecast: OccupancyForecastResponse | null): Occu
 
 /**
  * Maps calendar dates to realized occupancy % using `occupied_rooms_actual` / `total_rooms`
- * (populated by the API for historical nights).
+ * (populated by the API for nights where at least one non-EMPTY slot exists for aggregation).
  */
 function actualOccPctByDateMap(points: OccupancyPoint[]): Map<string, number> {
   const m = new Map<string, number>();
   for (const p of points) {
     if (p.occupied_rooms_actual == null || p.total_rooms <= 0) continue;
-    m.set(String(p.date), (p.occupied_rooms_actual / p.total_rooms) * 100);
+    const dayKey = String(p.date).slice(0, 10);
+    m.set(dayKey, (p.occupied_rooms_actual / p.total_rooms) * 100);
   }
   return m;
+}
+
+/**
+ * Interprets a heatmap anchor as a civil calendar date in local time (avoids UTC shifting from `parseISO("YYYY-MM-DD")`).
+ */
+function heatmapAnchorCalendarDate(iso: string): Date {
+  const part = String(iso).split("T")[0] ?? "";
+  const [y, m, d] = part.split("-").map(Number);
+  if (!y || !m || !d) return parseISO(iso);
+  return new Date(y, m - 1, d);
 }
 
 /**
@@ -401,16 +412,19 @@ export function Dashboard() {
       setOccupancyForecast(null);
       return;
     }
-    const firstNight = parseISO(String(heatmap.dates[0]));
+    const firstNight = heatmapAnchorCalendarDate(String(heatmap.dates[0]));
     const yesterday = subDays(firstNight, 1);
     const lastYearNight = subYears(firstNight, 1);
     const rangeStart = yesterday.getTime() <= lastYearNight.getTime() ? yesterday : lastYearNight;
     const rangeEnd = firstNight;
+    /** Align cutoff with property board: never send UTC-only “today” behind the heatmap anchor (was clipping yester-night server-side). */
+    const anchorIso = formatISO(firstNight, { representation: "date" });
+    const asOfStr = anchorIso >= todayStr ? anchorIso : todayStr;
     let cancelled = false;
     getOccupancyForecast({
       start: formatISO(rangeStart, { representation: "date" }),
       end: formatISO(rangeEnd, { representation: "date" }),
-      as_of: todayStr,
+      as_of: asOfStr,
     })
       .then(res => {
         if (!cancelled) setOccupancyForecast(res.data as OccupancyForecastResponse);
@@ -596,15 +610,18 @@ export function Dashboard() {
     return out;
   }, [heatmap, allRows, spanDays]);
 
-  /** Yesterday vs same calendar date last year — realized occupancy from forecast rollup (null when not in history yet). */
+  /**
+   * Yesterday vs same calendar date prior year — realized occupancy from forecast rollup.
+   * Null when `occupied_rooms_actual` is absent (usually no slot history that night; run analytics history seed if missing).
+   */
   const histOccContext = useMemo(() => {
     const pts = rollupOccupancyPoints(occupancyForecast);
     const byDate = actualOccPctByDateMap(pts);
     if (!heatmap?.dates?.[0])
       return { yesterdayPct: null as number | null, lyPct: null as number | null, vsLyPpt: null as number | null };
-    const anchor = parseISO(String(heatmap.dates[0]));
-    const yKey = formatISO(subDays(anchor, 1), { representation: "date" });
-    const lyKey = formatISO(subYears(anchor, 1), { representation: "date" });
+    const anchorCal = heatmapAnchorCalendarDate(String(heatmap.dates[0]));
+    const yKey = formatISO(subDays(anchorCal, 1), { representation: "date" });
+    const lyKey = formatISO(subYears(anchorCal, 1), { representation: "date" });
     const yesterdayPct = byDate.get(yKey) ?? null;
     const lyPct = byDate.get(lyKey) ?? null;
     const tonightPct = v2Kpis?.tonightOccupancyPct;

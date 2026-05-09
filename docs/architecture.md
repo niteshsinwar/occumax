@@ -81,7 +81,7 @@ Key endpoint groups:
 | `GET /receptionist/bookings` | Last 50 bookings ordered by created_at desc |
 | `GET /dashboard/heatmap` | Full occupancy matrix for all rooms and dates |
 | `POST /dashboard/predict-optimal-los` | Poly AI recommendation for demand-aligned target LOS (nights); mixes analytics pace, overlapping booking LOS histogram, and deterministic demo overlays (Occupancy tab) |
-| `GET /analytics/occupancy-forecast` | Forward occupancy forecast with Y-2 comparison |
+| `GET /analytics/occupancy-forecast` | Occupancy forecast + pickup projections; `occupied_rooms_actual` is loaded for the full requested `[start,end)` window (matches on-books slot query bounds, not clipped by `as_of`) |
 | `GET /analytics/pace` | Booking pace analytics (pickup lead-day curves) |
 | `GET /analytics/event-insights` | AI-generated demand event commentary for a date range |
 | `GET /analytics/revenue-summary` | Revenue KPIs: total, ADR, RevPAR, channel mix |
