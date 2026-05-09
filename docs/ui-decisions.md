@@ -122,22 +122,14 @@ Then we ask the AI to:
 
 ### Decision: Dashboard KPI strip uses the “Top 12” KPIs (from subtabs)
 
-- **What**: The Dashboard subtab KPI strip shows **12 cards** (not 6–7) matching `docs/kpis.md` “Top 12 dashboard KPIs”.
-- **Why**: The dashboard should reflect what the three execution subtabs already compute (Occupancy, Pricing, Channels) and stay **live-data-first** (no AI-only KPIs required).
-- **KPIs shown (12)**:
-  1) **Tonight occupancy %**
-  2) **Orphan nights (sandwich gaps)**
-  3) **Orphan gaps (runs of orphanable empties)**
-  4) **k=2 windows (2-night bookable)**
-  5) **k=3 windows (3-night bookable)**
-  6) **Unsold room-nights (window)**
-  7) **Revenue at risk (window)**
-  8) **Revenue on books (window)**
-  9) **Discounted nights (window)**
-  10) **Top channel partners by net revenue ($)** (bar chart)
-  11) **Top channel partners by net ADR ($/night)** (bar chart)
-  12) **Gross → net leakage (OTA)** ($ and %)
-- **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab KPI strip).
+- **What**: The Dashboard shows the same **12 KPI signals** as `docs/kpis.md`, but laid out as **two hero tiles + three grouped columns** (Occumax surfaces/borders — density and grouping inspired by the revenue mock, not cyberpunk styling).
+- **Why**: The dashboard should reflect what the three execution subtabs already compute (Occupancy, Pricing, Channels), stay **live-data-first**, and put **tonight** and **revenue risk** in front without a flat grid of twelve equal cards.
+- **Layout**:
+  - **Hero row**: **Tonight occupancy** (heatmap column 0 — large accent typography) with **yester-night** and **same calendar date prior year** realized occupancy from `GET /analytics/occupancy-forecast` (hotel rollup; null when history not available); **Revenue at risk** with a **threshold bar** (fixed $250k UX cap vs current window exposure).
+  - **Grouped row**: **Inventory gaps** (2×2: orphan nights, orphan gaps, k=2, k=3); **Revenue health** (revenue on books + **sparkline** from per-night on-books revenue sums across the slice, unsold room-nights, OTA gross→net leakage); **Top partners** (top 3 by net $ with paired net ADR + **discounted nights** footer).
+- **KPI mapping (12)** — unchanged definitions vs `docs/kpis.md`:
+  1) Tonight occupancy % · 2) Orphan nights · 3) Orphan gaps · 4) k=2 windows · 5) k=3 windows · 6) Unsold room-nights · 7) Revenue at risk · 8) Revenue on books · 9) Discounted nights · 10–11) Partner net $ + net ADR (combined column) · 12) OTA leakage.
+- **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab KPI block).
 
 ### Decision: Dashboard removes secondary analytics panels (Trend / Gap / Channel intelligence)
 
@@ -145,7 +137,7 @@ Then we ask the AI to:
   - Occupancy Trend
   - Gap Analysis
   - Channel Intelligence
-- **Why**: Keep Dashboard focused on **Top 12 KPIs + Action Queue + Intelligence Feed**. Detailed analysis (including shuffle before/after review) lives in the Occupancy subtab.
+- **Why**: Keep Dashboard focused on **Top 12 KPIs + Action Queue**. Detailed analysis (including shuffle before/after review) lives in the Occupancy subtab.
 - **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab body).
 
 ### Decision: Action Queue is a horizontal strip
