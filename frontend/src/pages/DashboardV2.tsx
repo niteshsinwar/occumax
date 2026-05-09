@@ -21,7 +21,6 @@ import type {
   ChannelPerformanceResponse,
   PaceResponse,
 } from "../types";
-import type { BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
@@ -45,6 +44,9 @@ import {
   TrendingDown,
 } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
+
+/** Matches main Dashboard: KPI/scorecard/analytics window from heatmap anchor. */
+const DASHBOARD_WINDOW_DAYS = 15;
 
 // ─── Pure helper functions (same logic as Dashboard.tsx, scoped here) ─────────
 
@@ -159,7 +161,6 @@ export function DashboardV2() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [isHeatmapLoading, setIsHeatmapLoading] = useState(false);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
-  const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [swapPlan, setSwapPlan] = useState<SwapStep[] | null>(null);
   const [swapCommitLoading, setSwapCommitLoading] = useState(false);
   const [kNightNights, setKNightNights] = useState(2);
@@ -195,7 +196,7 @@ export function DashboardV2() {
 
   const heatmapCategories = useMemo(() => (heatmap ? uniqueCategories(heatmap.rows) : []), [heatmap]);
   const allRows = useMemo(() => heatmap?.rows ?? [], [heatmap]);
-  const spanDays = useMemo(() => heatmap ? Math.min(weekSpan * 7, heatmap.dates.length) : 0, [heatmap, weekSpan]);
+  const spanDays = useMemo(() => heatmap ? Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length) : 0, [heatmap]);
 
   const scorecardSlice = useMemo(() => {
     if (!heatmap || spanDays === 0) return null;
@@ -236,7 +237,7 @@ export function DashboardV2() {
     if (!heatmap) return;
     try {
       const start = parseISO(String(heatmap.dates[0]));
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const end = addDays(start, Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length));
       const res = await dashboardOptimisePreview({ start: formatISO(start, { representation: "date" }), end: formatISO(end, { representation: "date" }), categories: heatmapCategories });
       const body = res.data as DashboardOptimisePreviewResponse;
       setSwapPlan(body.swap_plan ?? []);
@@ -245,7 +246,7 @@ export function DashboardV2() {
         show(body.fully_clean ? "No orphan gaps in this window." : "No improvements found (converged).", "info");
       } else { show(`Preview ready: ${body.shuffle_count} optimisation steps`, "success"); }
     } catch { show("Failed to run optimisation preview", "error"); setSwapPlan(null); void refreshScorecard(null); }
-  }, [heatmap, weekSpan, heatmapCategories, show, refreshScorecard]);
+  }, [heatmap, heatmapCategories, show, refreshScorecard]);
 
   const clearOptimisePreview = useCallback(() => { setSwapPlan(null); void refreshScorecard(null); }, [refreshScorecard]);
 
@@ -264,7 +265,7 @@ export function DashboardV2() {
     setKNightLoading(true); setKNightSwapPlan(null);
     try {
       const start = parseISO(String(heatmap.dates[0]));
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const end = addDays(start, Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length));
       const res = await dashboardOptimiseKNightPreview({ start: formatISO(start, { representation: "date" }), end: formatISO(end, { representation: "date" }), categories: heatmapCategories, target_nights: Math.max(1, Math.min(14, kNightNights)) });
       const body = res.data as DashboardKNightPreviewResponse;
       setKNightSwapPlan(body.swap_plan ?? []); void refreshScorecard(body.swap_plan ?? null);
@@ -272,7 +273,7 @@ export function DashboardV2() {
       else show(`k-night preview (k=${body.target_nights}): ${body.shuffle_count} steps`, "success");
     } catch { show("Failed to run k-night preview", "error"); setKNightSwapPlan(null); void refreshScorecard(null);
     } finally { setKNightLoading(false); }
-  }, [heatmap, kNightNights, heatmapCategories, show, weekSpan, refreshScorecard]);
+  }, [heatmap, kNightNights, heatmapCategories, show, refreshScorecard]);
 
   const commitKNightShuffle = useCallback(async () => {
     if (!kNightSwapPlan || kNightSwapPlan.length === 0) return;
@@ -463,21 +464,10 @@ export function DashboardV2() {
               <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-0.5">Revenue Intelligence Center</div>
               <h1 className="font-serif font-bold text-2xl text-text">Hotel at a Glance</h1>
               <p className="text-[11px] text-text-muted mt-1">
-                {heatmapCategories.length} room type{heatmapCategories.length !== 1 ? "s" : ""} · {allRows.length} active rooms · all data live from DB
+                {heatmapCategories.length} room type{heatmapCategories.length !== 1 ? "s" : ""} · {allRows.length} active rooms · {DASHBOARD_WINDOW_DAYS}-day window · all data live from DB
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex gap-1 border border-border bg-surface-2/50">
-                {([1, 2, 3] as BirdseyeWeekSpan[]).map(w => (
-                  <button
-                    key={w}
-                    onClick={() => setWeekSpan(w)}
-                    className={`text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 transition-all ${weekSpan === w ? "bg-text text-surface" : "text-text-muted hover:text-text hover:bg-surface"}`}
-                  >
-                    {w}W
-                  </button>
-                ))}
-              </div>
               <button
                 onClick={refreshAllData}
                 className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-border bg-surface text-text-muted hover:text-text hover:bg-surface-2 transition-all"

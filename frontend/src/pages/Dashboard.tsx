@@ -22,7 +22,6 @@ import type {
   ChannelPerformanceResponse,
   PaceResponse,
 } from "../types";
-import { type BirdseyeWeekSpan } from "../components/BirdseyeFilters";
 import { useToast } from "../components/shared/Toast";
 import { simulateRows } from "../utils/simulateRows";
 import { calendarDayKey } from "../utils/calendarDayKey";
@@ -43,6 +42,9 @@ import {
   overviewTitleClass,
 } from "../components/overview/overviewChrome";
 
+/** Heatmap columns used for Dashboard KPIs, scorecard, pace, and channel analytics (from anchor night). */
+const DASHBOARD_WINDOW_DAYS = 15;
+
 /**
  * Distinct room categories in heatmap row order (SQL `ORDER BY category, id`), for filters aligned with inventory in the database.
  */
@@ -58,7 +60,7 @@ function uniqueCategoriesFromHeatmapRows(rows: HeatmapRow[]): RoomCategory[] {
   return ordered;
 }
 
-/** KPI numbers derived from the same heatmap slice as the grid (category + week span). */
+/** KPI numbers derived from the same heatmap slice as the grid (category + fixed dashboard window). */
 type BirdseyeDashboardKpis = {
   tonightOccupancyPct: number;
   tonightRoomsOccupied: number;
@@ -291,7 +293,7 @@ function MiniRevenueSparkline({ values, className }: { values: number[]; classNa
 /**
  * Dashboard (Bird's Eye View): occupancy matrix and k-night bookable-window counts (overlapping, per EMPTY strip) by length and room category.
  * Uses `GET /dashboard/heatmap`; slot edits use the same admin slot patch as the manager heatmap.
- * Date span (defaults to three weeks) and room-type filters apply only on this page (client-side slice of the shared heatmap payload).
+ * Date span is a fixed **15-night** window from the heatmap anchor (capped by payload length); room-type filters apply only on this page (client-side slice of the shared heatmap payload).
  * Room types for filters are taken from the heatmap payload (active rooms / categories from the API), not a fixed list.
  * KPI strip below the filters is computed from the same filtered rows and visible day span (not the global revenue-summary endpoint).
  */
@@ -323,7 +325,6 @@ export function Dashboard() {
   const [kNightLoading, setKNightLoading] = useState(false);
   const [kNightCommitLoading, setKNightCommitLoading] = useState(false);
   const [heatmapLoadError, setHeatmapLoadError] = useState<string | null>(null);
-  const [weekSpan, setWeekSpan] = useState<BirdseyeWeekSpan>(3);
   const [selectedCategories, setSelectedCategories] = useState<RoomCategory[]>([]);
 
   // Hackathon scorecard (before/after + deltas)
@@ -380,8 +381,8 @@ export function Dashboard() {
   /** Number of day columns shown; capped by what the API returned. */
   const spanDays = useMemo(() => {
     if (!heatmap) return 0;
-    return Math.min(weekSpan * 7, heatmap.dates.length);
-  }, [heatmap, weekSpan]);
+    return Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length);
+  }, [heatmap]);
 
   const scorecardSlice = useMemo(() => {
     if (!heatmap || spanDays === 0) return null;
@@ -683,7 +684,7 @@ export function Dashboard() {
     if (!heatmap) return;
     try {
       const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const end = addDays(start, Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length));
       const startStr = formatISO(start, { representation: "date" });
       const endStr = formatISO(end, { representation: "date" });
       const res = await dashboardOptimisePreview({
@@ -705,7 +706,7 @@ export function Dashboard() {
       setSwapPlan(null);
       void refreshScorecard(null);
     }
-  }, [heatmap, weekSpan, selectedCategories, show, refreshScorecard]);
+  }, [heatmap, selectedCategories, show, refreshScorecard]);
 
   const clearOptimisePreview = useCallback(() => {
     setSwapPlan(null);
@@ -735,7 +736,7 @@ export function Dashboard() {
     setKNightSwapPlan(null);
     try {
       const start = parseISO(heatmap.dates[0]);
-      const end = addDays(start, Math.min(weekSpan * 7, heatmap.dates.length));
+      const end = addDays(start, Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length));
       const startStr = formatISO(start, { representation: "date" });
       const endStr = formatISO(end, { representation: "date" });
       const nights = Math.max(1, Math.min(14, Math.floor(kNightNights || 1)));
@@ -768,7 +769,7 @@ export function Dashboard() {
     } finally {
       setKNightLoading(false);
     }
-  }, [heatmap, kNightNights, selectedCategories, show, weekSpan, refreshScorecard]);
+  }, [heatmap, kNightNights, selectedCategories, show, refreshScorecard]);
 
   const commitKNightShuffle = useCallback(async () => {
     if (!kNightSwapPlan || kNightSwapPlan.length === 0) return;
@@ -863,21 +864,10 @@ export function Dashboard() {
               <div className={`${overviewEyebrowClass} mb-0.5`}>Revenue Intelligence Center</div>
               <h1 className={overviewTitleClass}>Hotel at a Glance</h1>
               <p className="text-[11px] text-text-muted mt-1">
-                {heatmapCategories.length} room type{heatmapCategories.length !== 1 ? "s" : ""} · {allRows.length} active rooms · all data live from DB
+                {heatmapCategories.length} room type{heatmapCategories.length !== 1 ? "s" : ""} · {allRows.length} active rooms · {DASHBOARD_WINDOW_DAYS}-day window · all data live from DB
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex gap-0 rounded-[10px] border border-border/80 overflow-hidden shadow-subtle bg-surface-2/40">
-                {([1, 2, 3] as BirdseyeWeekSpan[]).map(w => (
-                  <button
-                    key={w}
-                    onClick={() => setWeekSpan(w)}
-                    className={`text-[10px] font-bold uppercase tracking-widest px-3 py-2 transition-all ${weekSpan === w ? "bg-text text-surface" : "text-text-muted hover:text-text hover:bg-surface"}`}
-                  >
-                    {w}W
-                  </button>
-                ))}
-              </div>
               <button type="button" onClick={refreshAllData} className={overviewSecondaryBtnClass}>
                 <RefreshCw className="w-3 h-3" /> Refresh
               </button>
