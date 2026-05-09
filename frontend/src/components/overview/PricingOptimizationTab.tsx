@@ -246,21 +246,21 @@ function CalendarCellView({ cell, selected, onToggle, customRate, onCustomRate }
   };
 
   return (
-    <td className="p-px">
+    <td className="p-px align-top">
       <div
         ref={cellRef}
-        className={`border cursor-pointer px-1 py-0.5 min-w-[52px] transition-all hover:opacity-90 relative group ${cellBg} ${selected ? "ring-1 ring-accent/40" : ""}`}
+        className={`border cursor-pointer w-full min-h-[62px] box-border px-1.5 py-1 transition-all hover:opacity-90 relative group ${cellBg} ${selected ? "ring-1 ring-accent/40" : ""}`}
         onClick={!isEditing ? onToggle : undefined}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={() => setTipPos(null)}
       >
         {cell.is_orphan ? (
-          <div className="flex items-center justify-center h-5">
-            <AlertTriangle className="w-2.5 h-2.5 text-text-muted shrink-0" />
-            <span className="text-[8px] text-text-muted ml-0.5 uppercase tracking-wide leading-none">Orphan</span>
+          <div className="flex items-center justify-center min-h-[28px]">
+            <AlertTriangle className="w-3 h-3 text-text-muted shrink-0" />
+            <span className="text-[9px] text-text-muted ml-0.5 uppercase tracking-wide leading-none">Orphan</span>
           </div>
         ) : isEditing ? (
-          <div className="flex flex-col gap-px" onClick={e => e.stopPropagation()}>
+          <div className="flex flex-col gap-0.5" onClick={e => e.stopPropagation()}>
             <input
               ref={inputRef}
               autoFocus
@@ -272,41 +272,41 @@ function CalendarCellView({ cell, selected, onToggle, customRate, onCustomRate }
                 if (e.key === "Escape") setIsEditing(false);
               }}
               onBlur={confirmEdit}
-              className="w-full text-[10px] font-mono font-bold bg-surface border border-accent px-0.5 py-px text-text outline-none"
+              className="w-full text-[11px] font-mono font-bold bg-surface border border-accent px-1 py-0.5 text-text outline-none"
             />
-            <div className="text-[8px] text-text-muted text-center">↵ confirm · esc cancel</div>
+            <div className="text-[9px] text-text-muted text-center">↵ confirm · esc cancel</div>
           </div>
         ) : (
           <>
-            <div className="flex items-center justify-between gap-0.5 leading-none">
-              <div className="text-[10px] font-mono font-bold text-text tabular-nums truncate min-w-0">
+            <div className="flex items-center justify-between gap-0.5 leading-tight">
+              <div className="text-[12px] font-mono font-bold text-text tabular-nums truncate min-w-0">
                 ${displayRate.toLocaleString("en-US")}
-                {isCustom && <span className="ml-px text-accent text-[7px]">✎</span>}
+                {isCustom && <span className="ml-px text-accent text-[8px]">✎</span>}
               </div>
               <button
                 onClick={startEdit}
-                className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-px shrink-0 text-text-muted hover:text-accent"
+                className="opacity-0 group-hover:opacity-60 hover:!opacity-100 transition-opacity p-0.5 shrink-0 text-text-muted hover:text-accent"
                 title="Edit rate"
               >
-                <Pencil className="w-2 h-2" />
+                <Pencil className="w-2.5 h-2.5" />
               </button>
             </div>
-            <div className={`text-[8px] font-bold flex items-center gap-px leading-none mt-px ${
+            <div className={`text-[10px] font-bold flex items-center gap-0.5 leading-tight mt-0.5 ${
               effectiveAction === "INCREASE" ? "text-occugreen"
               : effectiveAction === "DISCOUNT" ? "text-occured"
               : "text-text-muted"
             }`}>
-              {effectiveAction === "INCREASE" ? <TrendingUp className="w-2 h-2 shrink-0" /> : null}
-              {effectiveAction === "DISCOUNT" ? <TrendingDown className="w-2 h-2 shrink-0" /> : null}
+              {effectiveAction === "INCREASE" ? <TrendingUp className="w-2.5 h-2.5 shrink-0" /> : null}
+              {effectiveAction === "DISCOUNT" ? <TrendingDown className="w-2.5 h-2.5 shrink-0" /> : null}
               {effectiveChangePct > 0 ? "+" : ""}{effectiveChangePct.toFixed(1)}%
             </div>
-            <div className="mt-px flex items-center gap-0.5 leading-none">
-              <span className={`inline-block w-1 h-1 rounded-full shrink-0 ${
+            <div className="mt-0.5 flex items-center gap-0.5 leading-tight">
+              <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
                 cell.confidence === "HIGH" ? "bg-occugreen"
                 : cell.confidence === "LOW" ? "bg-occured"
                 : "bg-yellow-500"
               }`} />
-              <span className="text-[7px] text-text-muted">{cell.occupancy_pct}%</span>
+              <span className="text-[8px] text-text-muted">{cell.occupancy_pct}%</span>
             </div>
           </>
         )}
@@ -712,7 +712,7 @@ export function PricingOptimizationTab() {
       </div>
 
       {/* Existing Pricing features (moved down) */}
-      <div className={`${overviewCardLgClass} min-h-[600px] flex flex-col relative overflow-hidden p-0`}>
+      <div className={`${overviewCardLgClass} min-h-[600px] min-w-0 flex flex-col relative overflow-hidden p-0`}>
         {/* Header */}
         <div className="px-6 py-4 border-b border-border/80 shrink-0 bg-surface-2/20 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -841,7 +841,7 @@ export function PricingOptimizationTab() {
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-hidden flex flex-col">
+      <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
 
         {/* Empty state */}
         {!pricing && !analysing && !committed && (
@@ -917,7 +917,7 @@ export function PricingOptimizationTab() {
 
         {/* Calendar view */}
         {pricing && !committed && (
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
             {/* AI summary bar */}
             <div className="px-6 py-3 bg-accent/5 border-b border-accent/20 flex items-start gap-2 shrink-0">
@@ -964,14 +964,30 @@ export function PricingOptimizationTab() {
               </div>
             </div>
 
-            {/* Scrollable calendar grid */}
-            <div className="flex-1 overflow-auto">
-              <table className="border-collapse text-xs" style={{ tableLayout: "fixed" }}>
+            {/* Calendar grid: fills width — date columns flex equally; vertical scroll only */}
+            <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
+              <table
+                className="w-full max-w-full border-collapse text-xs"
+                style={{ tableLayout: "fixed" }}
+              >
+                <colgroup>
+                  {(() => {
+                    const roomPct = 11;
+                    const datePct = (100 - roomPct) / pricing.dates.length;
+                    return (
+                      <>
+                        <col style={{ width: `${roomPct}%` }} />
+                        {pricing.dates.map(d => (
+                          <col key={d} style={{ width: `${datePct}%` }} />
+                        ))}
+                      </>
+                    );
+                  })()}
+                </colgroup>
                 <thead className="sticky top-0 z-20 bg-surface">
                   <tr>
-                    {/* Category label column */}
-                    <th className="sticky left-0 z-30 bg-surface border-b border-r border-border px-2 py-1 text-left w-[4.5rem] min-w-[4.5rem]">
-                      <span className="text-[9px] font-bold uppercase tracking-widest text-text-muted">
+                    <th className="sticky left-0 z-30 bg-surface border-b border-r border-border px-2 py-1.5 text-left overflow-hidden">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
                         Room
                       </span>
                     </th>
@@ -980,14 +996,14 @@ export function PricingOptimizationTab() {
                       return (
                         <th
                           key={d}
-                          className={`border-b border-border/50 px-0.5 py-1 text-center min-w-[52px] w-[52px] ${
+                          className={`border-b border-border/50 px-1 py-1.5 text-center overflow-hidden ${
                             isWeekend ? "bg-accent/5" : ""
                           }`}
                         >
-                          <div className={`text-[8px] font-bold uppercase tracking-wider leading-none ${
+                          <div className={`text-[9px] font-bold uppercase tracking-wider leading-tight ${
                             isWeekend ? "text-accent" : "text-text-muted"
                           }`}>{day}</div>
-                          <div className="text-[10px] font-mono font-bold text-text leading-tight">{dateNum}</div>
+                          <div className="text-[11px] font-mono font-bold text-text leading-tight truncate">{dateNum}</div>
                         </th>
                       );
                     })}
@@ -1054,8 +1070,8 @@ export function PricingOptimizationTab() {
                         ) : (
                           roomRows.map(roomRow => (
                             <tr key={`${cat}-${roomRow.room_id}`} className="border-b border-border/25 hover:bg-surface-2/20">
-                              <td className="sticky left-0 z-10 bg-surface border-r border-border px-2 py-px whitespace-nowrap">
-                                <span className="text-[9px] font-mono font-bold text-text leading-none">
+                              <td className="sticky left-0 z-10 bg-surface border-r border-border px-2 py-0.5 overflow-hidden align-top">
+                                <span className="text-[9px] font-mono font-bold text-text leading-none truncate block max-w-full" title={roomRow.room_id}>
                                   {roomRow.room_id}
                                 </span>
                               </td>
@@ -1064,8 +1080,8 @@ export function PricingOptimizationTab() {
                                 const catCell = cellByDate.get(d);
                                 if (!hc || hc.block_type !== "EMPTY") {
                                   return (
-                                    <td key={d} className="p-px bg-surface-2/20 align-middle">
-                                      <div className="min-w-[44px] h-6 flex items-center justify-center rounded border border-border/30 text-[9px] text-text-muted/70">
+                                    <td key={d} className="p-px bg-surface-2/20 align-top">
+                                      <div className="w-full min-h-[29px] flex items-center justify-center rounded border border-border/30 text-[10px] text-text-muted/70 box-border">
                                         —
                                       </div>
                                     </td>
@@ -1073,8 +1089,8 @@ export function PricingOptimizationTab() {
                                 }
                                 if (!catCell) {
                                   return (
-                                    <td key={d} className="p-px align-middle">
-                                      <div className="min-w-[44px] h-6 flex items-center justify-center text-[9px] text-text-muted">—</div>
+                                    <td key={d} className="p-px align-top">
+                                      <div className="w-full min-h-[29px] flex items-center justify-center text-[10px] text-text-muted box-border">—</div>
                                     </td>
                                   );
                                 }
