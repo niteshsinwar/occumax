@@ -122,7 +122,7 @@ Then we ask the AI to:
 
 ### Decision: Dashboard KPI strip uses the “Top 12” KPIs (from subtabs)
 
-- **What**: The Dashboard shows the same **12 KPI signals** as `docs/kpis.md`, but laid out as **two hero tiles + three grouped columns** (Occumax surfaces/borders — density and grouping inspired by the revenue mock, not cyberpunk styling).
+- **What**: The Dashboard shows the same **12 KPI signals** as `docs/kpis.md`, but laid out as **two hero tiles + three grouped columns** (Occumax surfaces/borders — density and grouping inspired by the revenue mock, not cyberpunk styling). The operating window is a **fixed 15-night** slice from the heatmap anchor (capped by API date length) — there is no 1W/2W/3W selector.
 - **Why**: The dashboard should reflect what the three execution subtabs already compute (Occupancy, Pricing, Channels), stay **live-data-first**, and put **tonight** and **revenue risk** in front without a flat grid of twelve equal cards.
 - **Layout**:
   - **Hero row**: **Tonight occupancy** (heatmap column 0 — large accent typography) with **yester-night** (heatmap anchor − 1 civil day) and **same calendar date prior year** realized occupancy from `GET /analytics/occupancy-forecast` (hotel rollup `occupied_rooms_actual`). Dashboard sends `as_of = max(heatmap anchor, browser UTC date)` so property boards ahead of UTC do not drop “yester-night”; backend loads realized counts for the full requested `[start,end)` slice (aligned with on-books aggregation). Null still means no countable non-EMPTY slots that night (or analytics history not seeded).
