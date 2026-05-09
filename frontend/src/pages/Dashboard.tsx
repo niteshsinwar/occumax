@@ -32,7 +32,7 @@ import { OccupancyOptimizationTab } from "../components/overview/OccupancyOptimi
 import { PricingOptimizationTab } from "../components/overview/PricingOptimizationTab";
 import { ExogenousDemandSignals } from "../components/overview/ExogenousDemandSignals";
 import { OverviewSignalsProvider } from "../context/overviewSignals";
-import { BarChart2, DollarSign, Grid3x3, RefreshCw, AlertTriangle, Zap, Sparkles, ArrowRight, TrendingUp, TrendingDown } from "lucide-react";
+import { BarChart2, DollarSign, Grid3x3, RefreshCw, AlertTriangle, Zap, Sparkles, ArrowRight } from "lucide-react";
 import { addDays, formatISO, parseISO } from "date-fns";
 import { AiTag } from "../components/shared/AiTag";
 import {
@@ -511,6 +511,56 @@ export function Dashboard() {
     return mostCommonLosFallback;
   }, [eventInsights, mostCommonLosFallback]);
 
+  const pricingExposure = useMemo(() => {
+    if (!heatmap || allRows.length === 0 || spanDays === 0) {
+      return { unsoldRoomNights: 0, revenueAtRisk: 0, revenueOnBooks: 0, discountedRoomNights: 0 };
+    }
+
+    let unsoldRoomNights = 0;
+    let revenueAtRisk = 0;
+    let revenueOnBooks = 0;
+    let discountedRoomNights = 0;
+
+    for (const row of allRows) {
+      const cells = row.cells.slice(0, spanDays);
+      for (const c of cells) {
+        if (!c) continue;
+        if (c.block_type === "EMPTY") {
+          unsoldRoomNights += 1;
+          revenueAtRisk += Number(c.current_rate ?? 0);
+          if (Number(c.current_rate ?? 0) < Number(row.base_rate ?? 0) * 0.95) discountedRoomNights += 1;
+        } else {
+          revenueOnBooks += Number(c.current_rate ?? 0);
+        }
+      }
+    }
+
+    return {
+      unsoldRoomNights,
+      revenueAtRisk: Math.round(revenueAtRisk),
+      revenueOnBooks: Math.round(revenueOnBooks),
+      discountedRoomNights,
+    };
+  }, [heatmap, allRows, spanDays]);
+
+  const channelProfitKpis = useMemo(() => {
+    const ota = channelPerf?.channels?.find(c => String(c.channel).toUpperCase() === "OTA");
+    const direct = channelPerf?.channels?.find(c => String(c.channel).toUpperCase() === "DIRECT");
+    const otaNetAdr = ota && ota.room_nights > 0 ? ota.net_revenue / ota.room_nights : null;
+    const directNetAdr = direct && direct.room_nights > 0 ? direct.net_revenue / direct.room_nights : null;
+    const otaLeakage = ota ? ota.gross_revenue - ota.net_revenue : null;
+    const otaLeakagePct = ota && ota.gross_revenue > 0 ? (otaLeakage! / ota.gross_revenue) * 100 : null;
+
+    return {
+      ota,
+      direct,
+      otaNetAdr,
+      directNetAdr,
+      otaLeakage,
+      otaLeakagePct,
+    };
+  }, [channelPerf]);
+
   type ActionItem = { priority: "HIGH" | "MED" | "LOW"; category: string; tab: OverviewTab; title: string; detail: string };
 
   const actionQueue = useMemo((): ActionItem[] => {
@@ -800,11 +850,11 @@ export function Dashboard() {
 
           {heatmap && (
             <div className="space-y-6">
-              {/* ── KPI STRIP (7 cards) ──────────────────────────────────────── */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-3">
-
+              {/* ── KPI STRIP (12 cards) ─────────────────────────────────────── */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+                {/* 1) Tonight occupancy % */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Tonight</div>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Tonight occupancy</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
                     {v2Kpis ? `${Math.round(v2Kpis.tonightOccupancyPct)}%` : "—"}
                   </div>
@@ -813,77 +863,121 @@ export function Dashboard() {
                   </div>
                 </div>
 
+                {/* 2) Orphan nights */}
                 {(() => {
                   const n = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
                   const isRisk = n > 0;
                   return (
                     <div className={`${overviewCardClass} p-4 sm:p-5 ${isRisk ? "!border-occuorange/50" : ""}`}>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan Nights</div>
+                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan nights</div>
                       <div className={`text-2xl font-serif font-bold tabular-nums ${isRisk ? "text-occuorange" : "text-text"}`}>{n}</div>
-                      <div className="text-[10px] text-text-muted mt-0.5">stranded gaps</div>
+                      <div className="text-[10px] text-text-muted mt-0.5">sandwich gaps</div>
                     </div>
                   );
                 })()}
 
-                {(() => {
-                  const v = scorecard?.before.revenue_at_risk ?? 0;
-                  const isRisk = v > 0;
-                  return (
-                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isRisk ? "!border-occuorange/35" : ""}`}>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Rev at Risk</div>
-                      <div className={`text-2xl font-serif font-bold tabular-nums ${isRisk ? "text-occuorange" : "text-text"}`}>
-                        {scorecard ? `$${Math.round(v).toLocaleString("en-US")}` : "—"}
-                      </div>
-                      <div className="text-[10px] text-text-muted mt-0.5">fill-model est.</div>
-                    </div>
-                  );
-                })()}
-
+                {/* 3) Orphan gaps */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Avg Rate</div>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Orphan gaps</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
-                    {v2Kpis ? `$${Math.round(v2Kpis.avgRateInView).toLocaleString("en-US")}` : "—"}
+                    {v2RunMetrics ? v2RunMetrics.orphanGaps : "—"}
                   </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">
-                    {v2Kpis ? `${v2Kpis.avgRateNightCount} booked nights` : "—"}
-                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">trapped runs</div>
                 </div>
 
+                {/* 4) k=2 windows */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=2 Windows</div>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=2 windows</div>
                   <div className="text-2xl font-serif font-bold text-text tabular-nums">
                     {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[2] ?? "—")}
                   </div>
-                  <div className="text-[10px] text-text-muted mt-0.5">2-night openings</div>
+                  <div className="text-[10px] text-text-muted mt-0.5">2-night bookable</div>
                 </div>
 
+                {/* 5) k=3 windows */}
                 <div className={`${overviewCardClass} p-4 sm:p-5`}>
-                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Top Channel</div>
-                  <div className="text-2xl font-serif font-bold text-text tabular-nums">{v2TopChannel?.channel ?? "—"}</div>
-                  <div className="text-[10px] text-text-muted mt-0.5">
-                    {v2TopChannel ? `~${v2TopChannel.sharePct}% share` : "no data"}
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">k=3 windows</div>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
+                    {scorecardLoading ? "…" : (scorecard?.before.k_windows?.[3] ?? "—")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">3-night bookable</div>
+                </div>
+
+                {/* 6) Unsold room-nights */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Unsold room-nights</div>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
+                    {pricingExposure.unsoldRoomNights.toLocaleString("en-US")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">{spanDays}-day window</div>
+                </div>
+
+                {/* 7) Revenue at risk */}
+                <div className={`${overviewCardClass} p-4 sm:p-5 ${pricingExposure.revenueAtRisk > 0 ? "!border-occuorange/35" : ""}`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Revenue at risk</div>
+                  <div className={`text-2xl font-serif font-bold tabular-nums ${pricingExposure.revenueAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
+                    ${pricingExposure.revenueAtRisk.toLocaleString("en-US")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">unsold value</div>
+                </div>
+
+                {/* 8) Revenue on books */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Revenue on books</div>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
+                    ${pricingExposure.revenueOnBooks.toLocaleString("en-US")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">{spanDays}-day window</div>
+                </div>
+
+                {/* 9) Discounted rooms */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Discounted nights</div>
+                  <div className="text-2xl font-serif font-bold text-text tabular-nums">
+                    {pricingExposure.discountedRoomNights.toLocaleString("en-US")}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-0.5">below base rate</div>
+                </div>
+
+                {/* 10) Net revenue by channel */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Net revenue</div>
+                  <div className="text-xl font-serif font-bold text-text tabular-nums">
+                    {channelProfitKpis.ota || channelProfitKpis.direct
+                      ? `$${Math.round((channelProfitKpis.ota?.net_revenue ?? 0) + (channelProfitKpis.direct?.net_revenue ?? 0)).toLocaleString("en-US")}`
+                      : "—"}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
+                    <span>OTA ${Math.round(channelProfitKpis.ota?.net_revenue ?? 0).toLocaleString("en-US")}</span>
+                    <span>Direct ${Math.round(channelProfitKpis.direct?.net_revenue ?? 0).toLocaleString("en-US")}</span>
                   </div>
                 </div>
 
-                {(() => {
-                  const isAhead = paceDelta !== null && paceDelta >= 0;
-                  const isBehind = paceDelta !== null && paceDelta < 0;
-                  return (
-                    <div className={`${overviewCardClass} p-4 sm:p-5 ${isAhead ? "!border-occugreen/40" : isBehind ? "!border-occuorange/30" : ""}`}>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-1">
-                        Pace vs 2yr
-                        {isAhead && <TrendingUp className="w-3 h-3 text-occugreen" />}
-                        {isBehind && <TrendingDown className="w-3 h-3 text-occuorange" />}
-                      </div>
-                      <div className={`text-2xl font-serif font-bold tabular-nums ${isAhead ? "text-occugreen" : isBehind ? "text-occuorange" : "text-text"}`}>
-                        {paceDelta !== null ? `${isAhead ? "+" : ""}${Math.round(paceDelta)}%` : "—"}
-                      </div>
-                      <div className="text-[10px] text-text-muted mt-0.5">
-                        {isAhead ? "ahead" : isBehind ? "behind" : "unavailable"}
-                      </div>
-                    </div>
-                  );
-                })()}
+                {/* 11) Net ADR by channel */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">Net ADR</div>
+                  <div className="text-xl font-serif font-bold text-text tabular-nums">
+                    {channelProfitKpis.otaNetAdr != null || channelProfitKpis.directNetAdr != null ? "by channel" : "—"}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
+                    <span>OTA {channelProfitKpis.otaNetAdr != null ? `$${Math.round(channelProfitKpis.otaNetAdr).toLocaleString("en-US")}` : "—"}</span>
+                    <span>Direct {channelProfitKpis.directNetAdr != null ? `$${Math.round(channelProfitKpis.directNetAdr).toLocaleString("en-US")}` : "—"}</span>
+                  </div>
+                </div>
+
+                {/* 12) Gross → net leakage (OTA) */}
+                <div className={`${overviewCardClass} p-4 sm:p-5`}>
+                  <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">OTA leakage</div>
+                  <div className="text-xl font-serif font-bold text-text tabular-nums">
+                    {channelProfitKpis.otaLeakage != null ? `$${Math.round(channelProfitKpis.otaLeakage).toLocaleString("en-US")}` : "—"}
+                  </div>
+                  <div className="text-[10px] text-text-muted mt-1 flex items-center justify-between gap-2">
+                    <span>gross→net</span>
+                    <span className="font-mono font-bold text-text">
+                      {channelProfitKpis.otaLeakagePct != null ? `${Math.round(channelProfitKpis.otaLeakagePct)}%` : "—"}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               {/* ── MIDDLE: 3-column visual section ─────────────────────────── */}
