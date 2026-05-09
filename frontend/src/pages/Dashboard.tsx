@@ -1009,89 +1009,50 @@ export function Dashboard() {
                 </div>
               </div>
 
-              {/* ── BOTTOM: Action Queue + Capacity Scorecard ────────────────── */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-                {/* Action Queue */}
+              {/* ── BOTTOM: Action Queue (horizontal strip) ─────────────────── */}
+              <div>
                 <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
-                  <div className="mb-4 pb-3 border-b border-border/60 flex items-center justify-between">
-                    <div>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Computed from live data</div>
-                      <div className="font-serif font-bold text-base text-text mt-0.5">Action Queue</div>
+                  <div className="mb-4 pb-3 border-b border-border/60 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+                      <span className="text-[9px] uppercase tracking-widest font-bold text-text-muted whitespace-nowrap">
+                        Computed from live data
+                      </span>
+                      <span className="hidden sm:block h-3 w-px bg-border shrink-0" aria-hidden />
+                      <h2 className="font-serif font-bold text-base text-text">Action Queue</h2>
                     </div>
-                    <AlertTriangle className="w-4 h-4 text-occuorange/70" />
+                    <AlertTriangle className="w-4 h-4 text-occuorange/70 shrink-0" />
                   </div>
-                  <div className="space-y-2">
-                    {actionQueue.map((item, i) => (
-                      <div key={i} className="flex items-start gap-3 p-3 bg-surface-2/40 border border-border/50 hover:border-accent/30 transition-colors group">
-                        <div className={`shrink-0 mt-0.5 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 ${
-                          item.priority === "HIGH" ? "bg-occuorange/12 text-occuorange border border-occuorange/30" :
-                          item.priority === "MED"  ? "bg-accent/10 text-accent border border-accent/25" :
-                                                     "bg-surface border border-border text-text-muted"
-                        }`}>
-                          {item.priority}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-bold text-text leading-tight">{item.title}</div>
-                          <div className="text-[11px] text-text-muted mt-0.5 leading-relaxed">{item.detail}</div>
-                        </div>
-                        <button
-                          onClick={() => setActiveTab(item.tab)}
-                          className="shrink-0 flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest px-2.5 py-1.5 border border-accent/30 text-accent hover:bg-accent/8 transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          {item.category} <ArrowRight className="w-2.5 h-2.5" />
-                        </button>
-                      </div>
-                    ))}
-                    {actionQueue.length === 0 && (
-                      <div className="text-xs text-text-muted py-6 text-center">No urgent actions — hotel operating well in this window.</div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Capacity Scorecard (compact) */}
-                <div className={`${overviewCardLgClass} p-5 sm:p-6`}>
-                  <div className="mb-4 pb-3 border-b border-border/60 flex items-center justify-between">
-                    <div>
-                      <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted">Before → After shuffle preview</div>
-                      <div className="font-serif font-bold text-base text-text mt-0.5">Capacity Scorecard</div>
-                    </div>
-                    {scorecardLoading && <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted animate-pulse">Updating…</div>}
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 mb-4">
-                    {[
-                      { label: "Orphan nights", before: scorecard?.before.orphan_nights, after: scorecard?.after?.orphan_nights, delta: scorecard?.delta?.orphan_nights, lowerIsBetter: true },
-                      { label: "Rev at risk", before: scorecard ? `$${Math.round(scorecard.before.revenue_at_risk).toLocaleString("en-US")}` : undefined, after: scorecard?.after ? `$${Math.round(scorecard.after.revenue_at_risk).toLocaleString("en-US")}` : undefined, delta: scorecard?.delta ? Math.round(scorecard.delta.revenue_at_risk) : undefined, lowerIsBetter: true },
-                      { label: "k=2 windows", before: scorecard?.before.k_windows?.[2], after: scorecard?.after?.k_windows?.[2], delta: scorecard?.delta?.k_windows?.[2], lowerIsBetter: false },
-                    ].map(({ label, before, after, delta, lowerIsBetter }) => (
-                      <div key={label} className="bg-surface-2 border border-border p-3">
-                        <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1">{label}</div>
-                        <div className="text-xl font-serif font-bold text-text tabular-nums">
-                          {scorecardLoading ? "…" : (before ?? "—")}
-                        </div>
-                        {after !== undefined && delta !== undefined && (
-                          <div className={`text-[10px] font-bold tabular-nums mt-1 ${
-                            (lowerIsBetter ? delta <= 0 : delta >= 0) ? "text-occugreen" : "text-occuorange"
-                          }`}>
-                            → {after} {delta !== 0 && `(${delta > 0 ? "+" : ""}${delta})`}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {!swapPlan || swapPlan.length === 0 ? (
-                    <div className="text-[11px] text-text-muted bg-surface-2/50 border border-border/50 px-3 py-2.5 leading-relaxed">
-                      Go to{" "}
-                      <button onClick={() => setActiveTab("occupancy")} className="font-bold text-text underline underline-offset-2">Occupancy</button>
-                      {" "}and run Preview Recovery Shuffle to see before/after deltas.
+                  {actionQueue.length === 0 ? (
+                    <div className="text-xs text-text-muted py-8 text-center border border-dashed border-border/70 rounded-[10px] bg-surface-2/30">
+                      No urgent actions — hotel operating well in this window.
                     </div>
                   ) : (
-                    <div className="text-[11px] text-occugreen font-bold bg-occugreen/5 border border-occugreen/25 px-3 py-2.5 flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-occugreen inline-block" />
-                      Shuffle plan active ({swapPlan.length} steps) —{" "}
-                      <button onClick={() => setActiveTab("occupancy")} className="underline underline-offset-2">go to Occupancy</button>{" "}to commit.
+                    <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory [-webkit-overflow-scrolling:touch]">
+                      {actionQueue.map((item, i) => (
+                        <div
+                          key={i}
+                          className="snap-start shrink-0 w-[min(100%,300px)] sm:w-[300px] flex flex-col gap-2 p-3 bg-surface-2/40 border border-border/50 hover:border-accent/30 transition-colors rounded-[10px]"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className={`shrink-0 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 ${
+                              item.priority === "HIGH" ? "bg-occuorange/12 text-occuorange border border-occuorange/30" :
+                              item.priority === "MED"  ? "bg-accent/10 text-accent border border-accent/25" :
+                                                         "bg-surface border border-border text-text-muted"
+                            }`}>
+                              {item.priority}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab(item.tab)}
+                              className="shrink-0 flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-accent/30 text-accent hover:bg-accent/8 transition-colors"
+                            >
+                              {item.category} <ArrowRight className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                          <div className="text-xs font-bold text-text leading-tight">{item.title}</div>
+                          <div className="text-[11px] text-text-muted leading-relaxed line-clamp-4 flex-1">{item.detail}</div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

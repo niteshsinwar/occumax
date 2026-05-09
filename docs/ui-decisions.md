@@ -145,8 +145,14 @@ Then we ask the AI to:
   - Occupancy Trend
   - Gap Analysis
   - Channel Intelligence
-- **Why**: Keep Dashboard focused on **Top 12 KPIs + Action Queue + Capacity Scorecard + Intelligence Feed**. Detailed analysis lives in the subtabs.
+- **Why**: Keep Dashboard focused on **Top 12 KPIs + Action Queue + Intelligence Feed**. Detailed analysis (including shuffle before/after review) lives in the Occupancy subtab.
 - **Where**: `frontend/src/pages/Dashboard.tsx` (Dashboard tab body).
+
+### Decision: Action Queue is a horizontal strip
+
+- **What**: **Computed from live data** and **Action Queue** sit on one horizontal header row (with separator on `sm+`); action items are **fixed-width cards in a horizontal scroll** row (snap on touch).
+- **Why**: Reads as a single “live ops” band and scales when there are multiple actions without stacking the whole page.
+- **Where**: `frontend/src/pages/Dashboard.tsx`, `frontend/src/pages/DashboardV2.tsx`.
 
 ### Decision: Dashboard consumes Exogenous Demand Signals (but does not display them)
 
