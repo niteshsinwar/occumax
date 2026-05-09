@@ -22,8 +22,8 @@ These 12 KPIs are the best “first dashboard” set because they answer, in ord
 7. **Revenue at risk (window)** — dollars exposed by unsold inventory.
 8. **Revenue on books (window)** — booked revenue currently secured in the same near-term window.
 9. **Discounted rooms (window)** — rate-integrity pressure (unsold nights priced meaningfully below base).
-10. **Net revenue by channel** — profit-aware contribution split (OTA vs Direct).
-11. **Net ADR by channel (net / room-night)** — profit per sold night by channel.
+10. **Top channel partners by net revenue ($)** — which partners are driving profitable volume.
+11. **Top channel partners by net ADR ($/night)** — which partners deliver the best net yield per room-night.
 12. **Gross → net leakage (OTA) ($ and %)** — commission drag; the core “is this mix worth it?” KPI.
 
 ---
