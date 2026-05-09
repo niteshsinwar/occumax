@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { analysePricingWithContext, commitPricing, getHeatmap } from "../../api/client";
 import type {
+  HeatmapCell,
   HeatmapResponse,
   HeatmapRow,
   PricingAnalyseResponse,
@@ -44,13 +45,14 @@ const PRICING_CACHE_KEY = "rateiq_last_analysis";
 
 const LOADING_MESSAGES = [
   "Connecting to market data feeds...",
+  "Scoping AI analysis to nights with unsold inventory...",
   "Analyzing weather patterns for next 15 days...",
   "Loading Overview context signals (events, weather, travel, market)...",
   "Scoring market impact from selected signals (AI)...",
   "Evaluating occupancy and orphan room patterns...",
   "Reviewing 2-year historical booking trends...",
   "Benchmarking competitor pricing (market research)...",
-  "Synthesizing all pricing signals (AI)...",
+  "Synthesizing pricing signals for empty nights only (AI)...",
   "Finalizing recommendations...",
 ];
 
@@ -155,6 +157,29 @@ function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: str
   const avgRate = total > 0 ? rateSum / total : 0;
   const occPct = total > 0 ? (otb / total) * 100 : 0;
   return { total, otb, occPct: Math.round(occPct * 10) / 10, avgRate: Math.round(avgRate * 100) / 100, emptyRooms, sandwichEmptyRooms };
+}
+
+function heatmapCellAt(row: HeatmapRow, date: string): HeatmapCell | undefined {
+  return row.cells.find(c => c.date === date);
+}
+
+function roomRowHasEmptyOnDates(row: HeatmapRow, dates: string[]): boolean {
+  const want = new Set(dates);
+  return row.cells.some(c => want.has(c.date) && c.block_type === "EMPTY");
+}
+
+/**
+ * Room-level BAR for tooltip math; suggested rate stays category-level from RateIQ (commit applies per category+date).
+ */
+function mergeRoomPricingCell(base: PricingCalendarCell, roomCurrentRate: number): PricingCalendarCell {
+  const suggested = base.suggested_rate;
+  const cr = roomCurrentRate;
+  const change_pct = cr > 0 ? Math.round(((suggested - cr) / cr) * 1000) / 10 : base.change_pct;
+  let action: PricingCalendarCell["action"] = base.action;
+  if (suggested > cr * 1.02) action = "INCREASE";
+  else if (suggested < cr * 0.98) action = "DISCOUNT";
+  else action = "MAINTAIN";
+  return { ...base, current_rate: cr, change_pct, action };
 }
 
 // ── Calendar cell component ───────────────────────────────────────────────────
@@ -412,14 +437,20 @@ export function PricingOptimizationTab() {
 
   // ── Run analysis ──────────────────────────────────────────────────────────
 
-  const applyAnalysis = useCallback((data: PricingAnalyseResponse) => {
+  const applyAnalysis = useCallback((data: PricingAnalyseResponse, heatmapSnapshot: HeatmapResponse | null) => {
     setPricing(data);
     setCustomRates({});
     setCommitted(null);
     const preSelected = new Set<string>();
     for (const row of data.calendar_rows) {
       for (const cell of row.cells) {
-        if (cell.action !== "MAINTAIN" && !cell.is_orphan) {
+        if (cell.is_orphan) continue;
+        if (heatmapSnapshot) {
+          const hasEmpty = heatmapSnapshot.rows.some(
+            r => String(r.category) === row.category && heatmapCellAt(r, cell.date)?.block_type === "EMPTY",
+          );
+          if (hasEmpty && cell.action !== "MAINTAIN") preSelected.add(`${row.category}::${cell.date}`);
+        } else if (cell.action !== "MAINTAIN") {
           preSelected.add(`${row.category}::${cell.date}`);
         }
       }
@@ -431,12 +462,12 @@ export function PricingOptimizationTab() {
     const raw = localStorage.getItem(PRICING_CACHE_KEY);
     if (!raw) return;
     try {
-      applyAnalysis(JSON.parse(raw) as PricingAnalyseResponse);
+      applyAnalysis(JSON.parse(raw) as PricingAnalyseResponse, heatmap);
       show("Loaded previous analysis", "success");
     } catch {
       show("Could not load cached analysis", "error");
     }
-  }, [applyAnalysis, show]);
+  }, [applyAnalysis, heatmap, show]);
 
   const runAnalysis = useCallback(async () => {
     setAnalysing(true);
@@ -457,7 +488,11 @@ export function PricingOptimizationTab() {
         selectedItems.MARKET,
       ].filter(Boolean);
 
-      const res = await analysePricingWithContext({ context_items: contextItems });
+      const res = await analysePricingWithContext({
+        context_items: contextItems,
+        window_days: WINDOW_DAYS,
+        empty_nights_only: true,
+      });
       const aiData = res.data as PricingAnalyseResponse;
       const aiWindowed: PricingAnalyseResponse = {
         ...aiData,
@@ -555,7 +590,7 @@ export function PricingOptimizationTab() {
         recommendations: nextRecommendations,
       };
 
-      applyAnalysis(data);
+      applyAnalysis(data, heatmap);
       try { localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify(data)); } catch { /* quota */ }
       setHasCached(true);
     } catch (e: unknown) {
@@ -579,15 +614,19 @@ export function PricingOptimizationTab() {
   }, []);
 
   const selectAll = useCallback(() => {
-    if (!pricing) return;
+    if (!pricing || !heatmap) return;
     const all = new Set<string>();
     for (const row of pricing.calendar_rows) {
       for (const cell of row.cells) {
-        if (!cell.is_orphan) all.add(`${row.category}::${cell.date}`);
+        if (cell.is_orphan) continue;
+        const hasEmpty = heatmap.rows.some(
+          r => String(r.category) === row.category && heatmapCellAt(r, cell.date)?.block_type === "EMPTY",
+        );
+        if (hasEmpty) all.add(`${row.category}::${cell.date}`);
       }
     }
     setSelectedCells(all);
-  }, [pricing]);
+  }, [pricing, heatmap]);
 
   const deselectAll = useCallback(() => setSelectedCells(new Set()), []);
 
@@ -681,10 +720,10 @@ export function PricingOptimizationTab() {
             <div>
               <div className="text-sm font-bold text-text flex items-center gap-2">
                 RateIQ Pricing Optimization{" "}
-                <AiTag title="RateIQ runs parallel AI calls (weather, events, market, historical, occupancy) then synthesizes into a 15-day pricing calendar per room category. Tooltip overlays use Overview context + competitor pricing (demo)." />
+                <AiTag title="AI synthesis runs only on dates with unsold rooms per category (faster). The grid lists rooms like Occupancy; only EMPTY nights show pricing cells — hover for current BAR, proposed rate, and why. Tooltip adds Overview context + demo competitor pricing." />
               </div>
               <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-                Existing features · multi-signal AI · 15-day calendar · click cells to select for commit
+                AI scoped to empty nights · 15-day window · room rows (empty slots only) · click to select for commit
               </div>
             </div>
           </div>
@@ -847,7 +886,7 @@ export function PricingOptimizationTab() {
               ))}
             </div>
             <div className="mt-6 text-[10px] text-text-muted uppercase tracking-widest">
-              Analyzing signals · building 15-day calendar
+              Analyzing unsold nights · building 15-day room grid
             </div>
           </div>
         )}
@@ -931,9 +970,9 @@ export function PricingOptimizationTab() {
                 <thead className="sticky top-0 z-20 bg-surface">
                   <tr>
                     {/* Category label column */}
-                    <th className="sticky left-0 z-30 bg-surface border-b border-r border-border px-3 py-2 text-left w-24 min-w-[96px]">
+                    <th className="sticky left-0 z-30 bg-surface border-b border-r border-border px-3 py-2 text-left w-28 min-w-[104px]">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">
-                        Category
+                        Room
                       </span>
                     </th>
                     {pricing.dates.map(d => {
@@ -955,36 +994,116 @@ export function PricingOptimizationTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pricing.calendar_rows.map(row => (
-                    <tr key={row.category} className="border-b border-border/30">
-                      {/* Sticky category label */}
-                      <td className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-1 whitespace-nowrap">
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-text">
-                          {row.category}
-                        </span>
-                      </td>
-                      {row.cells.map(cell => {
-                        const key = `${row.category}::${cell.date}`;
-                        return (
-                          <CalendarCellView
-                            key={cell.date}
-                            cell={cell}
-                            selected={selectedCells.has(key)}
-                            onToggle={() => toggleCell(row.category, cell.date)}
-                            customRate={customRates[key]}
-                            onCustomRate={rate => {
-                              setCustomRates(prev => {
-                                const next = { ...prev };
-                                if (rate === null) delete next[key];
-                                else next[key] = rate;
-                                return next;
-                              });
-                            }}
-                          />
-                        );
-                      })}
-                    </tr>
-                  ))}
+                  {!heatmap ? (
+                    pricing.calendar_rows.map(row => (
+                      <tr key={row.category} className="border-b border-border/30">
+                        <td className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-1 whitespace-nowrap">
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-text">
+                            {row.category}
+                          </span>
+                        </td>
+                        {row.cells.map(cell => {
+                          const key = `${row.category}::${cell.date}`;
+                          return (
+                            <CalendarCellView
+                              key={cell.date}
+                              cell={cell}
+                              selected={selectedCells.has(key)}
+                              onToggle={() => toggleCell(row.category, cell.date)}
+                              customRate={customRates[key]}
+                              onCustomRate={rate => {
+                                setCustomRates(prev => {
+                                  const next = { ...prev };
+                                  if (rate === null) delete next[key];
+                                  else next[key] = rate;
+                                  return next;
+                                });
+                              }}
+                            />
+                          );
+                        })}
+                      </tr>
+                    ))
+                  ) : pricing.calendar_rows.map(calRow => {
+                    const cat = calRow.category;
+                    const cellByDate = new Map(calRow.cells.map(c => [c.date, c]));
+                    const roomRows = heatmap.rows.filter(
+                      r => String(r.category) === cat && roomRowHasEmptyOnDates(r, pricing.dates),
+                    );
+                    return (
+                      <Fragment key={cat}>
+                        <tr className="bg-surface-2/60 border-b border-border">
+                          <td
+                            colSpan={pricing.dates.length + 1}
+                            className="px-3 py-2 text-left"
+                          >
+                            <span className="text-[10px] font-black uppercase tracking-widest text-text">
+                              {cat}
+                            </span>
+                          </td>
+                        </tr>
+                        {roomRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={pricing.dates.length + 1}
+                              className="px-3 py-3 text-xs text-text-muted border-b border-border/30"
+                            >
+                              No empty inventory in this category for the visible window.
+                            </td>
+                          </tr>
+                        ) : (
+                          roomRows.map(roomRow => (
+                            <tr key={`${cat}-${roomRow.room_id}`} className="border-b border-border/25 hover:bg-surface-2/20">
+                              <td className="sticky left-0 z-10 bg-surface border-r border-border px-3 py-1 whitespace-nowrap">
+                                <span className="text-[10px] font-mono font-bold text-text">
+                                  {roomRow.room_id}
+                                </span>
+                              </td>
+                              {pricing.dates.map(d => {
+                                const hc = heatmapCellAt(roomRow, d);
+                                const catCell = cellByDate.get(d);
+                                if (!hc || hc.block_type !== "EMPTY") {
+                                  return (
+                                    <td key={d} className="p-0.5 bg-surface-2/20 align-middle">
+                                      <div className="min-w-[72px] h-10 flex items-center justify-center rounded border border-border/30 text-[10px] text-text-muted/70">
+                                        —
+                                      </div>
+                                    </td>
+                                  );
+                                }
+                                if (!catCell) {
+                                  return (
+                                    <td key={d} className="p-0.5 align-middle">
+                                      <div className="min-w-[72px] h-10 flex items-center justify-center text-[10px] text-text-muted">—</div>
+                                    </td>
+                                  );
+                                }
+                                const roomCell = mergeRoomPricingCell(catCell, hc.current_rate);
+                                const selKey = `${cat}::${d}`;
+                                return (
+                                  <CalendarCellView
+                                    key={d}
+                                    cell={roomCell}
+                                    selected={selectedCells.has(selKey)}
+                                    onToggle={() => toggleCell(cat, d)}
+                                    customRate={customRates[selKey]}
+                                    onCustomRate={rate => {
+                                      setCustomRates(prev => {
+                                        const next = { ...prev };
+                                        if (rate === null) delete next[selKey];
+                                        else next[selKey] = rate;
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                );
+                              })}
+                            </tr>
+                          ))
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

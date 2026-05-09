@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PricingContextFactor(BaseModel):
@@ -28,6 +28,11 @@ class PricingContextItem(BaseModel):
 
 class PricingAnalyseRequest(BaseModel):
     context_items: list[PricingContextItem]
+    window_days: int = Field(default=15, ge=1, le=60, description="Align with Overview occupancy slice.")
+    empty_nights_only: bool = Field(
+        default=True,
+        description="LLM synthesis only on dates with unsold rooms for that category (total > OTB).",
+    )
 
 
 class PricingCalendarCell(BaseModel):

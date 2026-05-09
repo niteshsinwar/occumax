@@ -328,11 +328,12 @@ async def analyse_with_context(body: PricingAnalyseRequest) -> PricingAnalyseRes
     (frontend mock contextFeed.ts) for external signal inputs.
     """
     today = date.today()
+    wd = min(max(body.window_days, 1), 60)
     async with AsyncSessionLocal() as db:
         snapshot = await _build_pricing_context(db, today)
 
     context_text = _build_context_text(snapshot, today)
-    dates = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+    dates = [(today + timedelta(days=i)).isoformat() for i in range(wd)]
 
     result = await run_pricing_agent(
         snapshot=snapshot,
@@ -340,6 +341,8 @@ async def analyse_with_context(body: PricingAnalyseRequest) -> PricingAnalyseRes
         today=today,
         session_factory=AsyncSessionLocal,
         context_items=[ci.model_dump() for ci in body.context_items],
+        analysis_window_days=wd,
+        empty_nights_only=body.empty_nights_only,
     )
 
     calendar_map = result.get("calendar", {})
