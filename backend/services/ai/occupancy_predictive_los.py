@@ -46,10 +46,9 @@ def _make_llm(max_tokens: int = 800) -> ChatOpenAI:
         openai_api_base=settings.POLYAI_API_BASE,
         openai_api_key=settings.POLYAI_API_KEY,
         temperature=0.15,
-        model_kwargs={
-            "response_format": {"type": "text"},
-            "extra_body": {"max_tokens": max_tokens, "prefer": "quality"},
-        },
+        max_tokens=max_tokens,
+        model_kwargs={"response_format": {"type": "text"}},
+        extra_body={"prefer": "quality"},
     )
 
 
