@@ -655,7 +655,7 @@ export function Dashboard() {
   const actionQueue = useMemo((): ActionItem[] => {
     const items: ActionItem[] = [];
     const orphans = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
-    const revRisk = scorecard?.before.revenue_at_risk ?? v2Kpis?.orphanRevenueAtRisk ?? 0;
+    const revRisk = pricingExposure.revenueAtRisk;
 
     if (orphans > 5)
       items.push({ priority: "HIGH", category: "Occupancy", tab: "occupancy", title: `${orphans} orphan nights stranded`, detail: `$${Math.round(revRisk).toLocaleString("en-US")} estimated revenue at risk — run a room shuffle to consolidate gaps into bookable runs.` });
@@ -678,7 +678,7 @@ export function Dashboard() {
       items.push({ priority: "LOW", category: "Occupancy", tab: "occupancy", title: `Modelled cancel rate ~${v2CancelRate}% (OTA-weighted)`, detail: "High OTA share inflates estimated cancellation risk — consider firmer non-refundable direct rate packages." });
 
     return items.slice(0, 5);
-  }, [scorecard, v2Kpis, paceDelta, v2ChannelMix, v2CancelRate]);
+  }, [scorecard, v2Kpis, paceDelta, v2ChannelMix, v2CancelRate, pricingExposure]);
 
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
