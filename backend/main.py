@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 cors_origins = settings.cors_origins_list()
 
-app = FastAPI(title="Occumax API", version="3.0.0")
+app = FastAPI(title="Optihost API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,7 +45,7 @@ app.include_router(analytics.router)
 
 @app.on_event("startup")
 async def startup():
-    logger.info("Occumax started.")
+    logger.info("Optihost started.")
 
 
 @app.get("/health")

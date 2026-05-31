@@ -1,4 +1,4 @@
-# Occumax
+# Optihost
 
 Hotel revenue recovery platform — yield optimization, AI-powered pricing, and booking management.
 

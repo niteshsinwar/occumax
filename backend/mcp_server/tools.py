@@ -21,7 +21,7 @@ from mcp_server.schemas import ConfirmationRequired, McpSplitSegment, ToolError,
 logger = logging.getLogger(__name__)
 
 MCP_INSTRUCTIONS = """\
-You are connected to Occumax, a live hotel booking and revenue management system.
+You are connected to Optihost, a live hotel booking and revenue management system.
 
 Use only MCP tool results for room IDs, rates, availability, booking feasibility, and pricing signals. Never invent inventory, rates, dates, or room IDs.
 
@@ -193,7 +193,7 @@ async def _longest_free_runs(db: Any, category: RoomCategory, check_in: date, ch
 
 def create_mcp() -> FastMCP:
     mcp = FastMCP(
-        name="Occumax Receptionist",
+        name="Optihost Receptionist",
         instructions=MCP_INSTRUCTIONS,
         version="1.0.0",
         mask_error_details=True,

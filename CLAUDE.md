@@ -1,4 +1,4 @@
-# Occumax — Agent Guide
+# Optihost — Agent Guide
 
 Auto-loaded by Claude Code every session. Everything you need to operate autonomously.
 

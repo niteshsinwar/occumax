@@ -5,7 +5,7 @@ import type { ShuffleResult, RoomCategory, ComparisonTable, SplitSegment, SwapSt
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User, X } from "lucide-react";
 
-const AI_HISTORY_KEY = "occumax_front_desk_ai_history";
+const AI_HISTORY_KEY = "optihost_front_desk_ai_history";
 const MAX_AI_HISTORY_MESSAGES = 20;
 const AI_HISTORY_TTL_MS = 30 * 60 * 1000;
 const FALLBACK_CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"];

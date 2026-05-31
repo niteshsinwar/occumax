@@ -1,4 +1,4 @@
-# Occumax Receptionist MCP
+# Optihost Receptionist MCP
 
 Self-contained MCP server for exposing receptionist booking tools to ChatGPT,
 OpenAI agents, and other MCP clients.
