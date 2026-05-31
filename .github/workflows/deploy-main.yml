@@ -16,3 +16,4 @@ jobs:
       HOST: ${{ secrets.MAIN_HOST }}
       DATABASE_URL: ${{ secrets.MAIN_DATABASE_URL }}
       GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      MCP_SHARED_SECRET: ${{ secrets.MAIN_MCP_SHARED_SECRET }}
