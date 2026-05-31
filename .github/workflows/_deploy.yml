@@ -158,23 +158,23 @@ jobs:
             } > /opt/occumax/.env.mcp
             chmod 600 /opt/occumax/.env.mcp
 
-            sudo tee /etc/systemd/system/occumax-mcp.service > /dev/null << 'EOF'
-            [Unit]
-            Description=Occumax MCP Server
-            After=network.target
-
-            [Service]
-            User=ubuntu
-            WorkingDirectory=/opt/occumax/backend
-            EnvironmentFile=/opt/occumax/.env
-            EnvironmentFile=/opt/occumax/.env.mcp
-            ExecStart=/opt/occumax/mcp-venv/bin/uvicorn mcp_server.main:app --host 127.0.0.1 --port 8001
-            Restart=always
-            RestartSec=5
-
-            [Install]
-            WantedBy=multi-user.target
-            EOF
+            printf '%s\n' \
+              '[Unit]' \
+              'Description=Occumax MCP Server' \
+              'After=network.target' \
+              '' \
+              '[Service]' \
+              'User=ubuntu' \
+              'WorkingDirectory=/opt/occumax/backend' \
+              'EnvironmentFile=/opt/occumax/.env' \
+              'EnvironmentFile=/opt/occumax/.env.mcp' \
+              'ExecStart=/opt/occumax/mcp-venv/bin/uvicorn mcp_server.main:app --host 127.0.0.1 --port 8001' \
+              'Restart=always' \
+              'RestartSec=5' \
+              '' \
+              '[Install]' \
+              'WantedBy=multi-user.target' \
+              | sudo tee /etc/systemd/system/occumax-mcp.service > /dev/null
             sudo systemctl daemon-reload
             sudo systemctl enable occumax-mcp
             sudo systemctl restart occumax-mcp
@@ -215,20 +215,20 @@ jobs:
             set -e
 
             sudo mkdir -p /etc/nginx/snippets
-            sudo tee /etc/nginx/snippets/occumax-mcp-location.conf > /dev/null << 'EOF'
-            location /mcp {
-              proxy_pass http://127.0.0.1:8001/mcp;
-              proxy_http_version 1.1;
-              proxy_set_header Host $host;
-              proxy_set_header X-Real-IP $remote_addr;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_set_header Authorization $http_authorization;
-              proxy_buffering off;
-              proxy_read_timeout 600s;
-              proxy_send_timeout 600s;
-            }
-            EOF
+            printf '%s\n' \
+              'location /mcp {' \
+              '  proxy_pass http://127.0.0.1:8001/mcp;' \
+              '  proxy_http_version 1.1;' \
+              '  proxy_set_header Host $host;' \
+              '  proxy_set_header X-Real-IP $remote_addr;' \
+              '  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
+              '  proxy_set_header X-Forwarded-Proto $scheme;' \
+              '  proxy_set_header Authorization $http_authorization;' \
+              '  proxy_buffering off;' \
+              '  proxy_read_timeout 600s;' \
+              '  proxy_send_timeout 600s;' \
+              '}' \
+              | sudo tee /etc/nginx/snippets/occumax-mcp-location.conf > /dev/null
 
             NGINX_SITE="$(sudo grep -RIl "server_name .*${DEPLOY_HOST}\.nip\.io" /etc/nginx/sites-enabled /etc/nginx/sites-available /etc/nginx/conf.d 2>/dev/null | head -n 1 || true)"
             if [ -z "${NGINX_SITE}" ]; then
@@ -237,13 +237,13 @@ jobs:
               exit 1
             fi
 
-            sudo python3 - "${NGINX_SITE}" << 'PY'
+            sudo python3 -c 'import textwrap; exec(textwrap.dedent("""
             import sys
             from pathlib import Path
 
             path = Path(sys.argv[1])
             text = path.read_text()
-            include = "    include /etc/nginx/snippets/occumax-mcp-location.conf;\n"
+            include = "    include /etc/nginx/snippets/occumax-mcp-location.conf;\\n"
             if include in text:
                 raise SystemExit(0)
 
@@ -255,7 +255,7 @@ jobs:
                     raise SystemExit(0)
 
             raise SystemExit(f"No suitable location block found in {path}")
-            PY
+            """))' "${NGINX_SITE}"
 
             sudo nginx -t
           ENDSSH
