@@ -154,7 +154,11 @@ jobs:
             MCP_SECRET_VALUE="$(cat /opt/occumax/.mcp_shared_secret)"
             {
               printf "MCP_SHARED_SECRET=%s\n" "${MCP_SECRET_VALUE}"
-              printf "MCP_ALLOW_UNAUTHENTICATED=false\n"
+              if [ "$DEPLOY_BRANCH" = "Dev" ]; then
+                printf "MCP_ALLOW_UNAUTHENTICATED=true\n"
+              else
+                printf "MCP_ALLOW_UNAUTHENTICATED=false\n"
+              fi
             } > /opt/occumax/.env.mcp
             chmod 600 /opt/occumax/.env.mcp
 
