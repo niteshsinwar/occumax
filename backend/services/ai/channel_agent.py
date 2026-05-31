@@ -198,29 +198,40 @@ def _make_tools(session_factory: async_sessionmaker, today: date):
         try:
             async with session_factory() as db:
                 rows = (await db.execute(
-                    select(Room.category, Room.base_rate, Slot.date, Slot.block_type)
-                    .join(Room, Room.id == Slot.room_id)
+                    select(Room.id, Room.category, Room.base_rate, Slot.date, Slot.block_type)
+                    .outerjoin(
+                        Slot,
+                        (Slot.room_id == Room.id)
+                        & (Slot.date >= today)
+                        & (Slot.date < look_end),
+                    )
                     .where(
                         Room.is_active == True,
                         Room.category == category.upper(),
-                        Slot.date >= today,
-                        Slot.date < look_end,
                     )
-                    .order_by(Slot.date)
+                    .order_by(Room.id, Slot.date)
                 )).all()
         except Exception as e:
             return json.dumps({"error": str(e)})
 
         daily: dict[str, dict] = {}
-        for cat, base_rate, d, block_type in rows:
+        room_ids = {room_id for room_id, *_ in rows}
+        room_base_rate = {room_id: float(base_rate or 0.0) for room_id, _cat, base_rate, _d, _bt in rows}
+        slot_by_room_date = {(room_id, d): block_type for room_id, _cat, _base_rate, d, block_type in rows if d is not None}
+        for offset in range((look_end - today).days):
+            d = today + timedelta(days=offset)
             ds = d.isoformat()
-            if ds not in daily:
-                daily[ds] = {"total": 0, "empty": 0, "occupied": 0, "base_rate": float(base_rate)}
-            daily[ds]["total"] += 1
-            if block_type == BlockType.EMPTY:
-                daily[ds]["empty"] += 1
-            else:
-                daily[ds]["occupied"] += 1
+            daily[ds] = {"total": 0, "empty": 0, "occupied": 0, "base_rate": 0.0}
+            base_sum = 0.0
+            for room_id in room_ids:
+                base_sum += room_base_rate.get(room_id, 0.0)
+                block_type = slot_by_room_date.get((room_id, d), BlockType.EMPTY)
+                daily[ds]["total"] += 1
+                if block_type == BlockType.EMPTY:
+                    daily[ds]["empty"] += 1
+                else:
+                    daily[ds]["occupied"] += 1
+            daily[ds]["base_rate"] = round(base_sum / max(1, len(room_ids)), 2)
 
         # Find contiguous empty runs
         gaps = []
@@ -267,7 +278,7 @@ def _make_tools(session_factory: async_sessionmaker, today: date):
                         Room.category == category.upper(),
                         Slot.date >= hist_start,
                         Slot.date < today,
-                        Slot.block_type != BlockType.EMPTY,
+                        Slot.block_type == BlockType.SOFT,
                         Slot.channel == Channel.OTA,
                     )
                 )).all()
@@ -357,7 +368,7 @@ def _make_tools(session_factory: async_sessionmaker, today: date):
         partner_name: e.g. "Expedia", "Hotels.com", "Booking.com", "Priceline",
                       "Travelocity", "Orbitz"
         """
-        data = get_partner_news(partner_name)
+        data = get_partner_news(partner_name, today=today)
         return json.dumps(data)
 
     return [get_occupancy_gaps, get_channel_history, get_weekly_pattern, get_channel_news]

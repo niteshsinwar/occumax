@@ -1,5 +1,6 @@
 import { format, parseISO } from "date-fns";
 import type { HeatmapRow } from "../../types";
+import { displayRoomLabel } from "../../utils/roomLabels";
 
 export interface CellClickInfo {
   id: string;
@@ -127,12 +128,15 @@ export function HeatmapGrid({
           </div>
           {catRows.map(row => (
             <div key={row.room_id} className="flex items-center mb-0.5">
-              <div className={`${labelWidthClass} shrink-0 text-[10px] font-bold text-text-muted text-right pr-2`}>
-                {row.room_id}
+              <div
+                className={`${labelWidthClass} shrink-0 text-[10px] font-bold text-text-muted text-right pr-2`}
+                title={`Room ID: ${row.room_id}`}
+              >
+                {displayRoomLabel(row.room_id, String(row.category), rows)}
               </div>
 
               {(maxDays ? row.cells.slice(0, maxDays) : row.cells).map((cell, idx, visibleCells) => {
-                  const baseClass = cellClass(cell.block_type, (cell as any).channel, palette);
+                  const baseClass = cellClass(cell.block_type, cell.channel, palette);
                   let finalClass =
                     `${cellSizeClass} shrink-0 ${cellRounded} flex items-center justify-center ` +
                     `overflow-hidden transition-colors mr-0.5 border border-black/10 ${baseClass}`;
@@ -149,8 +153,8 @@ export function HeatmapGrid({
                       after.block_type !== "EMPTY";
 
                     if (isSandwichGap) {
-                      const minStayActive = Boolean((cell as any).min_stay_active);
-                      const minStayNights = Number((cell as any).min_stay_nights ?? 0);
+                      const minStayActive = Boolean(cell.min_stay_active);
+                      const minStayNights = Number(cell.min_stay_nights ?? 0);
                       const isMinLosBlocked = minStayActive && minStayNights > 1;
                       finalClass += isMinLosBlocked
                         ? " ring-2 ring-black/50"
@@ -158,8 +162,8 @@ export function HeatmapGrid({
                     }
                   }
 
-                  const ch = (cell as any).channel as string | null | undefined;
-                  const offerType = (cell as any).offer_type as string | null | undefined;
+                  const ch = cell.channel;
+                  const offerType = cell.offer_type;
                   const tooltipBase = cell.block_type === "SOFT" && ch
                     ? `${cell.room_id} · ${cell.date} · ${ch}`
                     : `${cell.room_id} · ${cell.date} · ${cell.block_type}`;
@@ -174,9 +178,12 @@ export function HeatmapGrid({
                   const offerLabel = !bookingLabel && offerType ? "٪" : null;
 
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={cell.slot_id}
                       title={tooltip}
+                      aria-label={tooltip}
+                      disabled={!onCellClick}
                       onClick={() =>
                         onCellClick?.({
                           id:         cell.slot_id,
@@ -184,13 +191,13 @@ export function HeatmapGrid({
                           date:       String(cell.date),
                           block:      cell.block_type,
                           rate:       cell.current_rate,
-                          channel:    (cell as any).channel ?? null,
+                          channel:    cell.channel ?? null,
                           booking_id: cell.booking_id,
                           category:   cell.category,
                           offer_type: offerType ?? null,
                         })
                       }
-                      className={finalClass}
+                      className={`${finalClass} disabled:cursor-default`}
                     >
                       {bookingLabel && <span className={bookingMarkClass}>{bookingLabel}</span>}
                       {offerLabel && (
@@ -208,7 +215,7 @@ export function HeatmapGrid({
                           {offerLabel}
                         </span>
                       )}
-                    </div>
+                    </button>
                   );
                 })}
             </div>

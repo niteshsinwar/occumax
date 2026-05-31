@@ -522,6 +522,7 @@ class TestAiHandoff:
             assert ad["type"] in (
                 "availability_result",
                 "split_stay_result",
+                "recovery_options",
                 "booking_confirmed",
                 "split_stay_confirmed",
             )

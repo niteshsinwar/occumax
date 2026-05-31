@@ -9,6 +9,10 @@ Flow:
 from __future__ import annotations
 
 import logging
+import copy
+import hashlib
+import json
+import time
 import uuid
 from datetime import date, timedelta
 from typing import Optional
@@ -27,6 +31,13 @@ from services.ai.channel_agent import run_channel_agent
 from services.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
+_CHANNEL_CACHE_TTL_SECONDS = 15 * 60
+_CHANNEL_RECOMMEND_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _stable_hash(payload: object) -> str:
+    raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 async def _load_slots(db: AsyncSession, today: date) -> list[SlotInfo]:
@@ -116,73 +127,93 @@ async def commit_plan(body: CommitRequest, db: AsyncSession) -> CommitResult:
     """
     applied = 0
     slots_updated = 0
-
-    # PASS 1: VACATE all source slots — capture channel/partner before clearing
-    # Maps booking_id → (channel, channel_partner) for use in PASS 2
-    booking_channel: dict[str, tuple] = {}
+    parsed_dates: dict[tuple[str, str, str], list[date]] = {}
+    source_slot_ids: set[str] = set()
+    destination_slot_ids: set[str] = set()
 
     for step in body.swap_plan:
+        dates: list[date] = []
         for date_str in step.dates:
-            d = date.fromisoformat(date_str)
-            from_slot_id = f"{step.from_room}_{d}"
+            try:
+                d = date.fromisoformat(date_str)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid swap date: {date_str}") from None
+            dates.append(d)
+            source_slot_ids.add(f"{step.from_room}_{d}")
+            destination_slot_ids.add(f"{step.to_room}_{d}")
+        parsed_dates[(step.from_room, step.to_room, step.booking_id)] = dates
 
-            res = await db.execute(select(Slot).where(Slot.id == from_slot_id))
-            slot = res.scalar_one_or_none()
+    slot_ids = source_slot_ids | destination_slot_ids
+    if slot_ids:
+        slot_rows = await db.execute(select(Slot).where(Slot.id.in_(slot_ids)).with_for_update())
+        slots_by_id = {slot.id: slot for slot in slot_rows.scalars().all()}
+    else:
+        slots_by_id = {}
 
-            if slot and slot.booking_id == step.booking_id:
-                # Capture channel attribution before clearing
-                if step.booking_id not in booking_channel:
-                    booking_channel[step.booking_id] = (slot.channel, slot.channel_partner)
-                slot.block_type      = BlockType.EMPTY
-                slot.booking_id      = None
-                slot.channel_partner = None
-                slots_updated += 1
-            else:
-                logger.debug("Vacate skipped for %s (already empty or changed)", from_slot_id)
+    for step in body.swap_plan:
+        for d in parsed_dates[(step.from_room, step.to_room, step.booking_id)]:
+            source_id = f"{step.from_room}_{d}"
+            source_slot = slots_by_id.get(source_id)
+            if not source_slot or source_slot.booking_id != step.booking_id:
+                raise HTTPException(status_code=409, detail=f"Swap plan is stale at {source_id}")
+
+            target_id = f"{step.to_room}_{d}"
+            target_slot = slots_by_id.get(target_id)
+            if target_slot and target_slot.block_type != BlockType.EMPTY and target_id not in source_slot_ids:
+                raise HTTPException(status_code=409, detail=f"Target slot {target_id} is no longer empty")
+
+    room_ids = {step.from_room for step in body.swap_plan} | {step.to_room for step in body.swap_plan}
+    room_rows = await db.execute(select(Room.id, Room.base_rate).where(Room.id.in_(room_ids))) if room_ids else None
+    room_rates = {rid: rate for rid, rate in room_rows.all()} if room_rows else {}
+
+    # PASS 1: VACATE all source slots — capture channel/partner before clearing
+    booking_channel: dict[str, tuple] = {}
+    booking_rates: dict[tuple[str, date], float] = {}
+    for step in body.swap_plan:
+        for d in parsed_dates[(step.from_room, step.to_room, step.booking_id)]:
+            source_slot = slots_by_id[f"{step.from_room}_{d}"]
+            if step.booking_id not in booking_channel:
+                booking_channel[step.booking_id] = (source_slot.channel, source_slot.channel_partner)
+            booking_rates[(step.booking_id, d)] = source_slot.current_rate
+            source_slot.block_type      = BlockType.EMPTY
+            source_slot.booking_id      = None
+            source_slot.channel_partner = None
+            source_slot.current_rate    = room_rates.get(step.from_room, source_slot.current_rate)
+            slots_updated += 1
 
     # PASS 2: FILL all destination slots, restoring original channel attribution
     for step in body.swap_plan:
-        to_room    = step.to_room
-        booking_id = step.booking_id
-        orig_channel, orig_partner = booking_channel.get(booking_id, (None, None))
+        orig_channel, orig_partner = booking_channel.get(step.booking_id, (Channel.DIRECT, None))
 
-        for date_str in step.dates:
-            d = date.fromisoformat(date_str)
-            to_slot_id = f"{to_room}_{d}"
-
-            tr = await db.execute(select(Slot).where(Slot.id == to_slot_id))
-            to_slot = tr.scalar_one_or_none()
+        for d in parsed_dates[(step.from_room, step.to_room, step.booking_id)]:
+            to_slot_id = f"{step.to_room}_{d}"
+            to_slot = slots_by_id.get(to_slot_id)
 
             if to_slot:
-                if to_slot.block_type != BlockType.EMPTY:
-                    logger.warning("Collision at %s while filling booking %s", to_slot_id, booking_id)
-                    continue
-
                 to_slot.block_type      = BlockType.SOFT
-                to_slot.booking_id      = booking_id
+                to_slot.booking_id      = step.booking_id
                 to_slot.channel         = orig_channel
                 to_slot.channel_partner = orig_partner
+                to_slot.current_rate    = booking_rates.get((step.booking_id, d), to_slot.current_rate)
                 slots_updated += 1
             else:
-                room_res = await db.execute(select(Room).where(Room.id == to_room))
-                room_obj = room_res.scalar_one_or_none()
                 db.add(Slot(
                     id=to_slot_id,
-                    room_id=to_room,
+                    room_id=step.to_room,
                     date=d,
                     block_type=BlockType.SOFT,
-                    booking_id=booking_id,
-                    current_rate=room_obj.base_rate if room_obj else 0.0,
+                    booking_id=step.booking_id,
+                    current_rate=booking_rates.get((step.booking_id, d), room_rates.get(step.to_room, 0.0)),
                     channel=orig_channel,
                     channel_partner=orig_partner,
                 ))
                 slots_updated += 1
 
         # Update Booking model to stay in sync
-        bk_r = await db.execute(select(Booking).where(Booking.id == booking_id))
+        bk_r = await db.execute(select(Booking).where(Booking.id == step.booking_id))
         bk = bk_r.scalar_one_or_none()
         if bk:
-            bk.assigned_room_id = to_room
+            bk.assigned_room_id = step.to_room
 
         applied += 1
 
@@ -215,11 +246,7 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
     tagged with the correct channel + partner. The manager can later hand these
     to the OTA allotment or assign real guest names via receptionist.
     """
-    try:
-        cat = RoomCategory(body.category)
-    except ValueError:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    cat = body.category
 
     ch, partner = _resolve_channel(body.booking_source)
     if ch != Channel.OTA or not partner:
@@ -229,8 +256,8 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
             detail="Channel allocation only supports configured US/global OTA partners. Unallocated inventory remains Direct Hotel Front Desk.",
         )
 
-    check_in  = date.fromisoformat(body.check_in)
-    check_out = date.fromisoformat(body.check_out)
+    check_in = body.check_in
+    check_out = body.check_out
     if check_out <= check_in:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="check_out must be after check_in")
@@ -244,16 +271,16 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"No active rooms for category {body.category}")
 
-    # Load existing slots in the window to know which rooms are free each night
+    # Lock existing slots in the window to avoid double-allocation races.
     slots_res = await db.execute(
         select(Slot).where(
             Slot.room_id.in_([r.id for r in rooms]),
             Slot.date >= check_in,
             Slot.date < check_out,
-            Slot.block_type != BlockType.EMPTY,
-        )
+        ).with_for_update()
     )
-    occupied: set[str] = {s.id for s in slots_res.scalars().all()}  # "room_date"
+    slots_by_id = {s.id: s for s in slots_res.scalars().all()}
+    occupied: set[str] = {s.id for s in slots_by_id.values() if s.block_type != BlockType.EMPTY}
 
     booking_ids: list[str] = []
     allocated_rooms: set[str] = set()
@@ -289,16 +316,25 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
 
         for night in nights:
             slot_id = f"{room.id}_{night}"
-            db.add(Slot(
-                id=slot_id,
-                room_id=room.id,
-                date=night,
-                block_type=BlockType.SOFT,
-                booking_id=bid,
-                current_rate=room.base_rate,
-                channel=ch,
-                channel_partner=partner,
-            ))
+            slot = slots_by_id.get(slot_id)
+            if slot:
+                slot.block_type = BlockType.SOFT
+                slot.booking_id = bid
+                slot.channel = ch
+                slot.channel_partner = partner
+                if not slot.current_rate:
+                    slot.current_rate = room.base_rate
+            else:
+                db.add(Slot(
+                    id=slot_id,
+                    room_id=room.id,
+                    date=night,
+                    block_type=BlockType.SOFT,
+                    booking_id=bid,
+                    current_rate=room.base_rate,
+                    channel=ch,
+                    channel_partner=partner,
+                ))
             total_slots += 1
 
         booking_ids.append(bid)
@@ -308,10 +344,10 @@ async def channel_allocate(body: ChannelAllocateRequest, db: AsyncSession) -> Ch
 
     source_label = partner or "Direct Hotel Front Desk"
     if not booking_ids:
-        msg = f"No free {body.category} rooms found for {body.check_in} → {body.check_out}."
+        msg = f"No free {body.category.value} rooms found for {body.check_in} → {body.check_out}."
     else:
         msg = (
-            f"Allocated {len(booking_ids)} {body.category} room(s) to {source_label} "
+            f"Allocated {len(booking_ids)} {body.category.value} room(s) to {source_label} "
             f"for {body.check_in} → {body.check_out} ({len(nights)} nights, {total_slots} slots)."
         )
 
@@ -335,17 +371,28 @@ def _channel_news_context_lines(today: date) -> list[str]:
     Mock OTA news and campaign context for the Channel Strategy agent.
     Occupancy, inventory, booking history, and channel performance are not mocked.
     """
-    return [
+    from services.ai.channel_news import get_partner_news
+
+    lines = [
         f"Channel intelligence context as of {today.isoformat()}:",
         "",
         "Mock OTA news and campaign feed:",
-        "  2026-05-08..2026-05-09 | Expedia | API downtime reported in partner connectivity feed. Avoid incremental Expedia slot pushes until the downtime window clears.",
-        "  2026-05-08..2026-05-15 | Booking.com | Northeast Weekend Escape campaign active for US leisure and inbound city-drive demand.",
-        "  2026-05-10..2026-05-13 | Priceline | Weekday opaque-rate promotion active for price-sensitive Standard/Economy gaps.",
-        "  2026-05-13..2026-05-16 | Travelocity | US package leisure campaign starts; useful as a supplemental OTA for late-week leisure gaps.",
-        "  2026-05-14..2026-05-21 | Orbitz | Rewards-led US leisure campaign starts after the current Expedia downtime window.",
-        "  2026-05-05..2026-05-20 | Hotels.com | Loyalty campaign active, but shared Expedia Group infrastructure means monitor partner-health risk.",
     ]
+    for partner in OTA_PARTNER_NAMES_LIST:
+        news = get_partner_news(partner, today=today)
+        active = news.get("recent_events") or []
+        if active:
+            event_bits = []
+            for event in active:
+                event_bits.append(
+                    f"{event.get('start_date')}..{event.get('end_date')} | {event.get('headline')}"
+                )
+            lines.append(
+                f"  {partner} | signal={news.get('signal')} | {'; '.join(event_bits)} | {news.get('signal_reason')}"
+            )
+        else:
+            lines.append(f"  {partner} | signal=NEUTRAL | no active OTA campaign or partner-health issue today.")
+    return lines
 
 
 def _confidence_rank(confidence: str | None) -> int:
@@ -509,6 +556,21 @@ async def get_channel_recommendations() -> ChannelRecommendResponse:
         inventory_text,
     ])
 
+    context_hash = _stable_hash({
+        "today": today.isoformat(),
+        "context": context_text,
+    })
+    now = time.time()
+    cached = _CHANNEL_RECOMMEND_CACHE.get(context_hash)
+    if cached and now - cached[0] <= _CHANNEL_CACHE_TTL_SECONDS:
+        payload = copy.deepcopy(cached[1])
+        payload["cache_hit"] = True
+        return ChannelRecommendResponse(**payload)
+
+    for key, (created_at, _) in list(_CHANNEL_RECOMMEND_CACHE.items()):
+        if now - created_at > _CHANNEL_CACHE_TTL_SECONDS:
+            _CHANNEL_RECOMMEND_CACHE.pop(key, None)
+
     raw = await run_channel_agent(context_text, today, AsyncSessionLocal)
 
     recs = []
@@ -519,10 +581,15 @@ async def get_channel_recommendations() -> ChannelRecommendResponse:
             continue
         recs.append(ChannelRecommendation(**{**r, "category": str(r.get("category", "")).upper(), "channel_type": "OTA"}))
     partner_insights = _normalise_partner_insights(raw, recs, today)
-    return ChannelRecommendResponse(
+    response = ChannelRecommendResponse(
         as_of=today.isoformat(),
         analysis_window_days=14,
         recommendations=recs,
         partner_insights=partner_insights,
         summary=raw.get("summary", ""),
+        run_id=uuid.uuid4().hex,
+        cache_hit=False,
+        context_hash=context_hash,
     )
+    _CHANNEL_RECOMMEND_CACHE[context_hash] = (time.time(), response.model_dump())
+    return response

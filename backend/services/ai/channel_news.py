@@ -13,6 +13,11 @@ Each partner entry:
   signal_reason      : plain-English allocation guidance for this partner
 """
 
+from __future__ import annotations
+
+import copy
+from datetime import date
+
 CHANNEL_NEWS: dict[str, dict] = {
     "Expedia": {
         "news_score": -0.45,
@@ -223,7 +228,16 @@ CHANNEL_NEWS: dict[str, dict] = {
 }
 
 
-def get_partner_news(partner_name: str) -> dict:
+def _event_active(event: dict, today: date) -> bool:
+    try:
+        start = date.fromisoformat(str(event.get("start_date") or event.get("date")))
+        end = date.fromisoformat(str(event.get("end_date") or event.get("date")))
+    except (TypeError, ValueError):
+        return False
+    return start <= today <= end
+
+
+def get_partner_news(partner_name: str, today: date | None = None) -> dict:
     """
     Return date-aware OTA news/campaign data for a partner. Case-insensitive lookup.
     Falls back to a neutral default for unknown partners.
@@ -241,4 +255,38 @@ def get_partner_news(partner_name: str) -> dict:
             "recent_events": [],
             "signal_reason": "No OTA news/campaign data available for this partner.",
         }
-    return {"partner": key, **data}
+
+    payload = {"partner": key, **copy.deepcopy(data)}
+    if today is None:
+        return payload
+
+    events = [e for e in payload.get("recent_events", []) if isinstance(e, dict)]
+    active_events = [e for e in events if _event_active(e, today)]
+    payload["recent_events"] = active_events
+    payload["inactive_events"] = events
+
+    if not active_events:
+        payload["news_score"] = 0.0
+        payload["news_label"] = "NEUTRAL"
+        payload["signal"] = "NEUTRAL"
+        payload["signal_reason"] = (
+            f"No active OTA campaign or partner-health issue for {key} on {today.isoformat()}. "
+            "Use live inventory gaps and historical channel performance as the primary ranking signals."
+        )
+        return payload
+
+    if any(str(e.get("type")) in {"partner_connectivity", "infrastructure_watch"} for e in active_events):
+        payload["signal"] = "PENALIZE"
+        payload["news_label"] = "NEGATIVE"
+        payload["signal_reason"] = (
+            f"Active partner-health risk for {key} on {today.isoformat()}; use safer OTA alternatives "
+            "unless this partner materially outperforms on the target dates."
+        )
+    elif any(str(e.get("type")).startswith("positive") for e in active_events):
+        payload["signal"] = "PREFER"
+        payload["news_label"] = "POSITIVE"
+        payload["signal_reason"] = (
+            f"Active OTA campaign/update for {key} overlaps {today.isoformat()}; prefer this partner "
+            "when inventory gaps and historical performance also support it."
+        )
+    return payload

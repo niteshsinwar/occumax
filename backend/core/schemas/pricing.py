@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import date
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -23,7 +24,10 @@ class PricingContextItem(BaseModel):
     detail: str
     severity: str  # INFO | ALERT
     location: Optional[str] = None
-    factors: list[PricingContextFactor] = []
+    impact_start_offset_days: Optional[int] = Field(default=None, ge=0, le=60)
+    impact_end_offset_days: Optional[int] = Field(default=None, ge=0, le=60)
+    demand_segment: Optional[str] = None
+    factors: list[PricingContextFactor] = Field(default_factory=list)
 
 
 class PricingAnalyseRequest(BaseModel):
@@ -79,16 +83,20 @@ class PricingAnalyseResponse(BaseModel):
     recommendations: list[PricingRecommendation]  # flat list for review table (INCREASE/DISCOUNT only)
     dates: list[str]          # 20-day window ISO date strings
     rescue_potential: float   # $ recoverable if all AI recs committed
+    run_id: str = ""
+    cache_hit: bool = False
+    llm_call_count: int = 0
+    context_hash: str = ""
 
 
 class PricingCommitItem(BaseModel):
     category: str
-    date: str
-    new_rate: float
+    date: date
+    new_rate: float = Field(gt=0)
 
 
 class PricingCommitRequest(BaseModel):
-    items: list[PricingCommitItem]
+    items: list[PricingCommitItem] = Field(min_length=1, max_length=500)
 
 
 class PricingCommitResult(BaseModel):

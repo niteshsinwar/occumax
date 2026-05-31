@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useMemo, useState } from "react";
 import type { ContextFeedItem } from "../mock/contextFeed";
 import { contextFeed, computeCompositeScore } from "../mock/contextFeed";
@@ -64,4 +65,3 @@ export function useOverviewSignals(): OverviewSignalsContextValue {
   if (!ctx) throw new Error("useOverviewSignals must be used within OverviewSignalsProvider");
   return ctx;
 }
-

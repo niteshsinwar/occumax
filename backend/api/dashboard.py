@@ -23,6 +23,12 @@ async def get_heatmap(db: AsyncSession = Depends(get_db)):
     return await ctrl.get_heatmap(db)
 
 
+@router.get("/summary")
+async def get_summary(db: AsyncSession = Depends(get_db)):
+    heatmap = await ctrl.get_heatmap(db)
+    return heatmap.summary
+
+
 @router.post("/optimise-preview", response_model=DashboardOptimisePreviewResponse)
 async def optimise_preview(body: DashboardOptimisePreviewRequest, db: AsyncSession = Depends(get_db)):
     """

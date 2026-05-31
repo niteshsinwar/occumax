@@ -16,6 +16,7 @@ import {
   BarChart2,
   ChevronDown,
   ChevronRight,
+  Clock,
   RefreshCw,
   Sparkles,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import {
 } from "./overviewChrome";
 
 const US_ACTIVE_OTA_PARTNERS = ["Expedia", "Hotels.com", "Booking.com", "Priceline", "Travelocity", "Orbitz"];
+const CHANNEL_INTEL_CACHE_KEY = "yieldiq_last_channel_intelligence";
 const ANALYSIS_STEPS = [
   "Scanning channel performance",
   "Reading OTA news and campaigns",
@@ -55,6 +57,13 @@ type PartnerIntel = {
 type ChannelIntelResult = {
   hasRecommendations: boolean;
   summary: string;
+  cacheHit?: boolean;
+  contextHash?: string;
+};
+
+type ChannelIntelCacheEntry = {
+  channelSignature: string;
+  payload: ChannelRecommendResponse;
 };
 
 function buildDefaultHealthMap(partners: string[]): Record<string, PartnerHealth> {
@@ -73,6 +82,10 @@ function healthBadgeClass(health: PartnerHealth): string {
   if (health === "GREEN") return "bg-occugreen/10 border-occugreen/30 text-occugreen";
   if (health === "AMBER") return "bg-occuorange/10 border-occuorange/30 text-occuorange";
   return "bg-red-500/10 border-red-500/30 text-red-600";
+}
+
+function baselineBadgeClass(): string {
+  return "bg-surface-2 border-border text-text-muted";
 }
 
 function healthLabel(health: PartnerHealth): string {
@@ -115,6 +128,28 @@ function insightToPartnerIntel(insight: ChannelPartnerInsight): PartnerIntel {
   };
 }
 
+function channelSignature(data: ChannelPerformanceResponse | null): string {
+  if (!data) return "";
+  const raw = JSON.stringify({
+    as_of: data.as_of,
+    window_start: data.window_start,
+    window_end: data.window_end,
+    total_room_nights: data.total_room_nights,
+    total_gross_revenue: data.total_gross_revenue,
+    total_net_revenue: data.total_net_revenue,
+    channels: data.channels.map(ch => ({
+      channel: ch.channel,
+      room_nights: ch.room_nights,
+      gross_revenue: ch.gross_revenue,
+      net_revenue: ch.net_revenue,
+      partners: ch.partners.map(p => [p.partner, p.room_nights, p.gross_revenue, p.net_revenue]),
+    })),
+  });
+  let hash = 0;
+  for (const ch of raw) hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
+  return String(hash);
+}
+
 /**
  * Channel Insights and Optimization tab.
  * Pulled from the legacy Manager page Channels tab to be reused inside Overview.
@@ -136,6 +171,7 @@ export function ChannelOptimizationTab() {
   const [channelIntelResult, setChannelIntelResult] = useState<ChannelIntelResult | null>(null);
   const [analysisStepIndex, setAnalysisStepIndex] = useState(0);
   const [partnerIntel, setPartnerIntel] = useState<Record<string, PartnerIntel>>({});
+  const [hasCachedIntel, setHasCachedIntel] = useState(false);
 
   const loadChannelData = useCallback(async (window_days: number) => {
     setChannelLoading(true);
@@ -152,6 +188,10 @@ export function ChannelOptimizationTab() {
   useEffect(() => {
     loadChannelData(channelWindow);
   }, [channelWindow, loadChannelData]);
+
+  useEffect(() => {
+    setHasCachedIntel(!!localStorage.getItem(CHANNEL_INTEL_CACHE_KEY));
+  }, []);
 
   useEffect(() => {
     if (!channelIntelLoading) return;
@@ -191,6 +231,89 @@ export function ChannelOptimizationTab() {
     show("Cleared channel intelligence", "success");
   };
 
+  const applyChannelPayload = useCallback((recPayload: ChannelRecommendResponse) => {
+    const recommendations = recPayload.recommendations ?? [];
+    const summary = recPayload.summary?.trim() || (
+      recommendations.length > 0
+        ? "YieldIQ found OTA opportunities based on current inventory gaps, channel history, and active OTA news."
+        : "YieldIQ found no OTA slot push worth prioritizing in this run. Keep unsold inventory available for direct hotel selling unless channel conditions change."
+    );
+    const insightByPartner = new Map(
+      (recPayload.partner_insights ?? [])
+        .filter(insight => partnerList.includes(insight.partner))
+        .map(insight => [insight.partner, insight]),
+    );
+    const bestByPartner: Record<string, ChannelRecommendation> = {};
+    for (const rec of recommendations) {
+      if (!partnerList.includes(rec.booking_source)) continue;
+      const prev = bestByPartner[rec.booking_source];
+      const prevScore = prev ? confidenceScore(prev.confidence) + (prev.expected_net ?? 0) / 10000 : -1;
+      const nextScore = confidenceScore(rec.confidence) + (rec.expected_net ?? 0) / 10000;
+      if (!prev || nextScore > prevScore) bestByPartner[rec.booking_source] = rec;
+    }
+
+    const nextIntel: Record<string, PartnerIntel> = {};
+    const nextHealth = buildDefaultHealthMap(partnerList);
+    for (const partner of partnerList) {
+      const insight = insightByPartner.get(partner);
+      if (insight) {
+        nextHealth[partner] = insight.health;
+        nextIntel[partner] = insightToPartnerIntel(insight);
+        continue;
+      }
+
+      const rec = bestByPartner[partner];
+      if (rec) {
+        nextIntel[partner] = {
+          preference: preferenceFromRecommendation(rec),
+          confidence: rec.confidence,
+          score: confidenceScore(rec.confidence) + (rec.expected_net ?? 0) / 10000,
+          reasoning: rec.reasoning,
+          category: rec.category,
+          checkIn: rec.check_in,
+          checkOut: rec.check_out,
+          roomCount: rec.room_count,
+          expectedNet: rec.expected_net,
+        };
+      } else {
+        nextIntel[partner] = {
+          preference: "HOLD",
+          confidence: "LOW",
+          score: 35,
+          reasoning: "YieldIQ did not find a stronger date/category fit for this partner from current gaps, booking history, and OTA news.",
+        };
+      }
+    }
+
+    setChannelIntelResult({
+      hasRecommendations: recommendations.length > 0,
+      summary,
+      cacheHit: Boolean(recPayload.cache_hit),
+      contextHash: recPayload.context_hash,
+    });
+    setPartnerHealth(nextHealth);
+    setPartnerIntel(nextIntel);
+  }, [partnerList]);
+
+  const handleLoadCachedIntel = useCallback(() => {
+    const raw = localStorage.getItem(CHANNEL_INTEL_CACHE_KEY);
+    if (!raw) return;
+    try {
+      const entry = JSON.parse(raw) as ChannelIntelCacheEntry;
+      const currentSignature = channelSignature(channelData);
+      if (entry.channelSignature && currentSignature && entry.channelSignature !== currentSignature) {
+        localStorage.removeItem(CHANNEL_INTEL_CACHE_KEY);
+        setHasCachedIntel(false);
+        show("Previous channel intelligence is stale after channel data changed. Run fresh intelligence.", "error");
+        return;
+      }
+      applyChannelPayload({ ...entry.payload, cache_hit: true });
+      show("Loaded previous channel intelligence", "success");
+    } catch {
+      show("Could not load previous channel intelligence", "error");
+    }
+  }, [applyChannelPayload, channelData, show]);
+
   const handleRunChannelIntelligence = async () => {
     setChannelIntelLoading(true);
     setChannelIntelResult(null);
@@ -199,63 +322,15 @@ export function ChannelOptimizationTab() {
     try {
       const recRes = await getChannelRecommendations();
       const recPayload = recRes.data as ChannelRecommendResponse;
-      const recommendations = recPayload.recommendations ?? [];
-      const summary = recPayload.summary?.trim() || (
-        recommendations.length > 0
-          ? "YieldIQ found OTA opportunities based on current inventory gaps, channel history, and active OTA news."
-          : "YieldIQ found no OTA slot push worth prioritizing in this run. Keep unsold inventory available for direct hotel selling unless channel conditions change."
-      );
-      const insightByPartner = new Map(
-        (recPayload.partner_insights ?? [])
-          .filter(insight => partnerList.includes(insight.partner))
-          .map(insight => [insight.partner, insight]),
-      );
-      const bestByPartner: Record<string, ChannelRecommendation> = {};
-      for (const rec of recommendations) {
-        if (!partnerList.includes(rec.booking_source)) continue;
-        const prev = bestByPartner[rec.booking_source];
-        const prevScore = prev ? confidenceScore(prev.confidence) + (prev.expected_net ?? 0) / 10000 : -1;
-        const nextScore = confidenceScore(rec.confidence) + (rec.expected_net ?? 0) / 10000;
-        if (!prev || nextScore > prevScore) bestByPartner[rec.booking_source] = rec;
-      }
-
-      const nextIntel: Record<string, PartnerIntel> = {};
-      const nextHealth = buildDefaultHealthMap(partnerList);
-      for (const partner of partnerList) {
-        const insight = insightByPartner.get(partner);
-        if (insight) {
-          nextHealth[partner] = insight.health;
-          nextIntel[partner] = insightToPartnerIntel(insight);
-          continue;
-        }
-
-        const rec = bestByPartner[partner];
-        if (rec) {
-          nextIntel[partner] = {
-            preference: preferenceFromRecommendation(rec),
-            confidence: rec.confidence,
-            score: confidenceScore(rec.confidence) + (rec.expected_net ?? 0) / 10000,
-            reasoning: rec.reasoning,
-            category: rec.category,
-            checkIn: rec.check_in,
-            checkOut: rec.check_out,
-            roomCount: rec.room_count,
-            expectedNet: rec.expected_net,
-          };
-        } else {
-          nextIntel[partner] = {
-            preference: "HOLD",
-            confidence: "LOW",
-            score: 35,
-            reasoning: "YieldIQ did not find a stronger date/category fit for this partner from current gaps, booking history, and OTA news.",
-          };
-        }
-      }
-
-      setChannelIntelResult({ hasRecommendations: recommendations.length > 0, summary });
-      setPartnerHealth(nextHealth);
-      setPartnerIntel(nextIntel);
-      show("Channel intelligence complete: recommendations updated", "success");
+      applyChannelPayload(recPayload);
+      try {
+        localStorage.setItem(CHANNEL_INTEL_CACHE_KEY, JSON.stringify({
+          channelSignature: channelSignature(channelData),
+          payload: recPayload,
+        } satisfies ChannelIntelCacheEntry));
+        setHasCachedIntel(true);
+      } catch { /* quota */ }
+      show(recPayload.cache_hit ? "Loaded cached channel intelligence" : "Channel intelligence complete: recommendations updated", "success");
     } catch {
       show("Channel intelligence analysis failed", "error");
     } finally {
@@ -325,6 +400,14 @@ export function ChannelOptimizationTab() {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {hasCachedIntel && !channelIntelResult && (
+              <button
+                onClick={handleLoadCachedIntel}
+                className={`${overviewSecondaryBtnClass} px-4 py-2.5`}
+              >
+                <Clock className="w-3 h-3" /> Previous Intelligence
+              </button>
+            )}
             <button
               onClick={handleRunChannelIntelligence}
               disabled={channelIntelLoading}
@@ -399,8 +482,10 @@ export function ChannelOptimizationTab() {
                           {preference}
                         </span>
                       )}
-                      <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 border ${healthBadgeClass(health)}`}>
-                        {healthLabel(health)}
+                      <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 border ${
+                        hasPartnerIntel ? healthBadgeClass(health) : baselineBadgeClass()
+                      }`}>
+                        {hasPartnerIntel ? healthLabel(health) : "Baseline"}
                       </span>
                     </div>
                     {intel && (
@@ -467,10 +552,16 @@ export function ChannelOptimizationTab() {
                   YieldIQ summary · {channelIntelResult.hasRecommendations ? "slot guidance" : "monitor only"}
                 </div>
                 <div className="text-xs text-text-muted mt-2 leading-relaxed">{channelIntelResult.summary}</div>
+                <div className="mt-2 text-[10px] uppercase tracking-widest text-text-muted">
+                  {channelIntelResult.cacheHit ? "Cached intelligence" : "Fresh intelligence"}
+                  {channelIntelResult.contextHash ? ` · trace ${channelIntelResult.contextHash}` : ""}
+                </div>
               </div>
             ) : (
               <div className={`mt-4 border border-dashed border-border/70 ${overviewInsetClass} p-4 text-xs text-text-muted`}>
-                Run Channel Intelligence to send current inventory, booking history, and date-aware OTA news into YieldIQ for partner-level recommendations.
+                {channelData?.recommendation
+                  ? channelData.recommendation
+                  : "Run Channel Intelligence to send current inventory, booking history, and date-aware OTA news into YieldIQ for partner-level recommendations."}
               </div>
             )}
 

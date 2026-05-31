@@ -4,19 +4,20 @@ from typing import Optional
 Pricing AI Agent — Multi-call strategy with Poly AI
 
 Strategy:
-  Phase 1 (parallel): 4 focused factor calls — weather, events, market, historical
-  Phase 2 (12 parallel): 3 categories × 4 date-windows of 5 days each = 12 micro-synthesis calls
-    Each call covers 1 category + 5 specific days — output fits in Poly AI's 400-token cap
-  Phase 3: merge 12 results, derive reasons from factor data, persist to pricing_recs
-
-Categories priced: ECONOMY, STANDARD, STUDIO  (extend SYNTHESIS_CATEGORIES to add more)
+  Phase 1: build factor context from frontend context feed or legacy mock sources.
+  Phase 2: one parallel synthesis call per active category with unsold inventory.
+  Phase 3: merge results, derive reasons from factor data, persist to pricing_recs.
 """
 
 
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 import re
+import time
+import uuid
 from datetime import date, timedelta
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -30,8 +31,10 @@ logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 20
 CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
-SYNTHESIS_CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO"]  # categories priced by AI
+SYNTHESIS_CATEGORIES = CATEGORIES  # categories priced by AI when present in the live snapshot
 WINDOW_SIZE = 5   # days per micro-synthesis shard
+_CACHE_TTL_SECONDS = 15 * 60
+_RUN_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 # ── LLM factory ───────────────────────────────────────────────────────────────
@@ -86,6 +89,72 @@ def _parse_json(text: str, default: dict) -> dict:
             pass
     logger.debug("JSON parse failed for label — using default")
     return default
+
+
+def _stable_hash(payload: object) -> str:
+    raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _composite_score(item: dict) -> int:
+    factors = item.get("factors") or []
+    weight_sum = 0.0
+    score_sum = 0.0
+    for factor in factors:
+        if not isinstance(factor, dict):
+            continue
+        weight = max(0.0, min(1.0, float(factor.get("weight") or 0.0)))
+        score = max(0.0, min(100.0, float(factor.get("score") or 0.0)))
+        weight_sum += weight
+        score_sum += score * weight
+    return round(score_sum / weight_sum) if weight_sum > 0 else 0
+
+
+def _context_payload(context_items: Optional[list[dict]], today: date) -> tuple[str, dict[str, list[dict]]]:
+    fragments: list[str] = []
+    date_signals: dict[str, list[dict]] = {}
+
+    for item in context_items or []:
+        if not isinstance(item, dict):
+            continue
+
+        title = str(item.get("title") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        severity = str(item.get("severity") or "").strip()
+        segment = str(item.get("demand_segment") or "").strip()
+        score = _composite_score(item)
+
+        factors = []
+        for factor in item.get("factors") or []:
+            if not isinstance(factor, dict):
+                continue
+            label = str(factor.get("label") or "").strip()
+            value = str(factor.get("value") or "").strip()
+            if label or value:
+                factors.append(f"{label}: {value}".strip(": "))
+
+        if title or detail or factors:
+            fragments.append(
+                " - ".join(part for part in [title, detail, "; ".join(factors)] if part)
+            )
+
+        start_offset = int(item.get("impact_start_offset_days") or 0)
+        end_offset = int(item.get("impact_end_offset_days") if item.get("impact_end_offset_days") is not None else start_offset)
+        start_offset = max(0, min(60, start_offset))
+        end_offset = max(start_offset, min(60, end_offset))
+        signal = {
+            "kind": kind,
+            "severity": severity,
+            "title": title,
+            "score": score,
+            "segment": segment,
+        }
+        for delta in range(start_offset, end_offset + 1):
+            d = (today + timedelta(days=delta)).isoformat()
+            date_signals.setdefault(d, []).append(signal)
+
+    return " | ".join(fragments)[:1200], date_signals
 
 
 # ── Call 1: Weather analysis ──────────────────────────────────────────────────
@@ -229,6 +298,7 @@ Rules:
 - action: INCREASE or DISCOUNT only (omit dates where BAR should hold unchanged).
 - INCREASE when: weekend pickup strength OR category occ_pct suggests compression OR demand signals warrant uplift.
 - DISCOUNT when: weak pickup AND discretionary/unsold inventory should clear faster — prioritize realistic BAR reductions vs OTB/floor.
+- Use each day's signals/context_score plus market_insight as supplied external context. Do not invent events, weather, travel shocks, or market news.
 - rate: integer, must be >= floor_rate from payload, rounded to nearest $5
 - conf: HIGH / MEDIUM / LOW based on confidence given occupancy totals vs OTB in payload.
 - Keep JSON compact — fewer dates analyzed means shorter arrays are acceptable.
@@ -268,6 +338,7 @@ def _derive_reason(
     event_factor = ev.get("brief", "") or ""
     weather_factor = wx.get("brief", "") or ""
     news_factor = market_analysis.get("key_insight", "")[:80] if market_analysis.get("key_insight") else ""
+    date_signals = market_analysis.get("date_signals", {}).get(date_str, [])
 
     # Build reason from strongest signal
     if ev.get("demand_boost_pct", 0) > 0 and ev.get("event"):
@@ -280,6 +351,9 @@ def _derive_reason(
         reason = f"{cat} occupancy at {occ:.0f}% — strong on-books demand supports rate increase."
     elif occ < 35:
         reason = f"{cat} occupancy at {occ:.0f}% — rate support needed to drive advance bookings."
+    elif date_signals:
+        titles = ", ".join(str(s.get("title") or "") for s in date_signals[:2] if s.get("title"))
+        reason = f"{cat} date-aware demand signal: {titles} — rate adjustment warranted."
     else:
         insight = market_analysis.get("key_insight", "")
         reason = (insight[:120] + " — rate adjustment warranted.") if insight else f"Day-of-week demand pattern for {cat} warrants pricing action."
@@ -308,6 +382,7 @@ async def _synthesis_shard(
         b = snap_cat.get(d, {})
         ev = events_analysis.get(d, {})
         wx = weather_analysis.get(d, {})
+        day_signals = market_analysis.get("date_signals", {}).get(d, [])
         remaining = int(b.get("total", 0) or 0) - int(b.get("otb", 0) or 0)
         day_rows.append({
             "date": d,
@@ -321,6 +396,8 @@ async def _synthesis_shard(
             "event": ev.get("event") or None,
             "event_boost": ev.get("demand_boost_pct", 0),
             "weather": wx.get("impact", "neutral"),
+            "signals": day_signals[:4],
+            "context_score": max([int(s.get("score") or 0) for s in day_signals] or [0]),
             "is_weekend": date.fromisoformat(d).weekday() >= 4,
         })
 
@@ -328,6 +405,7 @@ async def _synthesis_shard(
         "days": day_rows,
         "seasonal_multiplier": history_analysis.get("seasonal_multipliers", {}).get(category, 1.0),
         "market_rate_pressure": market_analysis.get("rate_pressure", "flat"),
+        "market_insight": market_analysis.get("key_insight", "")[:1200],
     }, ensure_ascii=False)
 
     system = _SHARD_SYSTEM.format(
@@ -399,6 +477,24 @@ def _dates_with_unsold_inventory(snapshot: dict, cat: str, dates_window: list[st
         otb = int(b.get("otb", 0) or 0)
         if total > otb:
             out.append(d)
+    return out
+
+
+def _eligible_synthesis_categories(
+    snapshot: dict,
+    today: date,
+    analysis_window_days: int,
+    empty_nights_only: bool,
+) -> list[str]:
+    dates_window = [(today + timedelta(days=i)).isoformat() for i in range(analysis_window_days)]
+    out: list[str] = []
+    for cat in SYNTHESIS_CATEGORIES:
+        snap_cat = snapshot.get(cat)
+        if not snap_cat:
+            continue
+        if empty_nights_only and not _dates_with_unsold_inventory(snapshot, cat, dates_window):
+            continue
+        out.append(cat)
     return out
 
 
@@ -571,11 +667,16 @@ async def _persist_recs(
             d_str = cell.get("date", "")
             if not d_str:
                 continue
+            try:
+                rec_date = date.fromisoformat(str(d_str))
+            except ValueError:
+                logger.warning("Skipping pricing rec with invalid date: %s", d_str)
+                continue
             snap_day = snap_cat.get(d_str, {})
             rows.append({
                 "id": f"{cat.upper()}_{d_str}",
                 "category": cat.upper(),
-                "date": d_str,
+                "date": rec_date,
                 "recommended_action": cell.get("action", "MAINTAIN"),
                 "current_rate": float(snap_day.get("avg_rate", 0.0)),
                 "recommended_rate": float(cell.get("suggested_rate", snap_day.get("avg_rate", 0.0))),
@@ -632,6 +733,30 @@ async def run_pricing_agent(
     Phase 2 — 1 synthesis call combining all signals + live occupancy
     Phase 3 — persist to pricing_recs table
     """
+    run_id = uuid.uuid4().hex
+    context_hash = _stable_hash(context_items or [])
+    cache_key = _stable_hash({
+        "snapshot": snapshot,
+        "context_hash": context_hash,
+        "today": today.isoformat(),
+        "analysis_window_days": analysis_window_days,
+        "empty_nights_only": empty_nights_only,
+    })
+    now = time.time()
+    cached = _RUN_CACHE.get(cache_key)
+    if cached and now - cached[0] <= _CACHE_TTL_SECONDS:
+        result = copy.deepcopy(cached[1])
+        result["_meta"] = {
+            **result.get("_meta", {}),
+            "cache_hit": True,
+            "cache_key": cache_key,
+        }
+        return result
+
+    for key, (created_at, _) in list(_RUN_CACHE.items()):
+        if now - created_at > _CACHE_TTL_SECONDS:
+            _RUN_CACHE.pop(key, None)
+
     llm = _make_llm()
 
     # Historical trends remain internal/demo; external context should come from provided context_items.
@@ -640,12 +765,12 @@ async def run_pricing_agent(
     if context_items:
         # When context is provided from the frontend, do NOT use backend mock external data.
         weather_analysis, events_analysis = {}, {}
+        context_insight, date_signals = _context_payload(context_items, today)
         market_analysis = {
             "sentiment": "neutral",
             "rate_pressure": "flat",
-            "key_insight": " | ".join(
-                [str(i.get("title") or "") for i in context_items if isinstance(i, dict) and i.get("title")]
-            )[:400],
+            "key_insight": context_insight,
+            "date_signals": date_signals,
             "category_outlook": {},
         }
     else:
@@ -686,6 +811,15 @@ async def run_pricing_agent(
         logger.warning("History call timed out — using defaults")
         history_analysis = {}
 
+    synthesis_categories = _eligible_synthesis_categories(
+        snapshot,
+        today,
+        analysis_window_days,
+        empty_nights_only,
+    )
+    base_llm_call_count = 1 if context_items else 4  # history, plus legacy weather/events/market when used
+    expected_llm_call_count = base_llm_call_count + len(synthesis_categories) + 1  # + summary
+
     # Phase 2: 1 micro-shard per category + 1 summary — all parallel
     # Each shard covers 1 category × 20 days with compact output (fits Poly AI 400-token cap)
     try:
@@ -705,5 +839,16 @@ async def run_pricing_agent(
 
     # Phase 3: persist
     await _persist_recs(result, snapshot, session_factory)
+
+    result["_meta"] = {
+        "run_id": run_id,
+        "cache_hit": False,
+        "cache_key": cache_key,
+        "context_hash": context_hash,
+        "context_item_count": len(context_items or []),
+        "llm_call_count": expected_llm_call_count,
+        "synthesis_categories": synthesis_categories,
+    }
+    _RUN_CACHE[cache_key] = (time.time(), copy.deepcopy(result))
 
     return result

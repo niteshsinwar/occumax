@@ -1,8 +1,13 @@
 import axios from "axios";
+import type { PricingCommitItem, SwapStep } from "../types";
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-export const api = axios.create({ baseURL: BASE, timeout: 600_000 });
+export const api = axios.create({
+  baseURL: BASE,
+  timeout: 600_000,
+  paramsSerializer: { indexes: null },
+});
 
 
 // Dashboard
@@ -11,7 +16,7 @@ export const getOccupancyForecast = (params: { start: string; end: string; as_of
   api.get("/analytics/occupancy-forecast", { params });
 export const dashboardOptimisePreview = (body: { start: string; end: string; categories: string[] }) =>
   api.post("/dashboard/optimise-preview", body);
-export const dashboardCommitShuffle = (swapPlan: any[]) => api.post("/dashboard/commit-shuffle", { swap_plan: swapPlan });
+export const dashboardCommitShuffle = (swapPlan: SwapStep[]) => api.post("/dashboard/commit-shuffle", { swap_plan: swapPlan });
 export const dashboardOptimiseKNightPreview = (body: { start: string; end: string; categories: string[]; target_nights: number }) =>
   api.post("/dashboard/optimise-k-night-preview", body);
 
@@ -22,7 +27,7 @@ export const dashboardScorecard = (body: {
   end: string;
   categories: string[];
   k_nights?: number[];
-  swap_plan?: any[] | null;
+  swap_plan?: SwapStep[] | null;
 }) => api.post("/dashboard/scorecard", body);
 
 export const getPace = (params: { start: string; end: string; as_of: string; max_lead_days?: number }) =>
@@ -32,7 +37,7 @@ export const getEventInsights = (params: { start: string; end: string; as_of: st
 
 // Manager
 export const fireOptimise = () => api.post("/manager/optimise");
-export const commitPlan = (swapPlan: any[]) => api.post("/manager/commit", { swap_plan: swapPlan });
+export const commitPlan = (swapPlan: SwapStep[]) => api.post("/manager/commit", { swap_plan: swapPlan });
 
 // Receptionist
 export const checkAvailability = (body: {
@@ -45,7 +50,7 @@ export const checkAvailability = (body: {
 export const confirmBooking = (body: {
   request: { category: string; check_in: string; check_out: string; guest_name?: string; channel?: string; channel_partner?: string | null };
   room_id: string;
-  swap_plan?: unknown[];
+  swap_plan?: SwapStep[];
 }) => api.post("/receptionist/confirm", body);
 
 export const findSplitStay = (body: {
@@ -87,11 +92,11 @@ export const sendAiMessage = (messages: { role: string; content: string }[], hot
 // Pricing AI
 export const analysePricing = () => api.get("/manager/pricing/analyse");
 export const analysePricingWithContext = (body: {
-  context_items: unknown[];
+  context_items: Record<string, unknown>[];
   window_days?: number;
   empty_nights_only?: boolean;
 }) => api.post("/manager/pricing/analyse-context", body);
-export const commitPricing  = (items: { category: string; date: string; new_rate: number }[]) =>
+export const commitPricing  = (items: PricingCommitItem[]) =>
   api.post("/manager/pricing/commit", { items });
 
 export const getRevenueSummary = (as_of?: string) =>

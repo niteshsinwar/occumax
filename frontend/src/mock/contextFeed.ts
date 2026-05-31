@@ -4,6 +4,9 @@ export type ContextFeedItem = {
   title: string;
   detail: string;
   location?: string;
+  impact_start_offset_days?: number;
+  impact_end_offset_days?: number;
+  demand_segment?: string;
   severity: "INFO" | "ALERT";
   factors: Array<{
     type: "WEATHER" | "EVENT" | "FLIGHT" | "MARKET";
@@ -29,6 +32,9 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "External shock detected → last-minute demand spike likely (disrupted arrivals re-book locally). Trigger clearance simulation.",
     location: "Chicago, IL",
+    impact_start_offset_days: 0,
+    impact_end_offset_days: 2,
+    demand_segment: "Last-minute transient",
     factors: [
       { type: "FLIGHT", label: "Flight disruption", value: "50+ cancellations (hub) · rebooking pressure ↑", score: 92, weight: 0.45 },
       { type: "WEATHER", label: "Weather pattern", value: "Severe storm band · ground stops likely", score: 78, weight: 0.25 },
@@ -43,6 +49,9 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "Storm risk increases same-day booking volatility; last-minute travelers shift to flexible rates and shorter LOS.",
     location: "Metro area",
+    impact_start_offset_days: 0,
+    impact_end_offset_days: 2,
+    demand_segment: "Weather-sensitive short LOS",
     factors: [
       { type: "WEATHER", label: "Forecast", value: "Thunderstorms (48h) · rain probability 70–90%", score: 76, weight: 0.55 },
       { type: "MARKET", label: "Demand behavior", value: "Late pickup ↑ · cancellation risk ↑", score: 58, weight: 0.45 },
@@ -56,6 +65,9 @@ export const contextFeed: ContextFeedItem[] = [
     detail:
       "Compression nights expected. Maintain price floor; discount only stranded sandwich gaps with targeted channels.",
     location: "Downtown",
+    impact_start_offset_days: 1,
+    impact_end_offset_days: 5,
+    demand_segment: "Corporate group compression",
     factors: [
       { type: "EVENT", label: "Event", value: "Citywide conference · compression nights likely", score: 88, weight: 0.65 },
       { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only", score: 72, weight: 0.35 },
@@ -68,6 +80,9 @@ export const contextFeed: ContextFeedItem[] = [
     title: "Market: Expedia experiencing 1-day API downtime (partner risk)",
     detail:
       "Social/news chatter indicates sustained outage. Treat as partner-health risk → shift flexible inventory away from high-risk channels to protect net margin.",
+    impact_start_offset_days: 0,
+    impact_end_offset_days: 1,
+    demand_segment: "Channel mix risk",
     factors: [
       { type: "MARKET", label: "Social sentiment / news", value: "Outage trending · negative sentiment ↑ · customer friction ↑", score: 86, weight: 0.65 },
       { type: "MARKET", label: "Partner reliability", value: "API downtime (24h) · booking conversion ↓ · support load ↑", score: 94, weight: 0.35 },

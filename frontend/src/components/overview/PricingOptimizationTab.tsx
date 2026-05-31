@@ -29,6 +29,7 @@ import { format, parseISO } from "date-fns";
 import type { ContextFeedItem } from "../../mock/contextFeed";
 import { useOverviewSignals } from "../../context/overviewSignals";
 import { getCompetitorRatePoint } from "../../mock/competitorPricing";
+import { displayRoomLabel } from "../../utils/roomLabels";
 import {
   overviewCardClass,
   overviewCardLgClass,
@@ -40,6 +41,11 @@ import {
 } from "./overviewChrome";
 
 const PRICING_CACHE_KEY = "rateiq_last_analysis";
+
+type PricingCacheEntry = {
+  heatmapSignature: string;
+  data: PricingAnalyseResponse;
+};
 
 // ── Loading animation messages ────────────────────────────────────────────────
 
@@ -58,7 +64,7 @@ const LOADING_MESSAGES = [
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function computeOrphanNightsFromHeatmap(rows: HeatmapRow[], maxDays: number): {
+function computeSandwichNightsFromHeatmap(rows: HeatmapRow[], maxDays: number): {
   count: number;
   categories: string[];
 } {
@@ -98,10 +104,10 @@ function computeRevenueStats(rows: HeatmapRow[], maxDays: number): {
       if (c.block_type === "EMPTY") {
         unsoldRooms += 1;
         revenueAtRisk += c.current_rate;
-        if (c.current_rate < row.base_rate * 0.95) roomsDiscounted += 1;
       } else {
         revenueOnBooks += c.current_rate;
       }
+      if (c.current_rate < row.base_rate * 0.95) roomsDiscounted += 1;
     }
   }
   return { unsoldRooms, revenueAtRisk, revenueOnBooks, roomsDiscounted };
@@ -161,6 +167,24 @@ function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: str
 
 function heatmapCellAt(row: HeatmapRow, date: string): HeatmapCell | undefined {
   return row.cells.find(c => c.date === date);
+}
+
+function heatmapSignature(heatmap: HeatmapResponse | null, maxDays: number): string {
+  if (!heatmap) return "";
+  const parts = [
+    heatmap.dates.slice(0, maxDays).join(","),
+    ...heatmap.rows.map(row => [
+      row.room_id,
+      row.category,
+      row.base_rate,
+      ...row.cells.slice(0, maxDays).map(c => `${c.date}:${c.block_type}:${c.booking_id ?? ""}:${c.current_rate}`),
+    ].join("|")),
+  ];
+  let hash = 0;
+  for (const ch of parts.join("||")) {
+    hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
+  }
+  return String(hash);
 }
 
 function roomRowHasEmptyOnDates(row: HeatmapRow, dates: string[]): boolean {
@@ -430,7 +454,7 @@ export function PricingOptimizationTab() {
 
   const cardStats = useMemo(() => {
     if (!heatmap) return null;
-    const orphan = computeOrphanNightsFromHeatmap(heatmap.rows, WINDOW_DAYS);
+    const orphan = computeSandwichNightsFromHeatmap(heatmap.rows, WINDOW_DAYS);
     const rev = computeRevenueStats(heatmap.rows, WINDOW_DAYS);
     return { ...orphan, ...rev };
   }, [heatmap]);
@@ -462,7 +486,16 @@ export function PricingOptimizationTab() {
     const raw = localStorage.getItem(PRICING_CACHE_KEY);
     if (!raw) return;
     try {
-      applyAnalysis(JSON.parse(raw) as PricingAnalyseResponse, heatmap);
+      const parsed = JSON.parse(raw) as PricingAnalyseResponse | PricingCacheEntry;
+      const currentSignature = heatmapSignature(heatmap, WINDOW_DAYS);
+      const entry = "data" in parsed ? parsed : { heatmapSignature: "", data: parsed };
+      if (entry.heatmapSignature && currentSignature && entry.heatmapSignature !== currentSignature) {
+        localStorage.removeItem(PRICING_CACHE_KEY);
+        setHasCached(false);
+        show("Previous analysis is stale after inventory/rate changes. Run a fresh analysis.", "error");
+        return;
+      }
+      applyAnalysis(entry.data, heatmap);
       show("Loaded previous analysis", "success");
     } catch {
       show("Could not load cached analysis", "error");
@@ -486,7 +519,7 @@ export function PricingOptimizationTab() {
         selectedItems.WEATHER,
         selectedItems.TRAVEL,
         selectedItems.MARKET,
-      ].filter(Boolean);
+      ].filter((item): item is NonNullable<typeof item> => item != null);
 
       const res = await analysePricingWithContext({
         context_items: contextItems,
@@ -591,7 +624,12 @@ export function PricingOptimizationTab() {
       };
 
       applyAnalysis(data, heatmap);
-      try { localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify(data)); } catch { /* quota */ }
+      try {
+        localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify({
+          heatmapSignature: heatmapSignature(heatmap, WINDOW_DAYS),
+          data,
+        } satisfies PricingCacheEntry));
+      } catch { /* quota */ }
       setHasCached(true);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -772,16 +810,16 @@ export function PricingOptimizationTab() {
 
         {/* Summary cards */}
         <div className="px-6 py-4 border-b border-border/80 grid grid-cols-2 lg:grid-cols-4 gap-3 bg-bg/40">
-        {/* Card 1: Orphan Nights */}
+        {/* Card 1: Sandwich Nights */}
         <div className={`${overviewCardClass} px-4 py-3.5`}>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Orphan Nights</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Sandwich nights</div>
           <div className="text-3xl font-serif font-bold text-text mt-2">
             {cardStats ? cardStats.count : <span className="text-text-muted">—</span>}
           </div>
           <div className="text-[10px] text-text-muted mt-1 truncate">
             {cardStats?.categories?.length
               ? cardStats.categories.join(", ")
-              : "No categories affected"}
+              : "Single-night pricing candidates"}
           </div>
         </div>
 
@@ -790,7 +828,7 @@ export function PricingOptimizationTab() {
           <div className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Revenue Snapshot</div>
           <div className="flex items-end gap-3 mt-2">
             <div>
-              <div className="text-[9px] text-occured uppercase tracking-wider font-bold">At Risk</div>
+              <div className="text-[9px] text-occured uppercase tracking-wider font-bold">Unsold Value</div>
               <div className="text-lg font-serif font-bold text-occured">
                 ${cardStats ? Math.round(cardStats.revenueAtRisk).toLocaleString("en-US") : "—"}
               </div>
@@ -814,7 +852,7 @@ export function PricingOptimizationTab() {
           <div className="text-3xl font-serif font-bold text-text mt-2">
             {cardStats ? cardStats.roomsDiscounted : <span className="text-text-muted">—</span>}
           </div>
-          <div className="text-[10px] text-text-muted mt-1">Rooms below base rate · {WINDOW_DAYS}d window</div>
+          <div className="text-[10px] text-text-muted mt-1">Room-nights below base rate · {WINDOW_DAYS}d window</div>
         </div>
 
         {/* Card 4: Revenue Rescue */}
@@ -925,6 +963,9 @@ export function PricingOptimizationTab() {
               <div className="text-xs text-text leading-relaxed">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-accent mr-2">Summary</span>
                 {pricing.summary}
+                <div className="mt-1 text-[10px] uppercase tracking-widest text-text-muted">
+                  {pricing.cache_hit ? "Cached run" : "Fresh run"} · {pricing.llm_call_count ?? 0} AI calls · trace {pricing.context_hash || "—"}
+                </div>
               </div>
             </div>
 
@@ -1072,7 +1113,7 @@ export function PricingOptimizationTab() {
                             <tr key={`${cat}-${roomRow.room_id}`} className="border-b border-border/25 hover:bg-surface-2/20">
                               <td className="sticky left-0 z-10 bg-surface border-r border-border px-2 py-0.5 overflow-hidden align-top">
                                 <span className="text-[9px] font-mono font-bold text-text leading-none truncate block max-w-full" title={roomRow.room_id}>
-                                  {roomRow.room_id}
+                                  {displayRoomLabel(roomRow.room_id, String(roomRow.category), heatmap.rows)}
                                 </span>
                               </td>
                               {pricing.dates.map(d => {

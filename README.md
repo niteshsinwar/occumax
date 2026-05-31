@@ -6,8 +6,8 @@ Hotel revenue recovery platform — yield optimization, AI-powered pricing, and 
 
 | Environment | Branch | URL |
 |---|---|---|
-| Development | `Dev` | http://161.118.164.30 |
-| Production | `main` | http://80.225.202.88 |
+| Development | `Dev` | https://161.118.164.30.nip.io |
+| Production | `main` | https://80.225.202.88.nip.io |
 
 Deployments are fully automated via GitHub Actions on push to either branch.
 
@@ -67,7 +67,7 @@ npm run dev
 
 ## Schema Changes
 
-Edit the SQLAlchemy models in `backend/core/models/`, commit, and push. The backend calls `create_tables()` on startup which applies changes automatically.
+Edit the SQLAlchemy models in `backend/core/models/`, generate an Alembic migration, commit both, and push. Deployments run `alembic upgrade head` before restarting the backend.
 
 ## Configuration Changes
 
@@ -79,7 +79,6 @@ Non-sensitive settings (hotel name, window days, gap costs) live in `backend/.en
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Request flow, layer responsibilities, schema management |
 | [docs/deployment.md](docs/deployment.md) | CI/CD, debugging deploys, updating secrets, server setup |
-| [docs/oracle-infrastructure.md](docs/oracle-infrastructure.md) | All Oracle Cloud resource IDs, SSH, networking, CLI commands |
 | [docs/contributing.md](docs/contributing.md) | Branch strategy, commit style, team workflow |
 | [CLAUDE.md](CLAUDE.md) | Agent guide — read by Claude Code automatically |
 

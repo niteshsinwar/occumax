@@ -3,7 +3,7 @@ from typing import Optional
 
 from datetime import date
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.models.enums import RoomCategory
 
@@ -98,7 +98,7 @@ class ChannelStat(BaseModel):
     net_revenue: float
     avg_rate: float
     share_pct: float  # % of total occupied room nights
-    partners: list[PartnerStat] = []
+    partners: list[PartnerStat] = Field(default_factory=list)
 
 
 class ChannelPerformanceResponse(BaseModel):
@@ -144,8 +144,11 @@ class ChannelRecommendResponse(BaseModel):
     as_of: str
     analysis_window_days: int
     recommendations: list[ChannelRecommendation]
-    partner_insights: list[ChannelPartnerInsight] = []
+    partner_insights: list[ChannelPartnerInsight] = Field(default_factory=list)
     summary: str
+    run_id: str = ""
+    cache_hit: bool = False
+    context_hash: str = ""
 
 
 class LosBucket(BaseModel):

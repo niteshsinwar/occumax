@@ -165,7 +165,6 @@ async def _get_on_books_booking_count_for_date(
     represent the current calendar state and do not preserve past snapshots.
     """
     q = select(func.count(Booking.id)).where(
-        Booking.is_live == True,
         Booking.created_at <= cutoff_dt,
         Booking.check_in <= stay_date,
         Booking.check_out > stay_date,
@@ -382,31 +381,33 @@ async def get_pace(
     totals = await _get_room_totals(db)
 
     # Compute pace as average occupied rooms per night across the stay window.
-    stay_dates = _date_range(start, end)
-    nights = max(1, len(stay_dates))
 
-    async def compute_avg_rooms_at_cutoff(cutoff_dt: datetime) -> tuple[dict[RoomCategory, float], float]:
+    async def compute_avg_rooms_at_cutoff(
+        window_start: date,
+        window_end: date,
+        cutoff_dt: datetime,
+    ) -> tuple[dict[RoomCategory, float], float]:
+        window_nights = max(1, (window_end - window_start).days)
         bookings = (await db.execute(
             select(Booking)
             .where(
-                Booking.is_live == True,
                 Booking.created_at <= cutoff_dt,
-                Booking.check_out > start,
-                Booking.check_in < end,
+                Booking.check_out > window_start,
+                Booking.check_in < window_end,
             )
         )).scalars().all()
 
         room_nights_cat: dict[RoomCategory, int] = defaultdict(int)
         room_nights_all = 0
         for b in bookings:
-            seg_start = max(start, b.check_in)
-            seg_end = min(end, b.check_out)
+            seg_start = max(window_start, b.check_in)
+            seg_end = min(window_end, b.check_out)
             rn = max(0, (seg_end - seg_start).days)
             room_nights_cat[b.room_category] += rn
             room_nights_all += rn
 
-        avg_by_cat = {cat: (room_nights_cat.get(cat, 0) / nights) for cat in totals.total_by_category.keys()}
-        avg_all = room_nights_all / nights
+        avg_by_cat = {cat: (room_nights_cat.get(cat, 0) / window_nights) for cat in totals.total_by_category.keys()}
+        avg_all = room_nights_all / window_nights
         return avg_by_cat, avg_all
 
     # Baseline windows: same window one year ago and two years ago if data exists.
@@ -415,37 +416,27 @@ async def get_pace(
         (start - timedelta(days=728), end - timedelta(days=728)),
     ]
 
+    current_by_lead: dict[int, tuple[dict[RoomCategory, float], float]] = {}
+    baseline_by_lead: dict[int, list[tuple[dict[RoomCategory, float], float]]] = {}
+    for lead in range(0, max_lead_days + 1):
+        cutoff = _as_of_dt(as_of) - timedelta(days=lead)
+        current_by_lead[lead] = await compute_avg_rooms_at_cutoff(start, end, cutoff)
+
+        samples: list[tuple[dict[RoomCategory, float], float]] = []
+        for bstart, bend in baseline_windows:
+            bcutoff = datetime.combine(bstart, time.max) - timedelta(days=lead)
+            samples.append(await compute_avg_rooms_at_cutoff(bstart, bend, bcutoff))
+        baseline_by_lead[lead] = samples
+
     series: list[PaceSeries] = []
     for cat, total_rooms in totals.total_by_category.items():
         points: list[PacePoint] = []
         for lead in range(0, max_lead_days + 1):
-            cutoff = _as_of_dt(as_of) - timedelta(days=lead)
-            avg_by_cat, _avg_all = await compute_avg_rooms_at_cutoff(cutoff)
+            avg_by_cat, _avg_all = current_by_lead[lead]
             current_avg_rooms = float(avg_by_cat.get(cat, 0.0))
             current_occ_pct = (current_avg_rooms / max(1, total_rooms)) * 100.0
 
-            baseline_samples: list[float] = []
-            for (bstart, bend) in baseline_windows:
-                bcutoff = datetime.combine(bstart, time.max) - timedelta(days=lead)
-                # Reuse the same computation logic, but with shifted window by temporarily calling a local query.
-                bookings = (await db.execute(
-                    select(Booking)
-                    .where(
-                        Booking.is_live == True,
-                        Booking.created_at <= bcutoff,
-                        Booking.check_out > bstart,
-                        Booking.check_in < bend,
-                        Booking.room_category == cat,
-                    )
-                )).scalars().all()
-                room_nights = 0
-                bnights = max(1, (bend - bstart).days)
-                for bk in bookings:
-                    seg_start = max(bstart, bk.check_in)
-                    seg_end = min(bend, bk.check_out)
-                    room_nights += max(0, (seg_end - seg_start).days)
-                baseline_samples.append(room_nights / bnights)
-
+            baseline_samples = [sample_by_cat.get(cat, 0.0) for sample_by_cat, _sample_all in baseline_by_lead[lead]]
             expected_avg_rooms = float(mean(baseline_samples)) if baseline_samples else 0.0
             expected_occ_pct = (expected_avg_rooms / max(1, total_rooms)) * 100.0
 
@@ -462,30 +453,10 @@ async def get_pace(
     # Rollup series
     roll_points: list[PacePoint] = []
     for lead in range(0, max_lead_days + 1):
-        cutoff = _as_of_dt(as_of) - timedelta(days=lead)
-        _avg_by_cat, avg_all = await compute_avg_rooms_at_cutoff(cutoff)
+        _avg_by_cat, avg_all = current_by_lead[lead]
         current_occ_pct = (avg_all / max(1, totals.total_all)) * 100.0
 
-        baseline_samples: list[float] = []
-        for (bstart, bend) in baseline_windows:
-            bcutoff = datetime.combine(bstart, time.max) - timedelta(days=lead)
-            bookings = (await db.execute(
-                select(Booking)
-                .where(
-                    Booking.is_live == True,
-                    Booking.created_at <= bcutoff,
-                    Booking.check_out > bstart,
-                    Booking.check_in < bend,
-                )
-            )).scalars().all()
-            room_nights = 0
-            bnights = max(1, (bend - bstart).days)
-            for bk in bookings:
-                seg_start = max(bstart, bk.check_in)
-                seg_end = min(bend, bk.check_out)
-                room_nights += max(0, (seg_end - seg_start).days)
-            baseline_samples.append(room_nights / bnights)
-
+        baseline_samples = [sample_all for _sample_by_cat, sample_all in baseline_by_lead[lead]]
         expected_avg_rooms = float(mean(baseline_samples)) if baseline_samples else 0.0
         expected_occ_pct = (expected_avg_rooms / max(1, totals.total_all)) * 100.0
 
@@ -517,7 +488,6 @@ async def get_event_insights(
             cat_enum = None
 
     q = select(Booking).where(
-        Booking.is_live == True,
         Booking.created_at <= cutoff,
         Booking.check_out > start,
         Booking.check_in < end,
@@ -689,14 +659,15 @@ async def get_channel_performance(
     """
     Channel revenue breakdown.
 
-    - If `start` and `end` are provided: uses that inclusive date window.
+    - If `start` and `end` are provided: uses the half-open date window [start, end).
     - Else: uses the past `window_days` ending at `as_of`.
     Computes gross revenue, commission-adjusted net revenue, and ADR per channel.
     """
     window_start = start or (as_of - timedelta(days=window_days))
     window_end = end or as_of
 
-    # Occupied slots with channel + partner info in the window
+    # Revenue channel performance is based on booked guest/allotment nights only.
+    # HARD blocks reserve capacity but are not channel revenue.
     category_filter = []
     if categories:
         category_filter = [Room.category.in_(categories)]
@@ -706,9 +677,9 @@ async def get_channel_performance(
         .join(Room, Room.id == Slot.room_id)
         .where(
             Room.is_active == True,
-            Slot.block_type != BlockType.EMPTY,
+            Slot.block_type == BlockType.SOFT,
             Slot.date >= window_start,
-            Slot.date <= window_end,
+            Slot.date < window_end,
             *category_filter,
         )
     )).all()

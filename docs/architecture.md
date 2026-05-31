@@ -90,7 +90,7 @@ Key endpoint groups:
 | `POST /manager/commit` | Apply a swap plan from /optimise to the DB (two-pass vacate→fill) |
 | `POST /manager/channel-allocate` | Pre-block inventory for a specific OTA partner (creates SOFT placeholder bookings) |
 | `GET /manager/channel-recommend` | Run Poly AI channel agent — returns ranked OTA allocation recommendations |
-| `GET /manager/pricing/analyse` | Run Poly AI pricing agent — returns per-category-per-date rate recommendations plus a **predictive what-if** discount ladder (demand lift, net price index, revenue index; `services/ai/pricing_what_if_agent.py`, heuristic fallback) |
+| `GET /manager/pricing/analyse` | Run Poly AI pricing agent — returns per-category-per-date rate recommendations plus summary/calendar data for the Pricing UI |
 | `POST /manager/pricing/analyse-context` | Overview RateIQ path: accepts Overview context signals + optional `window_days` (default 15) and `empty_nights_only` (default true). Synthesis shards skip dates with no unsold inventory per category, reducing latency. Same calendar/commit shape as analyse for the Manager Pricing UI. |
 | `POST /manager/pricing/commit` | Apply pricing recommendations — batch-updates `slot.current_rate` |
 | `POST /ai/chat` | AI receptionist agent (Poly AI-backed, full conversation history, returns action_data card) |
@@ -147,8 +147,6 @@ Two special input modes triggered by message prefix:
 The agent returns `action_data: { type, data }` alongside its text reply. The frontend renders this as a clickable card (`availability_result`, `split_stay_result`, `booking_confirmed`, `split_stay_confirmed`). Confirm is **never** a tool — all DB writes go through the receptionist's UI button.
 
 **Pricing agent** (`services/ai/pricing_agent.py`) — dynamic rate recommendations. 3 tools: `get_pricing_context`, `get_low_occupancy_dates`, `get_pickup_pace`. Returns a list of `{ category, date, suggested_rate, reason }` items. The context analyse route (`POST /manager/pricing/analyse-context`) drives synthesis with a configurable window and, when `empty_nights_only` is true, restricts LLM shards to category–dates that still have unsold rooms (`total > otb` for that category).
-
-**Pricing what-if** (`services/ai/pricing_what_if_agent.py`) — single-shot AI JSON (or deterministic heuristic) that simulates a 0–40% discount ladder: `demand_lift_pct`, `net_price_index` (baseline 100), `revenue_index`, and `recommended_index`. Bundled on the same `GET /manager/pricing/analyse` response as `what_if` for the Pricing UI.
 
 **Channel agent** (`services/ai/channel_agent.py`) — OTA-only allocation analysis. 3 tools: `get_occupancy_gaps`, `get_channel_history`, `get_weekly_pattern`.
 

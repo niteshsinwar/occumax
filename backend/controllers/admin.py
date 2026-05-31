@@ -36,8 +36,11 @@ async def list_rooms(db: AsyncSession) -> list[dict]:
     out = []
     for r in rooms:
         room_slots = slot_map.get(r.id, [])
-        empty  = sum(1 for s in room_slots if s.block_type == BlockType.EMPTY)
+        persisted_empty = sum(1 for s in room_slots if s.block_type == BlockType.EMPTY)
         booked = sum(1 for s in room_slots if s.block_type == BlockType.SOFT)
+        hard = sum(1 for s in room_slots if s.block_type == BlockType.HARD)
+        missing_empty = max(0, settings.SCAN_WINDOW_DAYS - len(room_slots))
+        empty = persisted_empty + missing_empty
         out.append({
             "id": r.id,
             "category": r.category,
@@ -45,10 +48,11 @@ async def list_rooms(db: AsyncSession) -> list[dict]:
             "floor_number": r.floor_number,
             "is_active": r.is_active,
             "stats": {
-                "total_slots": len(room_slots),
+                "total_slots": settings.SCAN_WINDOW_DAYS,
                 "empty_nights": empty,
                 "booked_nights": booked,
-                "occupancy_pct": round(booked / len(room_slots) * 100, 1) if room_slots else 0,
+                "hard_nights": hard,
+                "occupancy_pct": round(booked / settings.SCAN_WINDOW_DAYS * 100, 1),
             },
         })
     return out
@@ -89,17 +93,42 @@ async def update_room(room_id: str, body: RoomUpdate, db: AsyncSession) -> dict:
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    prev_base_rate = float(room.base_rate or 0.0)
+    updated_future_empty_rates = 0
+
     if body.category is not None:
         room.category = body.category
     if body.base_rate is not None:
-        room.base_rate = body.base_rate
+        next_base_rate = float(body.base_rate)
+        room.base_rate = next_base_rate
+
+        today = date.today()
+        end = today + timedelta(days=settings.SCAN_WINDOW_DAYS)
+        slots_res = await db.execute(
+            select(Slot)
+            .where(
+                Slot.room_id == room_id,
+                Slot.date >= today,
+                Slot.date < end,
+                Slot.block_type == BlockType.EMPTY,
+            )
+            .with_for_update()
+        )
+        for slot in slots_res.scalars().all():
+            if abs(float(slot.current_rate or 0.0) - prev_base_rate) < 0.01:
+                slot.current_rate = next_base_rate
+                updated_future_empty_rates += 1
     if body.floor_number is not None:
         room.floor_number = body.floor_number
     if body.is_active is not None:
         room.is_active = body.is_active
 
     await db.commit()
-    return {"status": "updated", "room_id": room_id}
+    return {
+        "status": "updated",
+        "room_id": room_id,
+        "updated_future_empty_rates": updated_future_empty_rates,
+    }
 
 
 async def deactivate_room(room_id: str, db: AsyncSession) -> dict:
@@ -145,10 +174,44 @@ async def patch_slot(slot_id: str, body: SlotPatch, db: AsyncSession) -> dict:
     if body.block_type not in ("EMPTY", "HARD"):
         raise HTTPException(status_code=400, detail="block_type must be EMPTY or HARD")
 
-    result = await db.execute(select(Slot).where(Slot.id == slot_id))
+    result = await db.execute(select(Slot).where(Slot.id == slot_id).with_for_update())
     slot = result.scalar_one_or_none()
     if not slot:
-        raise HTTPException(status_code=404, detail=f"Slot {slot_id} not found")
+        try:
+            room_id, slot_date_raw = slot_id.rsplit("_", 1)
+            slot_date = date.fromisoformat(slot_date_raw)
+        except ValueError:
+            raise HTTPException(status_code=404, detail=f"Slot {slot_id} not found") from None
+
+        room_result = await db.execute(select(Room).where(Room.id == room_id, Room.is_active == True))
+        room = room_result.scalar_one_or_none()
+        if not room:
+            raise HTTPException(status_code=404, detail=f"Slot {slot_id} not found")
+
+        if body.block_type == "EMPTY":
+            return {
+                "status": "updated",
+                "slot_id": slot_id,
+                "prev": BlockType.EMPTY,
+                "new": body.block_type,
+            }
+
+        slot = Slot(
+            id=slot_id,
+            room_id=room_id,
+            date=slot_date,
+            block_type=BlockType.HARD,
+            current_rate=room.base_rate,
+            channel=Channel.DIRECT,
+        )
+        db.add(slot)
+        await db.commit()
+        return {
+            "status": "updated",
+            "slot_id": slot_id,
+            "prev": BlockType.EMPTY,
+            "new": body.block_type,
+        }
 
     if slot.block_type == BlockType.SOFT:
         raise HTTPException(
@@ -243,6 +306,30 @@ async def admin_list_bookings(db: AsyncSession, start: Optional[str], end: Optio
 
     result = await db.execute(stmt.limit(500))
     bookings = result.scalars().all()
+    booking_ids = [b.id for b in bookings]
+    slot_attribution: dict[str, dict[str, str | None]] = {}
+
+    if booking_ids:
+        slot_rows = (await db.execute(
+            select(Slot.booking_id, Slot.channel, Slot.channel_partner)
+            .where(Slot.booking_id.in_(booking_ids))
+        )).all()
+        channels: dict[str, set[str]] = {}
+        partners: dict[str, set[str]] = {}
+        for booking_id, channel, partner in slot_rows:
+            if not booking_id:
+                continue
+            if channel:
+                channels.setdefault(booking_id, set()).add(channel.value if hasattr(channel, "value") else str(channel))
+            if partner:
+                partners.setdefault(booking_id, set()).add(str(partner))
+        for booking_id in booking_ids:
+            ch = sorted(channels.get(booking_id, set()))
+            pt = sorted(partners.get(booking_id, set()))
+            slot_attribution[booking_id] = {
+                "channel": ", ".join(ch) if ch else None,
+                "channel_partner": ", ".join(pt) if pt else None,
+            }
 
     return [
         {
@@ -256,6 +343,8 @@ async def admin_list_bookings(db: AsyncSession, start: Optional[str], end: Optio
             "stay_group_id": b.stay_group_id,
             "segment_index": b.segment_index,
             "discount_pct": b.discount_pct,
+            "channel": slot_attribution.get(b.id, {}).get("channel"),
+            "channel_partner": slot_attribution.get(b.id, {}).get("channel_partner"),
         }
         for b in bookings
     ]
@@ -270,11 +359,12 @@ async def admin_delete_booking(booking_id: str, db: AsyncSession) -> dict:
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
 
-    slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id))
+    slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id).with_for_update())
     slots = slots_res.scalars().all()
     for s in slots:
         s.block_type = BlockType.EMPTY
         s.booking_id = None
+        s.channel_partner = None
 
     await db.delete(booking)
     await db.commit()
@@ -319,29 +409,34 @@ async def admin_update_booking(booking_id: str, body: AdminBookingUpdate, db: As
     if not next_room_id:
         raise HTTPException(status_code=400, detail="room_id is required for re-sync")
 
-    room_res = await db.execute(select(Room).where(Room.id == next_room_id))
+    room_res = await db.execute(select(Room).where(Room.id == next_room_id, Room.is_active == True))
     room = room_res.scalar_one_or_none()
     if not room:
-        raise HTTPException(status_code=404, detail="Target room not found")
+        raise HTTPException(status_code=404, detail="Target room not found or inactive")
 
     # Preserve channel attribution from any existing slot on this booking (best effort).
-    prev_slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id))
+    prev_slots_res = await db.execute(select(Slot).where(Slot.booking_id == booking_id).with_for_update())
     prev_slots = prev_slots_res.scalars().all()
     ch = prev_slots[0].channel if prev_slots else Channel.DIRECT
     partner = prev_slots[0].channel_partner if prev_slots else None
 
-    # Validate target window availability.
+    target_slot_ids: list[str] = []
     cur = next_ci
     while cur < next_co:
-        target_slot_id = f"{next_room_id}_{cur}"
-        tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
-        slot = tr.scalar_one_or_none()
+        target_slot_ids.append(f"{next_room_id}_{cur}")
+        cur += timedelta(days=1)
+
+    target_slots_res = await db.execute(
+        select(Slot).where(Slot.id.in_(target_slot_ids)).with_for_update()
+    )
+    target_slots = {slot.id: slot for slot in target_slots_res.scalars().all()}
+    for target_slot_id in target_slot_ids:
+        slot = target_slots.get(target_slot_id)
         if slot:
             if slot.block_type == BlockType.HARD:
                 raise HTTPException(status_code=409, detail=f"Target slot {target_slot_id} is HARD blocked")
             if slot.booking_id and slot.booking_id != booking_id:
                 raise HTTPException(status_code=409, detail=f"Target slot {target_slot_id} is booked by another booking")
-        cur += timedelta(days=1)
 
     # Clear previous slots for this booking.
     for s in prev_slots:
@@ -354,8 +449,7 @@ async def admin_update_booking(booking_id: str, body: AdminBookingUpdate, db: As
     created = 0
     while cur < next_co:
         target_slot_id = f"{next_room_id}_{cur}"
-        tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
-        slot = tr.scalar_one_or_none()
+        slot = target_slots.get(target_slot_id)
         if slot:
             slot.block_type = BlockType.SOFT
             slot.booking_id = booking_id

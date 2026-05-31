@@ -5,17 +5,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
-from services.database import create_tables
 from api import admin, dashboard, manager, receptionist, ai, pricing, analytics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+cors_origins = settings.cors_origins_list()
 
 app = FastAPI(title="Occumax API", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -26,10 +26,12 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    origin = request.headers.get("origin")
+    cors_origin = origin if origin in cors_origins else (cors_origins[0] if cors_origins else "")
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error", "error": str(exc)},
-        headers={"Access-Control-Allow-Origin": "*"},
+        content={"detail": "Internal server error"},
+        headers={"Access-Control-Allow-Origin": cors_origin} if cors_origin else None,
     )
 
 app.include_router(dashboard.router)
@@ -43,8 +45,7 @@ app.include_router(analytics.router)
 
 @app.on_event("startup")
 async def startup():
-    await create_tables()
-    logger.info("Occumax started — database tables verified.")
+    logger.info("Occumax started.")
 
 
 @app.get("/health")

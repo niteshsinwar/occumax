@@ -1,16 +1,23 @@
 from datetime import date
 from typing import Optional
-from pydantic import BaseModel
-from core.models.enums import RoomCategory
+from pydantic import BaseModel, Field, model_validator
+from core.models.enums import Channel, RoomCategory
+from core.schemas.manager import SwapStep
 
 
 class BookingRequestIn(BaseModel):
     category: RoomCategory
     check_in: date
     check_out: date
-    guest_name: str = "Direct Guest"
-    channel: Optional[str] = "DIRECT"        # OTA | DIRECT
+    guest_name: str = Field(default="Direct Guest", min_length=1, max_length=120)
+    channel: Optional[Channel] = Channel.DIRECT
     channel_partner: Optional[str] = None    # Expedia, Hotels.com, Booking.com, Priceline, etc.
+
+    @model_validator(mode="after")
+    def _valid_stay_window(self):
+        if self.check_out <= self.check_in:
+            raise ValueError("check_out must be after check_in")
+        return self
 
 
 class ShuffleResult(BaseModel):
@@ -26,8 +33,8 @@ class ShuffleResult(BaseModel):
 
 class BookingConfirm(BaseModel):
     request: BookingRequestIn
-    room_id: str
-    swap_plan: Optional[list[dict]] = None
+    room_id: str = Field(min_length=1, max_length=64)
+    swap_plan: Optional[list[SwapStep]] = None
 
 
 # ── Phase 2: split-stay schemas ───────────────────────────────────────────────
@@ -47,7 +54,7 @@ class SplitSegmentOut(BaseModel):
 class SplitStayResult(BaseModel):
     """Result returned by find_split_stay."""
     state:         str   # SPLIT_POSSIBLE | NOT_POSSIBLE
-    segments:      list[SplitSegmentOut] = []
+    segments:      list[SplitSegmentOut] = Field(default_factory=list)
     discount_pct:  float = 0.0
     total_nights:  int   = 0
     total_rate:    float = 0.0
@@ -56,9 +63,9 @@ class SplitStayResult(BaseModel):
 
 class SplitStayConfirm(BaseModel):
     """Body sent to POST /receptionist/confirm-split."""
-    guest_name:      str
+    guest_name:      str = Field(min_length=1, max_length=120)
     category:        RoomCategory
-    discount_pct:    float
-    segments:        list[SplitSegmentOut]
-    channel:         Optional[str] = "DIRECT"
+    discount_pct:    float = Field(ge=0, le=100)
+    segments:        list[SplitSegmentOut] = Field(min_length=1)
+    channel:         Optional[Channel] = Channel.DIRECT
     channel_partner: Optional[str] = None

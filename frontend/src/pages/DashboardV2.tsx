@@ -195,8 +195,10 @@ export function DashboardV2() {
   // ── Derived slices ──────────────────────────────────────────────────────────
 
   const heatmapCategories = useMemo(() => (heatmap ? uniqueCategories(heatmap.rows) : []), [heatmap]);
+  const heatmapCategoriesKey = useMemo(() => heatmapCategories.join("|"), [heatmapCategories]);
   const allRows = useMemo(() => heatmap?.rows ?? [], [heatmap]);
   const spanDays = useMemo(() => heatmap ? Math.min(DASHBOARD_WINDOW_DAYS, heatmap.dates.length) : 0, [heatmap]);
+  const heatmapFirstDate = heatmap?.dates?.[0];
 
   const scorecardSlice = useMemo(() => {
     if (!heatmap || spanDays === 0) return null;
@@ -213,7 +215,7 @@ export function DashboardV2() {
     getEventInsights({ start: startStr, end: endStr, as_of: todayStr }).then(r => setEventInsights(r.data)).catch(() => setEventInsights(null));
     getPace({ start: startStr, end: endStr, as_of: todayStr }).then(r => setPace(r.data as PaceResponse)).catch(() => setPace(null));
     getChannelPerformance({ start: startStr, end: endStr, categories: heatmapCategories }).then(r => setChannelPerf(r.data as ChannelPerformanceResponse)).catch(() => setChannelPerf(null));
-  }, [scorecardSlice?.startStr, scorecardSlice?.endStr, todayStr]);
+  }, [scorecardSlice, heatmapCategories, todayStr]);
 
   // ── Scorecard ───────────────────────────────────────────────────────────────
 
@@ -229,7 +231,7 @@ export function DashboardV2() {
   useEffect(() => {
     if (!scorecardSlice || heatmapCategories.length === 0) return;
     void refreshScorecard(null);
-  }, [scorecardSlice?.startStr, scorecardSlice?.endStr]);
+  }, [scorecardSlice, heatmapCategories.length, refreshScorecard]);
 
   // ── Occupancy actions ────────────────────────────────────────────────────────
 
@@ -355,11 +357,12 @@ export function DashboardV2() {
     show,
     setKNightLoading,
   });
+  const reloadPredictiveLos = occupancyPredictive.reloadPredictiveLos;
 
   useEffect(() => {
     if (activeTab !== "occupancy" || !heatmap || heatmapCategories.length === 0) return;
-    void occupancyPredictive.reloadPredictiveLos();
-  }, [activeTab, heatmap?.dates?.[0], heatmapCategories.join("|"), occupancyPredictive.reloadPredictiveLos]);
+    void reloadPredictiveLos();
+  }, [activeTab, heatmap, heatmapCategories.length, heatmapCategoriesKey, heatmapFirstDate, reloadPredictiveLos]);
 
   // Prioritised action queue — derived entirely from real data
   const actionQueue = useMemo((): ActionItem[] => {
@@ -446,7 +449,7 @@ export function DashboardV2() {
           predictiveLosLoading={occupancyPredictive.predictiveLosLoading}
           predictiveLosError={occupancyPredictive.predictiveLosError}
           predictiveLosReady={occupancyPredictive.predictiveLosReady}
-          onReloadPredictiveLos={occupancyPredictive.reloadPredictiveLos}
+          onReloadPredictiveLos={reloadPredictiveLos}
           runOccupancyRecoveryShufflePreview={occupancyPredictive.runOccupancyShufflePreview}
           clearOccupancyRecoveryShufflePreview={occupancyPredictive.clearOccupancyShufflePreview}
         />

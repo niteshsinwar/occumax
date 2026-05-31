@@ -1,5 +1,9 @@
 from __future__ import annotations
-from pydantic import BaseModel
+from datetime import date
+
+from pydantic import BaseModel, Field
+
+from core.models.enums import RoomCategory
 
 
 class SwapStep(BaseModel):
@@ -37,10 +41,10 @@ class CommitResult(BaseModel):
 
 class ChannelAllocateRequest(BaseModel):
     booking_source: str    # "Expedia" | "Hotels.com" | "Booking.com" | "Priceline" | ...
-    category: str          # DELUXE | SUITE | etc.
-    check_in: str          # ISO date
-    check_out: str         # ISO date
-    room_count: int = 1    # rooms to pre-allocate
+    category: RoomCategory
+    check_in: date
+    check_out: date
+    room_count: int = Field(default=1, ge=1, le=50)
 
 
 class ChannelAllocateResult(BaseModel):

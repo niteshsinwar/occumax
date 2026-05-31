@@ -138,6 +138,11 @@ class TestAdmin:
         assert r.status_code == 200
         assert r.json().get("status") == "deleted"
 
+    def test_cleanup_room(self, client):
+        r = client.delete(f"/admin/rooms/{self.ROOM_ID}")
+        # Could be 200 or 404 if not found, but we want it gone
+        assert r.status_code in [200, 404]
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. MANAGER
 # ═════════════════════════════════════════════════════════════════════════════

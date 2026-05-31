@@ -1,6 +1,6 @@
 import type { OccupancyForecastResponse, RoomCategory } from "../types";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { calendarDayKey } from "../utils/calendarDayKey";
 
 function int(n: number) {
@@ -126,10 +126,10 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
   const padT = 10;
   const padB = 52;
 
-  const xFor = (i: number) => {
+  const xFor = useCallback((i: number) => {
     if (data.length <= 1) return padL;
     return padL + (i / (data.length - 1)) * (w - padL - padR);
-  };
+  }, [data.length]);
 
   const yMax = useMemo(() => {
     const vals: number[] = [];
@@ -143,11 +143,11 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
     return Math.max(1, Math.ceil(m / 5) * 5);
   }, [data]);
 
-  const yForRooms = (rooms: number) => {
+  const yForRooms = useCallback((rooms: number) => {
     const y0 = padT;
     const y1 = h - padB;
     return y1 - (clamp(rooms, 0, yMax) / yMax) * (y1 - y0);
-  };
+  }, [yMax]);
 
   const paths = useMemo(() => {
     const linePath = (key: keyof Pick<DailyDatum, "onBooksRooms" | "predictedRooms">) => {
@@ -192,7 +192,7 @@ function ForecastLinesChart(props: { data: DailyDatum[] }) {
       onBooks: linePath("onBooksRooms"),
       predicted: linePath("predictedRooms"),
     };
-  }, [data, yMax]);
+  }, [data, xFor, yForRooms]);
 
   const hover = hoverIdx !== null ? data[hoverIdx] : null;
 
@@ -364,4 +364,3 @@ export function BirdseyeForecastInsights(props: {
     </div>
   );
 }
-

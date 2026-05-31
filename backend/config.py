@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # ── Infrastructure ────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://occumax:occumax@localhost:5432/occumax"
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:5174"
+    DB_SSL_VERIFY: bool = True
+    DB_SSL_CA_FILE: str | None = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -88,5 +90,8 @@ class Settings(BaseSettings):
             2: self.GAP_COST_2N,
             3: self.GAP_COST_3N,
         }
+
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
 settings = Settings()

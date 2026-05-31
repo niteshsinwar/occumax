@@ -1,0 +1,18 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      branch: main
+      env_prefix: Production
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      HOST: ${{ secrets.MAIN_HOST }}
+      DATABASE_URL: ${{ secrets.MAIN_DATABASE_URL }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}

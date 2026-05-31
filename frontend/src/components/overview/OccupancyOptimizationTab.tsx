@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { HeatmapResponse, HeatmapRow, PredictOptimalLosResponse, SwapStep } from "../../types";
 import { HeatmapGrid } from "../Heatmap/HeatmapGrid";
+import { displayRoomLabel } from "../../utils/roomLabels";
 import { AiTag } from "../shared/AiTag";
 import { AlertTriangle, CheckCircle2, RefreshCw, Info, Sparkles, ChevronDown } from "lucide-react";
 // Exogenous Demand Signals are rendered once at the top of the Overview page.
@@ -83,7 +84,7 @@ function computeOrphanNightOfferCount(rows: HeatmapRow[], maxDays: number): numb
   for (const row of rows) {
     const cells = row.cells.slice(0, maxDays);
     for (const c of cells) {
-      if ((c as any)?.offer_type === "SANDWICH_ORPHAN") n += 1;
+      if (c.offer_type === "SANDWICH_ORPHAN") n += 1;
     }
   }
   return n;
@@ -104,6 +105,14 @@ function topFragmentedRooms(rows: HeatmapRow[], maxDays: number): Array<{ roomId
     return { roomId: r.room_id, category: String(r.category), shortGaps };
   });
   return scored.sort((a, b) => b.shortGaps - a.shortGaps).slice(0, 5);
+}
+
+function KpiInfo({ label, text }: { label: string; text: string }) {
+  return (
+    <span className="inline-flex items-center" title={`${label}: ${text}`}>
+      <Info className="w-3 h-3 text-text-muted/70 hover:text-text-muted" />
+    </span>
+  );
 }
 
 /**
@@ -186,14 +195,6 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
   const [insightDetailOpen, setInsightDetailOpen] = useState(false);
   const gridDays = Math.min(spanDays, occupancyHeatmapDays ?? spanDays);
 
-  function KpiInfo({ label, text }: { label: string; text: string }) {
-    return (
-      <span className="inline-flex items-center" title={`${label}: ${text}`}>
-        <Info className="w-3 h-3 text-text-muted/70 hover:text-text-muted" />
-      </span>
-    );
-  }
-
   const rowsInView = useMemo(() => filteredRows, [filteredRows]);
 
   const kpis = useMemo(() => {
@@ -208,7 +209,9 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
     const tonightOccPct = totalRooms > 0 ? (tonightOccupied / totalRooms) * 100 : 0;
 
     const run = computeRunMetrics(rowsInView, spanDays);
+    const runAfter = simulatedRows ? computeRunMetrics(simulatedRows, spanDays) : null;
     const minlosBlocks = computeMinLosOrphanNightBlocks(rowsInView, spanDays);
+    const minlosBlocksAfter = simulatedRows ? computeMinLosOrphanNightBlocks(simulatedRows, spanDays) : null;
     const orphanNightOffers = computeOrphanNightOfferCount(rowsInView, spanDays);
 
     const k2 = computeKNightWindows(rowsInView, spanDays, 2);
@@ -222,16 +225,22 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
       totalRooms,
       orphanNights: run.orphanNights,
       orphanGaps: run.orphanGaps,
+      orphanNightsAfter: runAfter?.orphanNights ?? null,
+      orphanGapsAfter: runAfter?.orphanGaps ?? null,
       hardToFill: run.dist.n1 + run.dist.n2_3,
+      hardToFillAfter: runAfter ? runAfter.dist.n1 + runAfter.dist.n2_3 : null,
       easyToSell: run.dist.n4_7 + run.dist.n8p,
       minlosBlocks,
+      minlosBlocksAfter,
       orphanNightOffers,
       k2,
       k3,
       k2After,
       k3After,
       topFrag: topFragmentedRooms(rowsInView, spanDays),
+      topFragAfter: simulatedRows ? topFragmentedRooms(simulatedRows, spanDays) : null,
       runDist: run.dist,
+      runDistAfter: runAfter?.dist ?? null,
     };
   }, [heatmap, rowsInView, spanDays, simulatedRows]);
 
@@ -282,7 +291,7 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                   Predictive constraint layer
                   <AiTag
                     className="inline align-middle ml-2"
-                    title="Poly AI blends analytics pace + on-books LOS with demo overlays (weather / convention / disruption). Refresh reloads the recommendation."
+                    title="Poly AI uses DB-derived pace, on-books occupancy, booking LOS, and explicit current-event context. Refresh reloads the recommendation."
                   />
                 </div>
 
@@ -340,9 +349,9 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                       </div>
                     </div>
                     <div className="px-3 py-3">
-                      Exogenous signals considered
+                      Current-event awareness
                       <div className="text-[9px] font-normal normal-case tracking-normal text-text-muted mt-1 leading-relaxed">
-                        Weather · Big event · Flight / travel disruption · Market (see Overview strip; not duplicated here).
+                        Event, travel, and market signals are passed as explicit context, separate from DB analytics.
                       </div>
                     </div>
                     <div className="px-3 py-3">
@@ -387,12 +396,17 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
           </div>
           <div className="rounded-[10px] bg-surface border border-occuorange/25 shadow-[0_6px_20px_rgba(44,27,24,0.06)] px-4 py-5 text-center">
             <div className="text-[9px] uppercase tracking-[0.12em] text-text-muted font-bold leading-tight">
-              Orphan nights
+              Stranded nights
             </div>
             <div className="mt-2 text-2xl font-bold text-occuorange tabular-nums tracking-tight">{kpis.orphanNights}</div>
             <div className="mt-1 text-[11px] text-text-muted">
               ({kpis.orphanGaps} gap{kpis.orphanGaps !== 1 ? "s" : ""})
             </div>
+            {kpis.orphanNightsAfter !== null && (
+              <div className={`mt-2 text-[10px] font-bold tabular-nums ${kpis.orphanNightsAfter <= kpis.orphanNights ? "text-occugreen" : "text-occuorange"}`}>
+                After {kpis.orphanNightsAfter} · {kpis.orphanNightsAfter - kpis.orphanNights}
+              </div>
+            )}
           </div>
           <div className="rounded-[10px] bg-surface border border-border/80 shadow-[0_6px_20px_rgba(44,27,24,0.06)] px-4 py-5 text-center">
             <div className="text-[9px] uppercase tracking-[0.12em] text-text-muted font-bold leading-tight flex items-center justify-center gap-1">
@@ -434,6 +448,11 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
             </div>
             <div className="mt-2 text-2xl font-bold text-occuorange tabular-nums tracking-tight">{kpis.hardToFill}</div>
             <div className="mt-1 text-[11px] text-text-muted">(1–3 night gaps)</div>
+            {kpis.hardToFillAfter !== null && (
+              <div className={`mt-2 text-[10px] font-bold tabular-nums ${kpis.hardToFillAfter <= kpis.hardToFill ? "text-occugreen" : "text-occuorange"}`}>
+                After {kpis.hardToFillAfter} · {kpis.hardToFillAfter - kpis.hardToFill}
+              </div>
+            )}
           </div>
           <div className="rounded-[10px] bg-surface border border-border/80 shadow-[0_6px_20px_rgba(44,27,24,0.06)] px-4 py-5 text-center">
             <div className="text-[9px] uppercase tracking-[0.12em] text-text-muted font-bold leading-tight">
@@ -441,6 +460,11 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
             </div>
             <div className="mt-2 text-2xl font-bold text-text tabular-nums tracking-tight">{kpis.minlosBlocks}</div>
             <div className="mt-1 text-[11px] text-text-muted">(orphan-night locks)</div>
+            {kpis.minlosBlocksAfter !== null && kpis.minlosBlocksAfter !== kpis.minlosBlocks && (
+              <div className="mt-2 text-[10px] font-bold text-occugreen tabular-nums">
+                After {kpis.minlosBlocksAfter} · {kpis.minlosBlocksAfter - kpis.minlosBlocks}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -665,11 +689,15 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                 <div className="text-[9px] uppercase tracking-widest font-bold text-text-muted mb-1 flex items-center gap-2 shrink-0">
                   <AlertTriangle className="w-3 h-3 text-occuorange" /> Top offenders
                 </div>
-                <div className="text-[10px] text-text-muted mb-3 shrink-0">Rooms with most 1–3 night gaps</div>
+                <div className="text-[10px] text-text-muted mb-3 shrink-0">
+                  Rooms with most 1–3 night gaps{kpis.topFragAfter ? " after preview" : ""}
+                </div>
                 <div className="space-y-1.5 flex-1">
-                  {kpis.topFrag.map(r => (
+                  {(kpis.topFragAfter ?? kpis.topFrag).map(r => (
                     <div key={r.roomId} className="flex items-center justify-between gap-2 bg-surface-2/50 border border-border/50 px-3 py-2">
-                      <div className="font-mono font-bold text-text text-xs truncate">Room {r.roomId}</div>
+                      <div className="font-mono font-bold text-text text-xs truncate" title={`Room ID: ${r.roomId}`}>
+                        Room {displayRoomLabel(r.roomId, r.category, heatmap?.rows)}
+                      </div>
                       <div className="text-text-muted text-[10px] uppercase tracking-widest shrink-0">{r.category}</div>
                       <div className="text-occuorange font-bold text-xs shrink-0">{r.shortGaps} gap{r.shortGaps !== 1 ? "s" : ""}</div>
                     </div>
@@ -689,16 +717,29 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
                   const maxCount = Math.max(...bars.map(b => b.count), 1);
                   return (
                     <div className="space-y-2 flex-1">
-                      {bars.map(({ label, count, color, note }) => (
-                        <div key={label} className="grid grid-cols-[52px_1fr_24px] gap-2 items-center">
+                    {bars.map(({ label, count, color, note }) => {
+                      const afterCount = kpis.runDistAfter
+                        ? label === "1-night"
+                          ? kpis.runDistAfter.n1
+                          : label === "2–3 night"
+                            ? kpis.runDistAfter.n2_3
+                            : label === "4–7 night"
+                              ? kpis.runDistAfter.n4_7
+                              : kpis.runDistAfter.n8p
+                        : null;
+                      return (
+                        <div key={label} className="grid grid-cols-[52px_1fr_52px] gap-2 items-center">
                           <div className="text-[9px] font-bold text-text-muted text-right uppercase tracking-widest">{label}</div>
                           <div className="h-3 bg-surface-2 border border-border/40 overflow-hidden relative group min-w-0">
                             <div className={`h-full ${color} transition-all`} style={{ width: `${count > 0 ? Math.max((count / maxCount) * 100, 5) : 0}%` }} />
                             <span className="absolute right-1 top-0 h-full hidden group-hover:flex items-center text-[8px] text-text-muted">{note}</span>
                           </div>
-                          <div className="text-[10px] font-bold text-text tabular-nums">{count}</div>
+                          <div className="text-[10px] font-bold text-text tabular-nums">
+                            {afterCount !== null ? `${count}→${afterCount}` : count}
+                          </div>
                         </div>
-                      ))}
+                      );
+                    })}
                     </div>
                   );
                 })()}
@@ -710,4 +751,3 @@ export function OccupancyOptimizationTab(props: OccupancyOptimizationTabProps) {
     </div>
   );
 }
-

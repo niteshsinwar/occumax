@@ -55,9 +55,20 @@ _LOS_WEIGHTS  = [10, 28, 30, 18, 7, 4, 3]
 _CHANNELS     = [Channel.OTA, Channel.DIRECT]
 _CHAN_WEIGHTS  = [65, 35]
 
-# Named partners per channel — imported from single source of truth
 _OTA_PARTNERS   = OTA_PARTNER_NAMES_LIST   # US-active OTA partners from channel_config
 _OTA_P_WEIGHTS  = [26, 19, 18, 17, 11, 9]
+
+# Realistic names for demo bookings
+_FIRST_NAMES = [
+    "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles",
+    "Mary", "Patricia", "Jennifer", "Linda", "Elizabeth", "Barbara", "Susan", "Jessica", "Sarah", "Karen",
+    "Alex", "Jordan", "Taylor", "Morgan", "Casey", "Riley", "Jamie", "Avery", "Peyton", "Cameron"
+]
+_LAST_NAMES = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
+    "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
+    "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark", "Ramirez", "Lewis", "Robinson"
+]
 
 
 def _target_fill(d: date) -> float:
@@ -104,7 +115,7 @@ def _iter_days(start: date, end: date):
 
 async def seed_analytics_history(
     db: AsyncSession,
-    window_days: int = 21,
+    window_days: int = 30,
     target_start: Optional[date] = None,
     target_end: Optional[date] = None,
     seed: int = 42,
@@ -247,10 +258,7 @@ async def seed_analytics_history(
 
                     booking = Booking(
                         id=str(uuid.uuid4())[:8].upper(),
-                        guest_name=(
-                            f"{DEMO_PREFIX}[{run_tag}] {cat} {room_id} "
-                            f"{channel.value if hasattr(channel, 'value') else channel}"
-                        ),
+                        guest_name=f"{room_rng.choice(_FIRST_NAMES)} {room_rng.choice(_LAST_NAMES)}",
                         room_category=cat,
                         assigned_room_id=room_id,
                         check_in=check_in,

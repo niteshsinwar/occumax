@@ -276,6 +276,20 @@ def _build_comparison(
     return {"dates": [str(d) for d in req_dates], "rows": rows, "summary": summary_lines}
 
 
+async def _locked_slots_by_id(db: AsyncSession, slot_ids: set[str]) -> dict[str, Slot]:
+    if not slot_ids:
+        return {}
+    result = await db.execute(select(Slot).where(Slot.id.in_(slot_ids)).with_for_update())
+    return {slot.id: slot for slot in result.scalars().all()}
+
+
+def _iter_stay_dates(check_in: date, check_out: date):
+    cur = check_in
+    while cur < check_out:
+        yield cur
+        cur += timedelta(days=1)
+
+
 async def _compute_alternatives(
     db: AsyncSession,
     category: Union[str, RoomCategory],
@@ -371,10 +385,10 @@ async def check_availability(request: BookingRequestIn, db: AsyncSession) -> Shu
         raise HTTPException(status_code=400, detail="check_in cannot be in the past")
     if request.check_out <= request.check_in:
         raise HTTPException(status_code=400, detail="check_out must be after check_in")
-    if request.check_out > max_date:
+    if request.check_in > max_date:
         raise HTTPException(
             status_code=400,
-            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days from today (max: {max_date})"
+            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days from today (latest check-in: {max_date})"
         )
 
     # Fast path: direct availability without full-window load + shuffle enumeration.
@@ -469,11 +483,68 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
 
     if req.check_in < today:
         raise HTTPException(status_code=400, detail="check_in cannot be in the past")
-    if req.check_out > max_date:
+    if req.check_out <= req.check_in:
+        raise HTTPException(status_code=400, detail="check_out must be after check_in")
+    if req.check_in > max_date:
         raise HTTPException(
             status_code=400,
-            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days (max: {max_date})"
+            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days (latest check-in: {max_date})"
         )
+
+    room_result = await db.execute(
+        select(Room).where(Room.id == body.room_id, Room.is_active == True)
+    )
+    room_obj = room_result.scalar_one_or_none()
+    if not room_obj:
+        raise HTTPException(status_code=404, detail="Target room not found")
+    if room_obj.category != req.category:
+        raise HTTPException(status_code=400, detail="Target room category does not match request")
+
+    swap_plan = body.swap_plan or []
+    source_slot_ids: set[str] = set()
+    destination_slot_ids: set[str] = set()
+    new_booking_slot_ids = {f"{body.room_id}_{d}" for d in _iter_stay_dates(req.check_in, req.check_out)}
+    parsed_swap_dates: dict[tuple[str, str, str], list[date]] = {}
+
+    for step in swap_plan:
+        parsed_dates: list[date] = []
+        for date_str in step.dates:
+            try:
+                d = date.fromisoformat(date_str)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid swap date: {date_str}") from None
+            parsed_dates.append(d)
+            source_slot_ids.add(f"{step.from_room}_{d}")
+            destination_slot_ids.add(f"{step.to_room}_{d}")
+        parsed_swap_dates[(step.from_room, step.to_room, step.booking_id)] = parsed_dates
+
+    locked_slots = await _locked_slots_by_id(
+        db,
+        source_slot_ids | destination_slot_ids | new_booking_slot_ids,
+    )
+
+    for step in swap_plan:
+        for d in parsed_swap_dates[(step.from_room, step.to_room, step.booking_id)]:
+            source_slot_id = f"{step.from_room}_{d}"
+            slot = locked_slots.get(source_slot_id)
+            if not slot or slot.booking_id != step.booking_id:
+                raise HTTPException(status_code=409, detail=f"Swap plan is stale at {source_slot_id}")
+
+            target_slot_id = f"{step.to_room}_{d}"
+            target_slot = locked_slots.get(target_slot_id)
+            if target_slot and target_slot.block_type != BlockType.EMPTY and target_slot_id not in source_slot_ids:
+                raise HTTPException(status_code=409, detail=f"Target slot {target_slot_id} is no longer empty")
+
+    for slot_id in new_booking_slot_ids:
+        slot = locked_slots.get(slot_id)
+        if slot and slot.block_type != BlockType.EMPTY and slot_id not in source_slot_ids:
+            raise HTTPException(status_code=409, detail=f"Target slot {slot_id} is no longer empty")
+
+    move_room_ids = {step.to_room for step in swap_plan}
+    room_rates = {room_obj.id: room_obj.base_rate}
+    if move_room_ids:
+        rooms_result = await db.execute(select(Room.id, Room.base_rate).where(Room.id.in_(move_room_ids)))
+        room_rates.update({rid: rate for rid, rate in rooms_result.all()})
 
     booking_id = str(uuid.uuid4())[:8].upper()
 
@@ -494,86 +565,57 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
     # Cache each moved booking's channel/partner BEFORE nulling the slots — PASS 2
     # re-queries by booking_id and would find nothing after the slots are cleared.
     booking_channel_cache: dict[str, tuple] = {}
-    if body.swap_plan:
-        for swap in body.swap_plan:
-            from_room = swap.get("from_room")
-            bid       = swap.get("booking_id")
-            if not (from_room and bid):
-                continue
-
-            slots_result = await db.execute(
-                select(Slot).where(Slot.room_id == from_room, Slot.booking_id == bid)
-            )
-            for slot in slots_result.scalars().all():
-                if bid not in booking_channel_cache:
-                    booking_channel_cache[bid] = (slot.channel, slot.channel_partner)
-                slot.block_type = BlockType.EMPTY
-                slot.booking_id = None
+    for step in swap_plan:
+        for d in parsed_swap_dates[(step.from_room, step.to_room, step.booking_id)]:
+            slot = locked_slots[f"{step.from_room}_{d}"]
+            if step.booking_id not in booking_channel_cache:
+                booking_channel_cache[step.booking_id] = (slot.channel, slot.channel_partner)
+            slot.block_type = BlockType.EMPTY
+            slot.booking_id = None
 
     # Resolve channel enum and partner from request
-    try:
-        req_channel = Channel(req.channel or "DIRECT")
-    except ValueError:
-        req_channel = Channel.DIRECT
+    req_channel = req.channel or Channel.DIRECT
     req_partner = req.channel_partner or None
 
     # PASS 2: FILL all destination segments in the shuffle plan
-    if body.swap_plan:
-        for swap in body.swap_plan:
-            to_room = swap.get("to_room")
-            bid     = swap.get("booking_id")
-            if not (to_room and bid):
-                continue
+    for step in swap_plan:
+        cached = booking_channel_cache.get(step.booking_id, (None, None))
+        moved_channel = cached[0] if cached[0] else Channel.DIRECT
+        moved_partner = cached[1]
 
-            dates = swap.get("dates", [])
+        for d in parsed_swap_dates[(step.from_room, step.to_room, step.booking_id)]:
+            target_slot_id = f"{step.to_room}_{d}"
+            target_slot = locked_slots.get(target_slot_id)
 
-            # Use the channel cached in PASS 1 — slots are already vacated so a
-            # DB query would return nothing.
-            cached = booking_channel_cache.get(bid, (None, None))
-            moved_channel = cached[0] if cached[0] else Channel.DIRECT
-            moved_partner = cached[1]
+            if target_slot:
+                target_slot.block_type      = BlockType.SOFT
+                target_slot.booking_id      = step.booking_id
+                target_slot.channel         = moved_channel
+                target_slot.channel_partner = moved_partner
+            else:
+                db.add(Slot(
+                    id=target_slot_id,
+                    room_id=step.to_room,
+                    date=d,
+                    block_type=BlockType.SOFT,
+                    booking_id=step.booking_id,
+                    current_rate=room_rates.get(step.to_room, 0.0),
+                    channel=moved_channel,
+                    channel_partner=moved_partner,
+                ))
 
-            for d_str in dates:
-                d = date.fromisoformat(d_str)
-                target_slot_id = f"{to_room}_{d}"
-                tr = await db.execute(select(Slot).where(Slot.id == target_slot_id))
-                target_slot = tr.scalar_one_or_none()
-
-                if target_slot:
-                    target_slot.block_type      = BlockType.SOFT
-                    target_slot.booking_id      = bid
-                    target_slot.channel         = moved_channel
-                    target_slot.channel_partner = moved_partner
-                else:
-                    room_res = await db.execute(select(Room).where(Room.id == to_room))
-                    room_obj = room_res.scalar_one_or_none()
-                    db.add(Slot(
-                        id=target_slot_id,
-                        room_id=to_room,
-                        date=d,
-                        block_type=BlockType.SOFT,
-                        booking_id=bid,
-                        current_rate=room_obj.base_rate if room_obj else 0.0,
-                        channel=moved_channel,
-                        channel_partner=moved_partner,
-                    ))
-            
-            # Sync the Booking model for the moved guest
-            bk_res = await db.execute(select(Booking).where(Booking.id == bid))
-            bk_obj = bk_res.scalar_one_or_none()
-            if bk_obj:
-                bk_obj.assigned_room_id = to_room
+        # Sync the Booking model for the moved guest
+        bk_res = await db.execute(select(Booking).where(Booking.id == step.booking_id))
+        bk_obj = bk_res.scalar_one_or_none()
+        if bk_obj:
+            bk_obj.assigned_room_id = step.to_room
 
     # PASS 3: Place the NEW booking
-    room_result = await db.execute(select(Room).where(Room.id == body.room_id))
-    room_obj = room_result.scalar_one_or_none()
-    base_rate = room_obj.base_rate if room_obj else 0.0
+    base_rate = room_obj.base_rate
 
-    cur = req.check_in
-    while cur < req.check_out:
+    for cur in _iter_stay_dates(req.check_in, req.check_out):
         slot_id = f"{body.room_id}_{cur}"
-        tr = await db.execute(select(Slot).where(Slot.id == slot_id))
-        slot = tr.scalar_one_or_none()
+        slot = locked_slots.get(slot_id)
         if slot:
             slot.block_type      = BlockType.SOFT
             slot.booking_id      = booking_id
@@ -590,7 +632,6 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
                 channel=req_channel,
                 channel_partner=req_partner,
             ))
-        cur += timedelta(days=1)
 
     await db.commit()
     return {"booking_id": booking_id, "status": "CONFIRMED", "room_id": body.room_id}
@@ -699,18 +740,36 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
     group_id = str(uuid.uuid4())[:8].upper()
     booking_ids: list[str] = []
 
-    try:
-        split_channel = Channel(body.channel or "DIRECT")
-    except ValueError:
-        split_channel = Channel.DIRECT
+    split_channel = body.channel or Channel.DIRECT
     split_partner = body.channel_partner or None
 
-    for idx, seg in enumerate(body.segments):
+    slot_ids: set[str] = set()
+    room_ids = {seg.room_id for seg in body.segments}
+    for seg in body.segments:
+        if seg.check_out <= seg.check_in:
+            raise HTTPException(status_code=400, detail="Segment check_out must be after check_in")
         if seg.check_in < today:
             raise HTTPException(status_code=400, detail="Segment check_in is in the past")
-        if seg.check_out > max_date:
-            raise HTTPException(status_code=400, detail="Segment check_out exceeds booking window")
+        if seg.check_in > max_date:
+            raise HTTPException(status_code=400, detail="Segment check_in exceeds booking window")
+        for cur in _iter_stay_dates(seg.check_in, seg.check_out):
+            slot_id = f"{seg.room_id}_{cur}"
+            if slot_id in slot_ids:
+                raise HTTPException(status_code=400, detail=f"Duplicate split segment slot: {slot_id}")
+            slot_ids.add(slot_id)
 
+    rooms_result = await db.execute(select(Room).where(Room.id.in_(room_ids), Room.is_active == True))
+    rooms_by_id = {room.id: room for room in rooms_result.scalars().all()}
+    missing_rooms = sorted(room_ids - set(rooms_by_id.keys()))
+    if missing_rooms:
+        raise HTTPException(status_code=404, detail=f"Unknown or inactive room(s): {', '.join(missing_rooms)}")
+
+    locked_slots = await _locked_slots_by_id(db, slot_ids)
+    for slot_id, slot in locked_slots.items():
+        if slot.block_type != BlockType.EMPTY:
+            raise HTTPException(status_code=409, detail=f"Target slot {slot_id} is no longer empty")
+
+    for idx, seg in enumerate(body.segments):
         booking_id = str(uuid.uuid4())[:8].upper()
         booking_ids.append(booking_id)
 
@@ -731,15 +790,12 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
         await db.flush()
 
         # Block the slots for this segment
-        room_result = await db.execute(select(Room).where(Room.id == seg.room_id))
-        room_obj    = room_result.scalar_one_or_none()
+        room_obj    = rooms_by_id[seg.room_id]
         rate        = seg.discounted_rate if seg.discounted_rate else (room_obj.base_rate if room_obj else 0.0)
 
-        cur = seg.check_in
-        while cur < seg.check_out:
+        for cur in _iter_stay_dates(seg.check_in, seg.check_out):
             slot_id = f"{seg.room_id}_{cur}"
-            tr      = await db.execute(select(Slot).where(Slot.id == slot_id))
-            slot    = tr.scalar_one_or_none()
+            slot    = locked_slots.get(slot_id)
             if slot:
                 slot.block_type      = BlockType.SOFT
                 slot.booking_id      = booking_id
@@ -756,7 +812,6 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
                     channel         = split_channel,
                     channel_partner = split_partner,
                 ))
-            cur += timedelta(days=1)
 
     await db.commit()
     return {

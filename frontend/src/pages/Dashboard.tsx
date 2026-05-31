@@ -359,7 +359,7 @@ export function Dashboard() {
       setIsHeatmapLoading(false);
       return null;
     }
-  }, [show]);
+  }, []);
 
   useEffect(() => {
     loadHeatmap();
@@ -370,6 +370,7 @@ export function Dashboard() {
     () => (heatmap ? uniqueCategoriesFromHeatmapRows(heatmap.rows) : []),
     [heatmap],
   );
+  const heatmapFirstDate = heatmap?.dates?.[0];
 
   /** Rows limited to categories selected in the filter bar. */
   const filteredRows = useMemo(() => {
@@ -377,6 +378,7 @@ export function Dashboard() {
     const set = new Set(selectedCategories);
     return heatmap.rows.filter(row => set.has(row.category));
   }, [heatmap, selectedCategories]);
+  const selectedCategoriesKey = useMemo(() => selectedCategories.join("|"), [selectedCategories]);
 
   /** Number of day columns shown; capped by what the API returned. */
   const spanDays = useMemo(() => {
@@ -405,15 +407,15 @@ export function Dashboard() {
     getChannelPerformance({ start: startStr, end: endStr, categories: selectedCategories })
       .then(res => setChannelPerf(res.data as ChannelPerformanceResponse))
       .catch(() => setChannelPerf(null));
-  }, [scorecardSlice?.endStr, scorecardSlice?.startStr, selectedCategories, todayStr]);
+  }, [scorecardSlice, selectedCategories, todayStr]);
 
   /** Load a tight calendar window covering last night + same calendar date last year through the heatmap anchor night. */
   useEffect(() => {
-    if (!heatmap?.dates?.[0]) {
+    if (!heatmapFirstDate) {
       setOccupancyForecast(null);
       return;
     }
-    const firstNight = heatmapAnchorCalendarDate(String(heatmap.dates[0]));
+    const firstNight = heatmapAnchorCalendarDate(String(heatmapFirstDate));
     const yesterday = subDays(firstNight, 1);
     const lastYearNight = subYears(firstNight, 1);
     const rangeStart = yesterday.getTime() <= lastYearNight.getTime() ? yesterday : lastYearNight;
@@ -436,7 +438,7 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [heatmap?.dates?.[0], todayStr]);
+  }, [heatmapFirstDate, todayStr]);
 
   const refreshScorecard = useCallback(async (plan?: SwapStep[] | null) => {
     if (!scorecardSlice) return;
@@ -479,15 +481,19 @@ export function Dashboard() {
     show,
     setKNightLoading,
   });
+  const reloadPredictiveLos = occupancyPredictive.reloadPredictiveLos;
 
   useEffect(() => {
     if (activeTab !== "occupancy" || !heatmap || selectedCategories.length === 0) return;
-    void occupancyPredictive.reloadPredictiveLos();
-  }, [activeTab, heatmap?.dates?.[0], selectedCategories.join("|"), occupancyPredictive.reloadPredictiveLos]);
+    void reloadPredictiveLos();
+  }, [activeTab, heatmap, selectedCategories.length, selectedCategoriesKey, reloadPredictiveLos]);
 
   const refreshAllData = useCallback(async () => {
+    setSwapPlan(null);
+    setKNightSwapPlan(null);
     await loadHeatmap();
-  }, [loadHeatmap]);
+    void refreshScorecard(null);
+  }, [loadHeatmap, refreshScorecard]);
 
   // Keep the baseline scorecard in sync with the current filters/slice.
   useEffect(() => {
@@ -526,11 +532,11 @@ export function Dashboard() {
 
   const pricingExposure = useMemo(() => {
     if (!heatmap || allRows.length === 0 || spanDays === 0) {
-      return { unsoldRoomNights: 0, revenueAtRisk: 0, revenueOnBooks: 0, discountedRoomNights: 0 };
+      return { unsoldRoomNights: 0, unsoldInventoryValue: 0, revenueOnBooks: 0, discountedRoomNights: 0 };
     }
 
     let unsoldRoomNights = 0;
-    let revenueAtRisk = 0;
+    let unsoldInventoryValue = 0;
     let revenueOnBooks = 0;
     let discountedRoomNights = 0;
 
@@ -538,10 +544,10 @@ export function Dashboard() {
       const cells = row.cells.slice(0, spanDays);
       for (const c of cells) {
         if (!c) continue;
+        if (Number(c.current_rate ?? 0) < Number(row.base_rate ?? 0) * 0.95) discountedRoomNights += 1;
         if (c.block_type === "EMPTY") {
           unsoldRoomNights += 1;
-          revenueAtRisk += Number(c.current_rate ?? 0);
-          if (Number(c.current_rate ?? 0) < Number(row.base_rate ?? 0) * 0.95) discountedRoomNights += 1;
+          unsoldInventoryValue += Number(c.current_rate ?? 0);
         } else {
           revenueOnBooks += Number(c.current_rate ?? 0);
         }
@@ -550,7 +556,7 @@ export function Dashboard() {
 
     return {
       unsoldRoomNights,
-      revenueAtRisk: Math.round(revenueAtRisk),
+      unsoldInventoryValue: Math.round(unsoldInventoryValue),
       revenueOnBooks: Math.round(revenueOnBooks),
       discountedRoomNights,
     };
@@ -618,9 +624,9 @@ export function Dashboard() {
   const histOccContext = useMemo(() => {
     const pts = rollupOccupancyPoints(occupancyForecast);
     const byDate = actualOccPctByDateMap(pts);
-    if (!heatmap?.dates?.[0])
+    if (!heatmapFirstDate)
       return { yesterdayPct: null as number | null, lyPct: null as number | null, vsLyPpt: null as number | null };
-    const anchorCal = heatmapAnchorCalendarDate(String(heatmap.dates[0]));
+    const anchorCal = heatmapAnchorCalendarDate(String(heatmapFirstDate));
     const yKey = formatISO(subDays(anchorCal, 1), { representation: "date" });
     const lyKey = formatISO(subYears(anchorCal, 1), { representation: "date" });
     const yesterdayPct = byDate.get(yKey) ?? null;
@@ -629,7 +635,7 @@ export function Dashboard() {
     const vsLyPpt =
       tonightPct != null && lyPct != null ? Math.round(tonightPct - lyPct) : null;
     return { yesterdayPct, lyPct, vsLyPpt };
-  }, [occupancyForecast, heatmap?.dates?.[0], v2Kpis?.tonightOccupancyPct]);
+  }, [occupancyForecast, heatmapFirstDate, v2Kpis?.tonightOccupancyPct]);
 
   /** Top partners with paired net revenue + net ADR for the grouped spotlight card. */
   const dashboardPartnerSpotlight = useMemo(() => {
@@ -645,22 +651,28 @@ export function Dashboard() {
   }, [channelProfitKpis]);
 
   const revenueAtRiskThresholdUsd = 250_000;
+  const capacityRiskUsd = Math.round(scorecard?.before.revenue_at_risk ?? v2Kpis?.orphanRevenueAtRisk ?? 0);
   const revenueAtRiskBarPct = Math.min(
     100,
-    pricingExposure.revenueAtRisk > 0 ? (pricingExposure.revenueAtRisk / revenueAtRiskThresholdUsd) * 100 : 0,
+    capacityRiskUsd > 0 ? (capacityRiskUsd / revenueAtRiskThresholdUsd) * 100 : 0,
   );
+  const revenueAtRiskThresholdLabel =
+    capacityRiskUsd >= revenueAtRiskThresholdUsd
+      ? "Above threshold"
+      : `${Math.round(revenueAtRiskBarPct)}% to threshold`;
 
   type ActionItem = { priority: "HIGH" | "MED" | "LOW"; category: string; tab: OverviewTab; title: string; detail: string };
 
   const actionQueue = useMemo((): ActionItem[] => {
     const items: ActionItem[] = [];
-    const orphans = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
-    const revRisk = pricingExposure.revenueAtRisk;
+    const orphans = scorecard?.before.orphan_nights ?? v2RunMetrics?.orphanNights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
+    const orphanGaps = v2RunMetrics?.orphanGaps ?? null;
+    const revRisk = capacityRiskUsd;
 
     if (orphans > 5)
-      items.push({ priority: "HIGH", category: "Occupancy", tab: "occupancy", title: `${orphans} orphan nights stranded`, detail: `$${Math.round(revRisk).toLocaleString("en-US")} estimated revenue at risk — run a room shuffle to consolidate gaps into bookable runs.` });
+      items.push({ priority: "HIGH", category: "Occupancy", tab: "occupancy", title: `${orphans} stranded room-night${orphans !== 1 ? "s" : ""}`, detail: `$${Math.round(revRisk).toLocaleString("en-US")} risk-adjusted value across ${orphanGaps ?? "multiple"} gap${orphanGaps === 1 ? "" : "s"} — run a room shuffle to consolidate sellable stays.` });
     else if (orphans > 0)
-      items.push({ priority: "MED", category: "Occupancy", tab: "occupancy", title: `${orphans} orphan night${orphans !== 1 ? "s" : ""} found`, detail: `$${Math.round(revRisk).toLocaleString("en-US")} at risk — consider a room shuffle to recover usable capacity.` });
+      items.push({ priority: "MED", category: "Occupancy", tab: "occupancy", title: `${orphans} stranded room-night${orphans !== 1 ? "s" : ""}`, detail: `$${Math.round(revRisk).toLocaleString("en-US")} risk-adjusted value — consider a room shuffle to recover usable capacity.` });
 
     if (paceDelta !== null && paceDelta < -5)
       items.push({ priority: "HIGH", category: "Channels", tab: "channels", title: `Pace ${Math.abs(Math.round(paceDelta))} occ-pts behind 2yr baseline`, detail: "Pickup is significantly softer than expected — review channel mix and consider promotional activation." });
@@ -669,16 +681,26 @@ export function Dashboard() {
 
     const mixTotal = v2ChannelMix ? Object.values(v2ChannelMix).reduce((s, n) => s + n, 0) : 0;
     const otaShare = mixTotal > 0 ? Math.round(((v2ChannelMix?.["OTA"] ?? 0) / mixTotal) * 100) : 0;
-    if (otaShare > 65 && mixTotal > 0)
-      items.push({ priority: "MED", category: "Channels", tab: "channels", title: `OTA concentration at ${otaShare}%`, detail: "Heavy OTA dependency compresses net margin — hold unallocated inventory for direct hotel selling." });
+    const otaLeakagePct = channelProfitKpis.otaLeakagePct;
+    if ((otaLeakagePct != null && otaLeakagePct >= 15) || (otaShare >= 60 && mixTotal > 0))
+      items.push({
+        priority: "MED",
+        category: "Channels",
+        tab: "channels",
+        title: otaLeakagePct != null ? `OTA leakage at ${Math.round(otaLeakagePct)}% of gross` : `OTA concentration at ${otaShare}%`,
+        detail: `${channelProfitKpis.otaLeakage != null ? `$${Math.round(channelProfitKpis.otaLeakage).toLocaleString("en-US")} margin leakage detected. ` : ""}Review OTA dependency and hold stronger nights for direct hotel selling.`,
+      });
+
+    if (histOccContext.yesterdayPct == null || histOccContext.lyPct == null)
+      items.push({ priority: "LOW", category: "Occupancy", tab: "occupancy", title: "Historical occupancy comps unavailable", detail: "Previous-night or prior-year context is missing for this anchor date, so the snapshot cannot explain today against history yet." });
 
     items.push({ priority: "MED", category: "Pricing", tab: "pricing", title: "Run RateIQ pricing analysis", detail: "AI agent synthesizes weather, events, market signals and live occupancy to surface rate and discount opportunities." });
 
     if (v2CancelRate !== null && v2CancelRate > 15)
       items.push({ priority: "LOW", category: "Occupancy", tab: "occupancy", title: `Modelled cancel rate ~${v2CancelRate}% (OTA-weighted)`, detail: "High OTA share inflates estimated cancellation risk — consider firmer non-refundable direct rate packages." });
 
-    return items.slice(0, 5);
-  }, [scorecard, v2Kpis, paceDelta, v2ChannelMix, v2CancelRate, pricingExposure]);
+    return items;
+  }, [scorecard, v2RunMetrics, v2Kpis, capacityRiskUsd, paceDelta, v2ChannelMix, v2CancelRate, channelProfitKpis, histOccContext]);
 
   const runOptimisePreview = useCallback(async () => {
     if (!heatmap) return;
@@ -846,7 +868,7 @@ export function Dashboard() {
           predictiveLosLoading={occupancyPredictive.predictiveLosLoading}
           predictiveLosError={occupancyPredictive.predictiveLosError}
           predictiveLosReady={occupancyPredictive.predictiveLosReady}
-          onReloadPredictiveLos={occupancyPredictive.reloadPredictiveLos}
+          onReloadPredictiveLos={reloadPredictiveLos}
           runOccupancyRecoveryShufflePreview={occupancyPredictive.runOccupancyShufflePreview}
           clearOccupancyRecoveryShufflePreview={occupancyPredictive.clearOccupancyShufflePreview}
         />
@@ -912,7 +934,7 @@ export function Dashboard() {
                       </div>
                       <div className="mt-6 pt-4 border-t border-border/60 grid grid-cols-2 gap-3 text-[11px]">
                         <div>
-                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Yester-night</div>
+                          <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Previous night</div>
                           <div className="font-serif font-bold text-text tabular-nums mt-1">
                             {histOccContext.yesterdayPct != null ? `${Math.round(histOccContext.yesterdayPct)}%` : "—"}
                           </div>
@@ -939,12 +961,12 @@ export function Dashboard() {
                   <div className={`relative overflow-hidden ${overviewCardLgClass} border-l-[5px] border-l-occuorange pl-5 sm:pl-6 pr-5 sm:pr-6 pt-5 pb-5`}>
                     <AlertTriangle className="pointer-events-none absolute right-4 top-4 w-9 h-9 text-occuorange/35" aria-hidden />
                     <div className="relative">
-                      <div className={`${overviewEyebrowClass} text-occuorange`}>Revenue at risk</div>
+                      <div className={`${overviewEyebrowClass} text-occuorange`}>Recoverable gap risk</div>
                       <div className="text-[10px] uppercase tracking-[0.14em] font-bold text-text-muted mt-1">
-                        Unsold slot value · {spanDays}-night window
+                        Risk-adjusted stranded value · {spanDays}-night window
                       </div>
-                      <div className={`mt-4 text-4xl sm:text-[2.75rem] font-serif font-bold tabular-nums leading-none ${pricingExposure.revenueAtRisk > 0 ? "text-occuorange" : "text-text"}`}>
-                        ${pricingExposure.revenueAtRisk.toLocaleString("en-US")}
+                      <div className={`mt-4 text-4xl sm:text-[2.75rem] font-serif font-bold tabular-nums leading-none ${capacityRiskUsd > 0 ? "text-occuorange" : "text-text"}`}>
+                        ${capacityRiskUsd.toLocaleString("en-US")}
                       </div>
                       <div className="mt-4">
                         <div className="h-2 rounded-full bg-surface-2 border border-border/50 overflow-hidden">
@@ -955,7 +977,10 @@ export function Dashboard() {
                         </div>
                         <div className="mt-2 flex flex-wrap justify-between gap-2 text-[10px] text-text-muted">
                           <span>Operating threshold · ${revenueAtRiskThresholdUsd.toLocaleString("en-US")}</span>
-                          <span className="font-mono font-bold text-occuorange">{Math.round(revenueAtRiskBarPct)}% to threshold</span>
+                          <span className="font-mono font-bold text-occuorange">{revenueAtRiskThresholdLabel}</span>
+                        </div>
+                        <div className="mt-1 text-[10px] text-text-muted">
+                          Unsold inventory value · ${pricingExposure.unsoldInventoryValue.toLocaleString("en-US")}
                         </div>
                       </div>
                     </div>
@@ -968,23 +993,23 @@ export function Dashboard() {
                     <div className={`${overviewEyebrowClass} mb-4`}>Inventory gaps</div>
                     <div className="grid grid-cols-2 gap-4 flex-1">
                       {(() => {
-                        const orphanN = scorecard?.before.orphan_nights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
+                        const orphanN = scorecard?.before.orphan_nights ?? v2RunMetrics?.orphanNights ?? v2Kpis?.orphanNightsAtRisk ?? 0;
                         return (
                           <>
                             <div>
-                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Orphan nights</div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Stranded nights</div>
                               <div className={`text-3xl font-serif font-bold tabular-nums mt-1 ${orphanN > 0 ? "text-occuorange" : "text-text"}`}>{orphanN}</div>
                             </div>
                             <div>
-                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Orphan gaps</div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">Stranded gaps</div>
                               <div className="text-3xl font-serif font-bold text-text tabular-nums mt-1">{v2RunMetrics ? v2RunMetrics.orphanGaps : "—"}</div>
                             </div>
                             <div>
-                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k=2 windows</div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">2-night sellable runs</div>
                               <div className="text-2xl font-serif font-bold text-text tabular-nums mt-1">{scorecardLoading ? "…" : (scorecard?.before.k_windows?.[2] ?? "—")}</div>
                             </div>
                             <div>
-                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">k=3 windows</div>
+                              <div className="text-[9px] font-bold uppercase tracking-widest text-text-muted">3-night sellable runs</div>
                               <div className="text-2xl font-serif font-bold text-text tabular-nums mt-1">{scorecardLoading ? "…" : (scorecard?.before.k_windows?.[3] ?? "—")}</div>
                             </div>
                           </>
@@ -1059,7 +1084,7 @@ export function Dashboard() {
                         Computed from live data
                       </span>
                       <span className="hidden sm:block h-3 w-px bg-border shrink-0" aria-hidden />
-                      <h2 className="font-serif font-bold text-base text-text">Action Queue</h2>
+                      <h2 className="font-serif font-bold text-base text-text">Recommended next actions</h2>
                     </div>
                     <AlertTriangle className="w-4 h-4 text-occuorange/70 shrink-0" />
                   </div>

@@ -17,7 +17,7 @@ type Tab = "rooms" | "calendar" | "bookings";
 
 interface RoomRow {
   id: string; category: string; base_rate: number; floor_number: number; is_active: boolean;
-  stats: { total_slots: number; empty_nights: number; booked_nights: number; occupancy_pct: number };
+  stats: { total_slots: number; empty_nights: number; booked_nights: number; hard_nights?: number; occupancy_pct: number };
 }
 interface CategoryRow { name: string; room_count: number; avg_base_rate: number; min_rate: number; max_rate: number; }
 
@@ -38,7 +38,7 @@ export function AdminPanel() {
   const [bookingStart, setBookingStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [bookingEnd, setBookingEnd] = useState<string>(() => {
     const d = new Date();
-    d.setDate(d.getDate() + 21);
+    d.setDate(d.getDate() + 30);
     return d.toISOString().slice(0, 10);
   });
   const [editingBookingId, setEditingBookingId] = useState<string | null>(null);
@@ -58,7 +58,7 @@ export function AdminPanel() {
   const [seedStart, setSeedStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [seedEnd, setSeedEnd] = useState<string>(() => {
     const d = new Date();
-    d.setDate(d.getDate() + 21);
+    d.setDate(d.getDate() + 30);
     return d.toISOString().slice(0, 10);
   });
   const [seedFillPct, setSeedFillPct] = useState<number>(35);
@@ -90,6 +90,10 @@ export function AdminPanel() {
       setBookingsLoading(false);
     }
   }, [bookingStart, bookingEnd, show]);
+
+  useEffect(() => {
+    if (tab === "bookings") void loadBookings();
+  }, [tab, loadBookings]);
 
   const handleAddRoom = async () => {
     if (!newRoom.id.trim()) { show("Room ID is required", "error"); return; }
@@ -136,6 +140,8 @@ export function AdminPanel() {
         `Seeded analytics history: deleted ${d.deleted_bookings ?? 0} bookings (${d.cleared_slots ?? 0} nights), created ${d.inserted_bookings ?? 0} bookings (${d.updated_slots ?? 0} nights).`,
         "success"
       );
+      await load();
+      if (tab === "bookings") await loadBookings();
     } catch (e: unknown) {
       show(getErrorDetail(e) || "Failed to seed analytics history", "error");
     } finally {
@@ -328,11 +334,11 @@ export function AdminPanel() {
           <div className="bg-surface border border-border rounded-sm shadow-subtle overflow-hidden">
             <div className="px-6 py-4 border-b border-border flex justify-between items-center bg-surface-2/30">
               <h3 className="font-serif font-bold text-lg text-text">Inventory Tracking</h3>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted bg-surface-2 px-3 py-1 border border-border">{rooms.filter(r => r.is_active).length} Active Rooms</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted bg-surface-2 px-3 py-1 border border-border">{rooms.filter(r => r.is_active).length} Active Rooms · scroll table</span>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[520px] overflow-auto">
               <table className="w-full text-sm text-left">
-                <thead className="text-[10px] font-bold text-text-muted uppercase tracking-[0.1em] bg-surface-2/50 border-b border-border">
+                <thead className="sticky top-0 z-10 text-[10px] font-bold text-text-muted uppercase tracking-[0.1em] bg-surface-2 border-b border-border">
                   <tr>
                     <th className="px-6 py-4">Room</th>
                     <th className="px-6 py-4">Category</th>
@@ -373,14 +379,17 @@ export function AdminPanel() {
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-16 h-1 bg-border overflow-hidden">
-                            <div className={`h-full ${r.stats.occupancy_pct > 70 ? 'bg-occugreen' : r.stats.occupancy_pct > 30 ? 'bg-occuorange' : 'bg-text-muted'}`} style={{ width: `${r.stats.occupancy_pct}%` }} />
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-16 h-1 bg-border overflow-hidden">
+                              <div className={`h-full ${r.stats.occupancy_pct > 70 ? 'bg-occugreen' : r.stats.occupancy_pct > 30 ? 'bg-occuorange' : 'bg-text-muted'}`} style={{ width: `${r.stats.occupancy_pct}%` }} />
+                            </div>
+                            <span className="text-xs font-mono font-medium text-text-muted">{r.stats.occupancy_pct}%</span>
+                            <span className="hidden xl:inline text-[10px] font-semibold text-text-muted tabular-nums whitespace-nowrap">
+                              {r.stats.booked_nights} booked · {r.stats.empty_nights} open · {r.stats.hard_nights ?? 0} blocked
+                            </span>
                           </div>
-                          <span className="text-xs font-mono font-medium text-text-muted">{r.stats.occupancy_pct}%</span>
-                        </div>
-                      </td>
+                        </td>
                       <td className="px-6 py-4 text-center">
                         <span className={`inline-flex items-center px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] border ${r.is_active ? "bg-occugreen/10 text-occugreen border-occugreen/30" : "bg-occured/10 text-occured border-occured/30"}`}>
                           {r.is_active ? "ACTIVE" : "OFF-LINE"}
@@ -455,7 +464,7 @@ export function AdminPanel() {
             <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
               <div>
                 <h3 className="font-serif font-bold text-lg text-text">View Booking Data</h3>
-                <p className="text-xs text-text-muted mt-1 tracking-wide">Filter by stay date range. Edit or delete bookings (slots will be re-synced).</p>
+                <p className="text-xs text-text-muted mt-1 tracking-wide">Auto-loads the selected stay window. Edit or delete bookings; slot rows are re-synced from the booking record.</p>
               </div>
               <div className="flex flex-col sm:flex-row sm:items-end gap-3">
                 <div className="space-y-1">
@@ -495,14 +504,16 @@ export function AdminPanel() {
                 {bookings.length} rows
               </span>
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-h-[560px] overflow-auto">
               <table className="w-full text-sm text-left">
-                <thead className="text-[10px] font-bold text-text-muted uppercase tracking-[0.1em] bg-surface-2/50 border-b border-border">
+                <thead className="sticky top-0 z-10 text-[10px] font-bold text-text-muted uppercase tracking-[0.1em] bg-surface-2 border-b border-border">
                   <tr>
                     <th className="px-6 py-4">Booking</th>
                     <th className="px-6 py-4">Guest</th>
                     <th className="px-6 py-4">Category</th>
                     <th className="px-6 py-4">Room</th>
+                    <th className="px-6 py-4">Source</th>
+                    <th className="px-6 py-4">Partner</th>
                     <th className="px-6 py-4">Check-in</th>
                     <th className="px-6 py-4">Check-out</th>
                     <th className="px-6 py-4">Group</th>
@@ -540,23 +551,29 @@ export function AdminPanel() {
                               {String(b.category)}
                             </span>
                           )}
-                        </td>
-                        <td className="px-6 py-4">
-                          {isEditing ? (
-                            <input
-                              className="w-24 bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-mono font-medium outline-none focus:ring-1 focus:ring-accent"
-                              value={editBooking.roomId}
-                              onChange={(e) => setEditBooking({ ...editBooking, roomId: e.target.value })}
-                            />
-                          ) : (
-                            <span className="font-mono font-medium text-text-muted">{b.room_id ?? "-"}</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4">
-                          {isEditing ? (
-                            <input
-                              type="date"
-                              className="bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-semibold outline-none focus:ring-1 focus:ring-accent"
+                          </td>
+                          <td className="px-6 py-4">
+                            {isEditing ? (
+                              <input
+                                className="w-24 bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-mono font-medium outline-none focus:ring-1 focus:ring-accent"
+                                value={editBooking.roomId}
+                                onChange={(e) => setEditBooking({ ...editBooking, roomId: e.target.value })}
+                              />
+                            ) : (
+                              <span className="font-mono font-medium text-text-muted">{b.room_id ?? "-"}</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="font-mono text-[11px] font-semibold text-text-muted">{b.channel ?? "-"}</span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <span className="text-[11px] font-medium text-text-muted whitespace-nowrap">{b.channel_partner ?? "-"}</span>
+                          </td>
+                          <td className="px-6 py-4">
+                            {isEditing ? (
+                              <input
+                                type="date"
+                                className="bg-surface border border-accent rounded-sm text-xs px-2 py-1.5 text-text font-semibold outline-none focus:ring-1 focus:ring-accent"
                               value={editBooking.checkIn}
                               onChange={(e) => setEditBooking({ ...editBooking, checkIn: e.target.value })}
                             />
@@ -612,14 +629,14 @@ export function AdminPanel() {
                         </td>
                       </tr>
                     );
-                  })}
-                  {!bookingsLoading && bookings.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="px-6 py-10 text-center text-sm text-text-muted font-medium">
-                        No bookings found for the selected date range.
-                      </td>
-                    </tr>
-                  )}
+                    })}
+                    {!bookingsLoading && bookings.length === 0 && (
+                      <tr>
+                        <td colSpan={10} className="px-6 py-10 text-center text-sm text-text-muted font-medium">
+                          No bookings found for the selected date range. Generate data for the current window or widen the filter.
+                        </td>
+                      </tr>
+                    )}
                 </tbody>
               </table>
             </div>

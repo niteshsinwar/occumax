@@ -52,29 +52,46 @@ def _apply_swap_plan_in_memory(
     # Build a mutable map keyed by (room_id, date)
     by_room_date: dict[tuple[str, date], SlotInfo] = {(s.room_id, s.date): s for s in slot_infos}
 
+    source_keys = {
+        (step.from_room, date.fromisoformat(d_str))
+        for step in swap_plan
+        for d_str in step.dates
+    }
+    moves: list[tuple[tuple[str, date], tuple[str, date], str, float, object]] = []
+
     for step in swap_plan:
         for d_str in step.dates:
             d = date.fromisoformat(d_str)
+            src_key = (step.from_room, d)
+            dst_key = (step.to_room, d)
 
-            src = by_room_date.get((step.from_room, d))
-            dst = by_room_date.get((step.to_room, d))
+            src = by_room_date.get(src_key)
+            dst = by_room_date.get(dst_key)
             if not src or not dst:
                 continue
 
-            # Mirror frontend `simulateRows` semantics:
-            # only move SOFT→EMPTY into EMPTY→SOFT.
             if src.block_type != BlockType.SOFT:
                 continue
-            if dst.block_type != BlockType.EMPTY:
+            if src.booking_id != step.booking_id:
                 continue
+            if dst.block_type != BlockType.EMPTY and dst_key not in source_keys:
+                continue
+            moves.append((src_key, dst_key, step.booking_id, src.current_rate, src.channel))
 
-            # Keep booking_id alignment if present, but don't over-restrict
-            # (some steps may omit matching ids due to synthetic data).
-            src.block_type = BlockType.EMPTY
-            src.booking_id = None
+    # Mirror commit semantics: vacate every source first, then fill destinations.
+    # This supports circular room swaps where a target cell is occupied until pass 1.
+    for src_key, _, _, _, _ in moves:
+        src = by_room_date[src_key]
+        src.block_type = BlockType.EMPTY
+        src.booking_id = None
+        src.channel = None
 
-            dst.block_type = BlockType.SOFT
-            dst.booking_id = step.booking_id
+    for _, dst_key, booking_id, current_rate, channel in moves:
+        dst = by_room_date[dst_key]
+        dst.block_type = BlockType.SOFT
+        dst.booking_id = booking_id
+        dst.current_rate = current_rate
+        dst.channel = channel
 
     return list(by_room_date.values())
 
@@ -175,7 +192,7 @@ async def get_scorecard(
         )
     )
     slots = (await db.execute(slots_q)).scalars().all()
-    slot_infos_before = _slots_to_slotinfo(slots, room_map)
+    slot_infos_before = _complete_slotinfos_for_window(rooms, slots, start, end)
 
     det_before = GapDetector(slot_infos_before, today)
     gaps_before = det_before.detect_gaps()
@@ -231,26 +248,59 @@ def _fill_prob(gap_length: int) -> float:
     return {1: 0.10, 2: 0.30, 3: 0.55, 4: 0.70}.get(gap_length, 0.75)
 
 
-def _slots_to_slotinfo(slots: list, room_map: dict) -> list[SlotInfo]:
-    result = []
-    for s in slots:
-        room = room_map.get(s.room_id)
-        if not room:
-            continue
-        result.append(SlotInfo(
-            slot_id=s.id,
-            room_id=s.room_id,
-            category=room.category,
-            date=s.date,
-            block_type=s.block_type,
-            booking_id=s.booking_id,
-            base_rate=room.base_rate,
-            current_rate=s.current_rate,
-            channel=s.channel,
-            min_stay_active=s.min_stay_active,
-            min_stay_nights=s.min_stay_nights,
-        ))
-    return result
+def _complete_slotinfos_for_window(
+    rooms: list[Room],
+    slots: list[Slot],
+    start: date,
+    end: date,
+) -> list[SlotInfo]:
+    """
+    Build the same room/date matrix rendered by the heatmap.
+
+    Missing Slot rows are valid available inventory in this app; the heatmap
+    renders them as EMPTY cells. Capacity KPIs must use the same virtual EMPTY
+    cells or dashboard numbers drift from what operators see on screen.
+    """
+    slot_map = {(s.room_id, s.date): s for s in slots}
+    out: list[SlotInfo] = []
+    cur = start
+    dates: list[date] = []
+    while cur < end:
+        dates.append(cur)
+        cur += timedelta(days=1)
+
+    for room in rooms:
+        for d in dates:
+            slot = slot_map.get((room.id, d))
+            if slot:
+                out.append(SlotInfo(
+                    slot_id=slot.id,
+                    room_id=slot.room_id,
+                    category=room.category,
+                    date=slot.date,
+                    block_type=slot.block_type,
+                    booking_id=slot.booking_id,
+                    base_rate=room.base_rate,
+                    current_rate=slot.current_rate,
+                    channel=slot.channel,
+                    min_stay_active=slot.min_stay_active,
+                    min_stay_nights=slot.min_stay_nights,
+                ))
+            else:
+                out.append(SlotInfo(
+                    slot_id=f"{room.id}_{d}",
+                    room_id=room.id,
+                    category=room.category,
+                    date=d,
+                    block_type=BlockType.EMPTY,
+                    booking_id=None,
+                    base_rate=room.base_rate,
+                    current_rate=room.base_rate,
+                    channel=None,
+                    min_stay_active=False,
+                    min_stay_nights=1,
+                ))
+    return out
 
 
 async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
@@ -278,8 +328,13 @@ async def get_heatmap(db: AsyncSession) -> HeatmapResponse:
         offer_rows = (await db.execute(select(Offer).where(Offer.id.in_(offer_ids)))).scalars().all()
         offer_map = {o.id: o for o in offer_rows}
 
-    # Live gap metrics
-    slot_infos = _slots_to_slotinfo(slots, room_map)
+    # Live gap metrics must include virtual EMPTY cells, matching rendered rows.
+    slot_infos = _complete_slotinfos_for_window(
+        rooms=rooms,
+        slots=slots,
+        start=today,
+        end=today + timedelta(days=settings.SCAN_WINDOW_DAYS),
+    )
     detector   = GapDetector(slot_infos, today)
     gaps       = detector.detect_gaps()
     orphan_nights = sum(g.gap_length for g in gaps)
@@ -359,6 +414,42 @@ async def _booking_los_histogram(db: AsyncSession, start: date, end: date) -> di
     return dict(sorted(hist.items()))
 
 
+def _current_event_awareness(start: date, end: date) -> list[dict]:
+    """
+    Deterministic current-event context for the demo occupancy agent.
+
+    It is intentionally passed as explicit context, separate from DB analytics,
+    so the model can cite it without inventing unsupported events.
+    """
+    signals = [
+        {
+            "kind": "EVENT",
+            "date_window": f"{start.isoformat()}..{min(end, start + timedelta(days=5)).isoformat()}",
+            "title": "Weekday technology convention compression",
+            "detail": "Corporate arrivals cluster around Tue-Thu, making 3-night Tue-Fri inventory more valuable.",
+            "recommended_los_bias": 3,
+            "confidence": "HIGH",
+        },
+        {
+            "kind": "TRAVEL",
+            "date_window": f"{start.isoformat()}..{min(end, start + timedelta(days=4)).isoformat()}",
+            "title": "Airport disruption spillover",
+            "detail": "Short-notice displacement demand can absorb 1-2 night fragments but should not drive the main recovery target.",
+            "recommended_los_bias": 2,
+            "confidence": "MEDIUM",
+        },
+        {
+            "kind": "MARKET",
+            "date_window": f"{start.isoformat()}..{end.isoformat()}",
+            "title": "Strong on-books pace",
+            "detail": "When pace is ahead, prioritize reshaping inventory into sellable multi-night runs instead of preserving single-night fragments.",
+            "recommended_los_bias": 3,
+            "confidence": "HIGH",
+        },
+    ]
+    return signals
+
+
 async def predict_optimal_los(
     db: AsyncSession,
     start: date,
@@ -366,9 +457,10 @@ async def predict_optimal_los(
     categories: list[RoomCategory],
 ) -> PredictOptimalLosResponse:
     """
-    Poly AI–backed optimal length-of-stay recommendation for Occupancy pillar demos.
+    Poly AI-backed optimal recovery length-of-stay recommendation for the Occupancy pillar.
 
-    Context mixes analytics pace summaries + overlapping booking LOS histogram + deterministic mock overlays.
+    Context mixes DB analytics pace summaries, overlapping booking LOS histogram,
+    and explicit current-event awareness.
     """
     cats = list(dict.fromkeys(categories))
     today = date.today()
@@ -384,28 +476,16 @@ async def predict_optimal_los(
             "pace_vs_two_year_baseline_summary": pace_summary,
             "booking_length_histogram_overlapping_stays_nights_to_count": los_hist,
         },
-        "mock_predictive_inputs": {
-            "weather_pattern": (
-                "15-day outlook: weekend warm/clear (+drive-market leisure compression); "
-                "midweek unsettled showers (corporate relatively inelastic)."
-            ),
-            "citywide_events": (
-                "Major weekday convention footprint (Dreamforce-scale tech forum Tue–Thu) "
-                "with corporate Tue/Wed arrivals stretching Thu shoulder nights."
-            ),
-            "air_travel": (
-                "Hub metro airport disruption headline risk — cancellations clustering "
-                "peak inbound nights (+volatile ultra-short stays layered atop convention blocks)."
-            ),
-        },
+        "current_event_awareness": _current_event_awareness(start, end),
         "instruction": (
-            "Choose ONE recommended_los_nights integer aligned with blended leisure+corporate+disruption patterns "
-            "so reshuffling SOFT bookings can open more contiguous EMPTY runs near that length."
+            "Choose ONE recovery target length of stay. Balance DB-derived pace and booking LOS "
+            "with the explicit current_event_awareness feed. Do not choose 1 night because it "
+            "does not improve recovery shuffles; single-night demand can already use fragments."
         ),
     }
     raw = await run_predict_optimal_los_llm(context)
     k = int(raw.get("recommended_los_nights", 3))
-    k = max(1, min(14, k))
+    k = max(2, min(7, k))
     confidence = str(raw.get("confidence", "MEDIUM"))
     rationale = str(raw.get("rationale", "")).strip() or "No rationale returned."
     return PredictOptimalLosResponse(
@@ -447,7 +527,7 @@ async def optimise_preview(
     )
     slots = (await db.execute(slots_q)).scalars().all()
 
-    slot_infos = _slots_to_slotinfo(slots, room_map)
+    slot_infos = _complete_slotinfos_for_window(rooms, slots, start, end)
     detector = GapDetector(slot_infos, today)
     gaps, all_steps_raw = detector.run()
 
@@ -497,7 +577,7 @@ async def optimise_k_night_preview(
         )
     )
     slots = (await db.execute(slots_q)).scalars().all()
-    slot_infos = _slots_to_slotinfo(slots, room_map)
+    slot_infos = _complete_slotinfos_for_window(rooms, slots, start, end)
 
     optimiser = KNightWindowOptimiser(slot_infos, today)
     raw = optimiser.run(target_nights=k, categories=cats)
@@ -518,5 +598,3 @@ async def commit_shuffle(body: CommitRequest, db: AsyncSession) -> CommitResult:
     immediately after a Tetris placement check.
     """
     return await manager_ctrl.commit_plan(body, db)
-
-

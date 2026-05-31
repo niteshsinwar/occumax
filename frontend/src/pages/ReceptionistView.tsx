@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { format, addDays } from "date-fns";
 import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
-import type { ShuffleResult, RoomCategory, ComparisonTable, SplitSegment } from "../types";
+import type { ShuffleResult, RoomCategory, ComparisonTable, SplitSegment, SwapStep } from "../types";
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User, X } from "lucide-react";
 
-const CATEGORIES: RoomCategory[] = ["STANDARD", "STUDIO", "DELUXE", "SUITE"];
+const CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"];
+const AI_HISTORY_KEY = "occumax_front_desk_ai_history";
+const MAX_AI_HISTORY_MESSAGES = 20;
+const AI_HISTORY_TTL_MS = 30 * 60 * 1000;
 
 // Receptionist desk = direct routes only. OTA allocations happen in Manager → Channels.
 
@@ -16,12 +19,24 @@ interface ChatMsg {
   action_data?: { type: string; data: Record<string, unknown> } | null;
 }
 
+interface AiHistorySnapshot {
+  searchKey: string;
+  savedAt: number;
+  messages: ChatMsg[];
+}
+
 type StepState = "idle" | "running" | "done" | "skipped";
 interface CheckSteps { direct: StepState; shuffle: StepState; }
 interface RecentBooking {
   id: string; guest_name: string; category: string; room_id: string;
   check_in: string; check_out: string; is_live: boolean;
 }
+
+const trimAiHistory = (messages: ChatMsg[]) => messages.slice(-MAX_AI_HISTORY_MESSAGES);
+const persistableAiHistory = (messages: ChatMsg[]) =>
+  trimAiHistory(messages)
+    .filter((msg) => !msg.content.startsWith("[HANDOFF]") && !msg.content.startsWith("[PREFS]"))
+    .map((msg) => ({ role: msg.role, content: msg.content }) as ChatMsg);
 
 const BT_BG: Record<string, string> = {
   EMPTY: "var(--green)",
@@ -39,6 +54,7 @@ export function ReceptionistView() {
   const [checkIn,        setCheckIn]        = useState(today);
   const [checkOut,       setCheckOut]       = useState(defaultOut);
   const [guestName,      setGuestName]      = useState("");
+  const searchKey = useMemo(() => `${category}|${checkIn}|${checkOut}`, [category, checkIn, checkOut]);
 
   const [checking,       setChecking]       = useState(false);
   const [confirming,     setConfirming]     = useState(false);
@@ -58,8 +74,9 @@ export function ReceptionistView() {
   const [aiOpen,          setAiOpen]          = useState(false);
   const [aiHasProactive,  setAiHasProactive]  = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const aiRunIdRef = useRef(0);
 
-  const loadRecent = async () => {
+  const loadRecent = useCallback(async () => {
     setLoadingRecent(true);
     try {
       const r = await listBookings();
@@ -69,9 +86,54 @@ export function ReceptionistView() {
     } finally {
       setLoadingRecent(false);
     }
-  };
+  }, [show]);
 
-  useEffect(() => { loadRecent(); }, []);
+  useEffect(() => { loadRecent(); }, [loadRecent]);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(AI_HISTORY_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as AiHistorySnapshot;
+      if (
+        parsed.searchKey === searchKey
+        && Date.now() - parsed.savedAt < AI_HISTORY_TTL_MS
+        && Array.isArray(parsed.messages)
+      ) {
+        setChatMessages(trimAiHistory(parsed.messages));
+      } else {
+        window.sessionStorage.removeItem(AI_HISTORY_KEY);
+      }
+    } catch {
+      window.sessionStorage.removeItem(AI_HISTORY_KEY);
+    }
+  }, [searchKey]);
+
+  useEffect(() => {
+    try {
+      const messages = persistableAiHistory(chatMessages);
+      if (!messages.length) {
+        window.sessionStorage.removeItem(AI_HISTORY_KEY);
+        return;
+      }
+      window.sessionStorage.setItem(AI_HISTORY_KEY, JSON.stringify({
+        searchKey,
+        savedAt: Date.now(),
+        messages,
+      } satisfies AiHistorySnapshot));
+    } catch {
+      // Non-critical: chat history persistence should never block booking flow.
+    }
+  }, [chatMessages, searchKey]);
+
+  useEffect(() => {
+    aiRunIdRef.current += 1;
+    setChatMessages([]);
+    setChatLoading(false);
+    setAiHasProactive(false);
+    window.sessionStorage.removeItem(AI_HISTORY_KEY);
+  }, [searchKey]);
+
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
 
   const handleCheck = async () => {
@@ -80,10 +142,13 @@ export function ReceptionistView() {
       return;
     }
     clearTimers();
+    const runId = aiRunIdRef.current + 1;
+    aiRunIdRef.current = runId;
     setChecking(true);
     setResult(null);
     setLastConfirmed(null);
     setChatMessages([]);
+    window.sessionStorage.removeItem(AI_HISTORY_KEY);
     setAiHasProactive(false);
 
     setSteps({ direct: "running", shuffle: "idle" });
@@ -102,7 +167,7 @@ export function ReceptionistView() {
         // Auto-open floating agent and proactively fire handoff
         setAiOpen(true);
         setAiHasProactive(true);
-        setTimeout(() => triggerAiHandoff(data), 100);
+        setTimeout(() => triggerAiHandoff(data, runId), 100);
       }
     } catch {
       show("Failed to check availability", "error");
@@ -134,19 +199,20 @@ export function ReceptionistView() {
   };
 
   // ── AI core: accepts explicit text + history so handoff can fire directly ──
-  const fireAiMessage = async (text: string, history: ChatMsg[]) => {
+  const fireAiMessage = async (text: string, history: ChatMsg[], runId = aiRunIdRef.current) => {
     const userMsg: ChatMsg = { role: "user", content: text };
-    const updated = [...history, userMsg];
+    const updated = trimAiHistory([...history, userMsg]);
+    if (runId !== aiRunIdRef.current) return;
     setChatMessages(updated);
     setChatLoading(true);
 
     let ctx = hotelContext;
-    if (!ctx) {
-      try {
-        const ctxRes = await getAiContext();
-        ctx = (ctxRes.data.context_text as string) ?? "";
-        setHotelContext(ctx);
-      } catch { ctx = ""; }
+    try {
+      const ctxRes = await getAiContext();
+      ctx = (ctxRes.data.context_text as string) ?? "";
+      setHotelContext(ctx);
+    } catch {
+      ctx = ctx ?? "";
     }
 
     try {
@@ -154,17 +220,18 @@ export function ReceptionistView() {
         updated.map(m => ({ role: m.role, content: m.content })),
         ctx ?? undefined,
       );
+      if (runId !== aiRunIdRef.current) return;
       const aMsg: ChatMsg = {
         role: "assistant",
         content: res.data.reply,
         action_data: res.data.action_data ?? null,
       };
-      setChatMessages(prev => [...prev, aMsg]);
+      setChatMessages(prev => trimAiHistory([...prev, aMsg]));
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     } catch {
-      show("AI agent error — please try again", "error");
+      if (runId === aiRunIdRef.current) show("AI agent error — please try again", "error");
     } finally {
-      setChatLoading(false);
+      if (runId === aiRunIdRef.current) setChatLoading(false);
     }
   };
 
@@ -176,28 +243,57 @@ export function ReceptionistView() {
     await fireAiMessage(text, chatMessages);
   };
 
-  // Proactive handoff — fires automatically when booking returns NOT_POSSIBLE
-  const triggerAiHandoff = async (data: ShuffleResult) => {
+  // Proactive handoff — fires automatically when booking returns NOT_POSSIBLE.
+  // Sends a maximally directive payload: the agent must explore ALL paths and
+  // present a complete numbered options menu BEFORE the receptionist asks.
+  const triggerAiHandoff = async (data: ShuffleResult, runId = aiRunIdRef.current) => {
+    if (runId !== aiRunIdRef.current) return;
     const name = guestName.trim() || "Direct Guest";
-    const blocked = data.infeasible_dates?.join(", ") || `${checkIn} – ${checkOut}`;
-    const handoffLines = [
-      "[HANDOFF]",
-      `Guest="${name}"`,
-      `preferred_category=${category}`,
-      `check_in=${checkIn}`,
-      `check_out=${checkOut}`,
-      `deterministic_check=NOT_POSSIBLE`,
-      `infeasible_dates=${blocked}`,
-      `split_same_category=NOT_CHECKED`,
-      `options.nearby_dates_pm1=true`,
-      `options.different_category=true`,
-      `options.split_stay=true`,
-      `options.mixed_category_split=false`,
-      "Rules: Prefer exact dates first, then minimal category delta (±1), then other categories, then date shift (±1).",
-      "If split_stay=true, you may use find_split_stay_flex(preferred_category, same dates).",
-      "Return the best actionable option as an action card.",
-    ];
-    await fireAiMessage(handoffLines.join("\n"), []);
+    const handoff = {
+      type: "booking_recovery_handoff",
+      execution_mode: "EXPLORE_ALL_OPTIONS",
+      // ── Explicit step-by-step instructions for the agent ──────────────────
+      instructions: [
+        "Execute ALL steps in allowed_paths IN SEQUENCE, one tool per turn.",
+        "Do NOT stop at the first success — continue through every allowed path.",
+        "Tally EVERY option found (split stays, upgrades, alt categories, date shifts, shortened fragments).",
+        "After all steps: present a numbered options list covering every viable path found.",
+        "For each option include: room(s), dates, estimated total, discount if pricing recommends one, and ONE revenue insight.",
+        "Rank by: same-category full stay > split stay > upgrade > alt category > date shift > shortened stay.",
+        "Use pricing intelligence from hotel_context to annotate each option with a demand signal.",
+        "Attach the action card for the top-ranked confirmable option; describe all others in text.",
+        "End with: 'Which of these works best for this guest?'",
+      ],
+      guest: { name },
+      request: {
+        preferred_category: category,
+        check_in: checkIn,
+        check_out: checkOut,
+        nights,
+      },
+      deterministic_check: {
+        state: "NOT_POSSIBLE",
+        message: data.message,
+        infeasible_dates: data.infeasible_dates ?? [],
+      },
+      allowed_paths: {
+        same_category_split: true,
+        mixed_category_split: true,
+        upgrade: true,
+        alternative_category: true,
+        nearby_dates_pm1: true,
+        shortened_stay_fragment: true,
+      },
+      decision_policy: {
+        explore_all_paths_before_responding: true,
+        present_numbered_options_menu: true,
+        use_pricing_intelligence_for_ranking: true,
+        never_call_build_recovery_options_before_full_stay_paths: true,
+        stop_only_when_tool_budget_exhausted_or_all_paths_tried: true,
+        never_ask_permission_before_a_tool_call: true,
+      },
+    };
+    await fireAiMessage(`[HANDOFF]\n${JSON.stringify(handoff, null, 2)}`, [], runId);
   };
 
   const nights = checkIn && checkOut ? Math.max(0, (new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000) : 0;
@@ -562,6 +658,87 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
     );
   }
 
+  if (data.type === "recovery_options") {
+    const d = data.data as {
+      preferred_category: string;
+      check_in: string;
+      check_out: string;
+      requested_nights: number;
+      options?: {
+        kind: string;
+        priority: string;
+        title: string;
+        category?: string;
+        room_id?: string;
+        check_in?: string;
+        check_out?: string;
+        nights?: number;
+        discount_pct?: number;
+        estimated_total?: number | null;
+        pricing_action?: string;
+        rationale?: string;
+      }[];
+      attempts?: string[];
+    };
+
+    return (
+      <div className="mt-2 border border-accent/30 bg-accent/3">
+        <div className="flex items-center gap-2 px-3 py-2 bg-accent/10 border-b border-accent/20 text-xs font-bold uppercase tracking-wider text-accent">
+          <Sparkles className="w-3.5 h-3.5 shrink-0" />
+          Recovery Options
+          <span className="ml-auto font-mono font-normal normal-case text-text">
+            {d.preferred_category} · {d.requested_nights}n
+          </span>
+        </div>
+
+        <div className="p-3 space-y-2">
+          {(d.options ?? []).map((opt, i) => (
+            <div key={`${opt.kind}-${i}`} className="border border-border bg-surface p-3 text-xs">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 bg-accent/15 text-accent font-bold flex items-center justify-center text-[10px] shrink-0">
+                      {i + 1}
+                    </span>
+                    <span className="font-bold text-text">{opt.title}</span>
+                  </div>
+                  <div className="mt-1 text-text-muted leading-relaxed">{opt.rationale}</div>
+                </div>
+                <span className="text-[9px] uppercase tracking-widest border border-border px-2 py-1 text-text-muted shrink-0">
+                  {opt.priority}
+                </span>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-text-muted">
+                {opt.room_id && <div>Room <span className="font-mono text-text">{opt.room_id}</span></div>}
+                {opt.category && <div>Category <span className="text-text">{opt.category}</span></div>}
+                {opt.check_in && opt.check_out && (
+                  <div className="col-span-2">
+                    Dates <span className="font-mono text-text">{opt.check_in} → {opt.check_out}</span>
+                    {typeof opt.nights === "number" && <span> · {opt.nights}n</span>}
+                  </div>
+                )}
+                {typeof opt.discount_pct === "number" && opt.discount_pct > 0 && (
+                  <div>Offer <span className="text-accent">{opt.discount_pct}% discount</span></div>
+                )}
+                {typeof opt.estimated_total === "number" && (
+                  <div>Total <span className="text-text">${Math.round(opt.estimated_total).toLocaleString("en-US")}</span></div>
+                )}
+                {opt.pricing_action && <div>Pricing <span className="text-text">{opt.pricing_action}</span></div>}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {(d.attempts?.length ?? 0) > 0 && (
+          <div className="border-t border-border bg-surface-2 px-3 py-2 text-[10px] text-text-muted">
+            Exact full-stay paths checked: same-category split, mixed split, upgrades, alternatives, and nearby dates.
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (data.type === "split_stay_result") {
     const d = data.data as {
       state: string;
@@ -679,7 +856,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
       message?: string;
       comparison?: ComparisonTable;
       infeasible_dates?: string[];
-      swap_plan?: unknown[];
+      swap_plan?: SwapStep[];
       request?: { category: string; check_in: string; check_out: string };
     };
     const ok = d.state !== "NOT_POSSIBLE";
@@ -700,7 +877,7 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
             channel_partner: null,
           },
           room_id:   d.room_id,
-          swap_plan: (d.swap_plan ?? []) as unknown[],
+          swap_plan: d.swap_plan ?? [],
         });
         setConfirmed({ booking_id: r.data.booking_id, room_id: r.data.room_id });
         show(`Booking confirmed — ID ${r.data.booking_id}`, "success");

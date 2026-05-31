@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useEffect, useState, useCallback } from "react";
 import { CheckCircle2, AlertCircle, Info } from "lucide-react";
 

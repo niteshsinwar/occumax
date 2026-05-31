@@ -20,6 +20,6 @@ class PredictOptimalLosRequest(BaseModel):
 class PredictOptimalLosResponse(BaseModel):
     """AI recommendation for demand-aligned average length of stay (integer nights)."""
 
-    recommended_los_nights: int = Field(ge=1, le=14)
+    recommended_los_nights: int = Field(ge=2, le=7)
     confidence: str = "MEDIUM"
     rationale: str = ""

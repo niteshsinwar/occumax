@@ -21,7 +21,7 @@
 ## Schema changes
 
 <!-- If you edited core/models/, describe the change here -->
-<!-- create_tables() will auto-apply on deploy — no manual migration needed -->
+<!-- Add and review an Alembic migration; deploy runs `alembic upgrade head` -->
 
 ## Screenshots (for UI changes)
 

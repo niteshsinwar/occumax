@@ -4,7 +4,7 @@ import uuid
 import datetime
 from datetime import datetime as dt
 
-from sqlalchemy import String, Integer, Float, Boolean, Date, DateTime, Enum, ForeignKey
+from sqlalchemy import String, Integer, Float, Boolean, Date, DateTime, Enum, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from services.database import Base
@@ -13,6 +13,11 @@ from core.models.enums import RoomCategory
 
 class Booking(Base):
     __tablename__ = "bookings"
+    __table_args__ = (
+        Index("ix_bookings_created_at", "created_at"),
+        Index("ix_bookings_check_in_check_out", "check_in", "check_out"),
+        Index("ix_bookings_room_category", "room_category"),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True,

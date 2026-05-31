@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional
 import datetime
 
-from sqlalchemy import String, Integer, Float, Boolean, Date, Enum, ForeignKey
+from sqlalchemy import String, Integer, Float, Boolean, Date, Enum, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from services.database import Base
@@ -11,6 +11,12 @@ from core.models.enums import BlockType, Channel
 
 class Slot(Base):
     __tablename__ = "slots"
+    __table_args__ = (
+        Index("ix_slots_date", "date"),
+        Index("ix_slots_room_id_date", "room_id", "date"),
+        Index("ix_slots_booking_id", "booking_id"),
+        Index("ix_slots_block_type", "block_type"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g. "101_2026-04-09"
     room_id: Mapped[str] = mapped_column(ForeignKey("rooms.id"))

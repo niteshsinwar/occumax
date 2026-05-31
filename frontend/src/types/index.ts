@@ -249,6 +249,10 @@ export interface PricingAnalyseResponse {
   recommendations: PricingRecommendation[];
   dates: string[];
   rescue_potential: number;
+  run_id?: string;
+  cache_hit?: boolean;
+  llm_call_count?: number;
+  context_hash?: string;
 }
 
 export interface PricingCommitItem {
@@ -375,6 +379,9 @@ export interface ChannelRecommendResponse {
   recommendations: ChannelRecommendation[];
   partner_insights?: ChannelPartnerInsight[];
   summary: string;
+  run_id?: string;
+  cache_hit?: boolean;
+  context_hash?: string;
 }
 
 export interface RevenueSummaryResponse {
@@ -404,4 +411,6 @@ export interface AdminBookingRow {
   stay_group_id: string | null;
   segment_index: number | null;
   discount_pct: number;
+  channel?: string | null;
+  channel_partner?: string | null;
 }
