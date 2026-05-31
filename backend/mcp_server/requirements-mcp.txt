@@ -1,0 +1,6 @@
+# Install in the MCP process environment, not necessarily the main REST API venv.
+#
+# FastMCP 3.x currently pulls newer Starlette/Pydantic/httpx than the main
+# FastAPI app pins, so use a separate venv or process image for MCP when possible.
+fastmcp==3.3.1
+
