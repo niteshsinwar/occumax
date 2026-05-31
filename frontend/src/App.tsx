@@ -34,8 +34,11 @@ function AppLayout() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-[72px]">
             <div className="flex items-center gap-10 h-full">
-              <div className="text-[26px] font-serif font-black text-occuyellow tracking-wide uppercase">
-                Opti<span className="text-accent italic font-light">host</span>
+              <div className="flex items-center gap-3">
+                <img src="/favicon.png" alt="Optihost Logo" className="w-8 h-8 rounded-md shadow-sm" />
+                <div className="text-[26px] font-serif font-black text-occuyellow tracking-wide uppercase">
+                  Opti<span className="text-accent italic font-light">host</span>
+                </div>
               </div>
               <nav className="flex items-center gap-8 hidden md:flex h-full pt-1">
                 <NavLink
@@ -123,8 +126,11 @@ function AppLayout() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div>
-              <div className="text-xl font-serif font-black text-text tracking-wide uppercase mb-4">
-                Opti<span className="text-accent italic font-light">host</span>
+              <div className="flex items-center gap-3 mb-4">
+                <img src="/favicon.png" alt="Optihost Logo" className="w-6 h-6 rounded-sm shadow-sm opacity-80" />
+                <div className="text-xl font-serif font-black text-text tracking-wide uppercase">
+                  Opti<span className="text-accent italic font-light">host</span>
+                </div>
               </div>
               <p className="text-xs text-text-muted font-medium leading-relaxed max-w-xs">
                 Smart booking and revenue management for independent hotels. Fill more rooms, earn more per room, spend less time on admin.
