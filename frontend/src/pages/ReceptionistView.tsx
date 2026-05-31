@@ -1,14 +1,19 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { format, addDays } from "date-fns";
-import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage } from "../api/client";
+import { checkAvailability, confirmBooking, confirmSplitStay, listBookings, getAiContext, sendAiMessage, adminListCategories } from "../api/client";
 import type { ShuffleResult, RoomCategory, ComparisonTable, SplitSegment, SwapStep } from "../types";
 import { useToast } from "../components/shared/Toast";
 import { CheckCircle2, ArrowRight, Loader2, Calendar, ClipboardCheck, Info, XCircle, Sparkles, Send, Bot, User, X } from "lucide-react";
 
-const CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"];
 const AI_HISTORY_KEY = "occumax_front_desk_ai_history";
 const MAX_AI_HISTORY_MESSAGES = 20;
 const AI_HISTORY_TTL_MS = 30 * 60 * 1000;
+const FALLBACK_CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"];
+
+interface AdminCategorySummary {
+  name: RoomCategory;
+  room_count: number;
+}
 
 // Receptionist desk = direct routes only. OTA allocations happen in Manager → Channels.
 
@@ -73,6 +78,20 @@ export function ReceptionistView() {
   const [hotelContext,    setHotelContext]    = useState<string | null>(null);
   const [aiOpen,          setAiOpen]          = useState(false);
   const [aiHasProactive,  setAiHasProactive]  = useState(false);
+
+  const [activeCategories, setActiveCategories] = useState<RoomCategory[]>(FALLBACK_CATEGORIES);
+
+  useEffect(() => {
+    adminListCategories().then((res) => {
+      const live = (res.data as AdminCategorySummary[])
+        .filter((c) => c.room_count > 0)
+        .map((c) => c.name);
+      if (live.length > 0) {
+        setActiveCategories(live);
+        setCategory((current) => live.includes(current) ? current : live[0]);
+      }
+    }).catch(() => {});
+  }, []);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const aiRunIdRef = useRef(0);
 
@@ -126,17 +145,16 @@ export function ReceptionistView() {
     }
   }, [chatMessages, searchKey]);
 
-  useEffect(() => {
+  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
+
+  const handleCheck = async () => {
+    // Clear previous chat/AI state when explicitly running a new check
     aiRunIdRef.current += 1;
     setChatMessages([]);
     setChatLoading(false);
     setAiHasProactive(false);
     window.sessionStorage.removeItem(AI_HISTORY_KEY);
-  }, [searchKey]);
 
-  const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
-
-  const handleCheck = async () => {
     if (!checkIn || !checkOut || checkOut <= checkIn) {
       show("Please select valid dates", "error");
       return;
@@ -336,7 +354,7 @@ export function ReceptionistView() {
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Category</label>
             <select className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={category} onChange={(e) => setCategory(e.target.value as RoomCategory)}>
-              {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+              {activeCategories.map((c) => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div className="space-y-1.5">

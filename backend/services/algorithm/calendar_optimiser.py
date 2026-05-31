@@ -187,6 +187,7 @@ class GapDetector:
         booking_map = self._build_booking_map(working)
         if not booking_map:
             return []
+        movable_bids = set(booking_map.keys())
 
         all_dates = set()
         hard_blocks = {r: set() for r in cat_rooms}
@@ -196,7 +197,13 @@ class GapDetector:
             for d, cell in working[r].items():
                 valid_dates[r].add(d)
                 all_dates.add(d)
-                if cell["block_type"] == BlockType.HARD:
+                if (
+                    cell["block_type"] == BlockType.HARD
+                    or (
+                        cell["block_type"] == BlockType.SOFT
+                        and cell["booking_id"] not in movable_bids
+                    )
+                ):
                     hard_blocks[r].add(d)
 
         if not all_dates:
@@ -207,11 +214,21 @@ class GapDetector:
         scan_end = min(raw_end, scan_start + timedelta(days=20))
 
         bookings_info = []
+        excluded_bids = set()
         for bid, (r, dates) in booking_map.items():
             start_d = min(dates)
             end_d = max(dates) + timedelta(days=1)
             if start_d < scan_end:
                 bookings_info.append((bid, r, dates, start_d, end_d))
+            else:
+                excluded_bids.add(bid)
+
+        # Treat soft bookings that start outside the scan horizon as hard blocks
+        # so the optimizer doesn't place other bookings on top of them.
+        for r in cat_rooms:
+            for d, cell in working[r].items():
+                if cell["block_type"] == BlockType.SOFT and cell["booking_id"] in excluded_bids:
+                    hard_blocks[r].add(d)
 
         bookings_info.sort(key=lambda x: x[3])
 
@@ -344,7 +361,9 @@ class GapDetector:
                         if total > best_score or (total == best_score and cat_rooms[r_idx] == orig_r):
                             best_score = total
                             best_r_idx = r_idx
-                                
+
+                if best_r_idx == -1:
+                    return []
                 assignments[bid] = cat_rooms[best_r_idx]
                 curr_ends[best_r_idx] = end_d
                 

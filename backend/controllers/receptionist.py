@@ -385,10 +385,10 @@ async def check_availability(request: BookingRequestIn, db: AsyncSession) -> Shu
         raise HTTPException(status_code=400, detail="check_in cannot be in the past")
     if request.check_out <= request.check_in:
         raise HTTPException(status_code=400, detail="check_out must be after check_in")
-    if request.check_in > max_date:
+    if request.check_out > max_date:
         raise HTTPException(
             status_code=400,
-            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days from today (latest check-in: {max_date})"
+            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days from today (latest check-out: {max_date})"
         )
 
     # Fast path: direct availability without full-window load + shuffle enumeration.
@@ -485,10 +485,10 @@ async def confirm_booking(body: BookingConfirm, db: AsyncSession) -> dict:
         raise HTTPException(status_code=400, detail="check_in cannot be in the past")
     if req.check_out <= req.check_in:
         raise HTTPException(status_code=400, detail="check_out must be after check_in")
-    if req.check_in > max_date:
+    if req.check_out > max_date:
         raise HTTPException(
             status_code=400,
-            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days (latest check-in: {max_date})"
+            detail=f"Bookings only accepted within {settings.BOOKING_WINDOW_DAYS} days (latest check-out: {max_date})"
         )
 
     room_result = await db.execute(
@@ -750,8 +750,8 @@ async def confirm_split_stay(body: SplitStayConfirm, db: AsyncSession) -> dict:
             raise HTTPException(status_code=400, detail="Segment check_out must be after check_in")
         if seg.check_in < today:
             raise HTTPException(status_code=400, detail="Segment check_in is in the past")
-        if seg.check_in > max_date:
-            raise HTTPException(status_code=400, detail="Segment check_in exceeds booking window")
+        if seg.check_out > max_date:
+            raise HTTPException(status_code=400, detail="Segment check_out exceeds booking window")
         for cur in _iter_stay_dates(seg.check_in, seg.check_out):
             slot_id = f"{seg.room_id}_{cur}"
             if slot_id in slot_ids:

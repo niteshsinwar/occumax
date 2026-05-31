@@ -103,8 +103,8 @@ class TestAdmin:
         # Create a real booking first via receptionist
         check = client.post("/receptionist/check", json={
             "category": "STANDARD",
-            "check_in": d(20),
-            "check_out": d(22),
+            "check_in": d(18),
+            "check_out": d(20),
             "guest_name": "Admin Booking CRUD",
         }).json()
         if check["state"] == "NOT_POSSIBLE":
@@ -113,8 +113,8 @@ class TestAdmin:
         confirm = client.post("/receptionist/confirm", json={
             "request": {
                 "category": "STANDARD",
-                "check_in": d(20),
-                "check_out": d(22),
+                "check_in": d(18),
+                "check_out": d(20),
                 "guest_name": "Admin Booking CRUD",
             },
             "room_id": check["room_id"],
@@ -124,7 +124,7 @@ class TestAdmin:
         booking_id = confirm.json()["booking_id"]
 
         # List bookings in a range that includes the stay dates
-        r = client.get("/admin/bookings", params={"start": d(19), "end": d(23)})
+        r = client.get("/admin/bookings", params={"start": d(17), "end": d(21)})
         assert r.status_code == 200
         rows = r.json()
         assert any(b.get("id") == booking_id for b in rows), "Created booking not in admin list"

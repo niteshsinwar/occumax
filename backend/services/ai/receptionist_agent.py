@@ -546,6 +546,34 @@ def _parse_handoff_message(messages: list[dict]) -> Optional[dict]:
     return None
 
 
+def _parse_explicit_availability_request(messages: list[dict]) -> Optional[dict]:
+    """Parse a single-turn category/date availability request without an LLM."""
+    for raw in reversed(messages):
+        if raw.get("role") != "user":
+            continue
+        content = str(raw.get("content", ""))
+        if content.startswith("[HANDOFF]"):
+            return None
+
+        category = next(
+            (cat for cat in _CATEGORY_ORDER if re.search(rf"\b{cat}\b", content, re.IGNORECASE)),
+            None,
+        )
+        dates = re.findall(r"\d{4}-\d{2}-\d{2}", content)
+        if not category or len(dates) < 2:
+            return None
+
+        if not re.search(r"\b(available|availability|check|book|booking|need|room)\b", content, re.IGNORECASE):
+            return None
+
+        return {
+            "category": category,
+            "check_in": dates[0],
+            "check_out": dates[1],
+        }
+    return None
+
+
 def _shuffle_payload(result, category: str, check_in: str, check_out: str) -> dict:
     comparison = result.comparison if isinstance(result.comparison, dict) else None
     return {
@@ -1790,6 +1818,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         check_in: str,
         check_out: str,
         infeasible_dates_csv: str = "",
+        attempts_csv: str = "",
     ) -> str:
         """
         Build a proactive recovery menu when the exact full stay is not recoverable.
@@ -1797,6 +1826,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         needs several guest-ready offers instead of a single no-availability answer.
         Returns RECOVERY_OPTIONS with shorter same-category stays, nearby category
         fragments, pricing/discount signals, and manager-override questions.
+        You should pass attempts_csv as a comma-separated list of paths you checked (e.g., 'Direct Match, Split Stay, Upgrades')
         """
         try:
             cat = preferred_category.upper()
@@ -1808,12 +1838,17 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                 for part in infeasible_dates_csv.split(",")
                 if part.strip()
             ]
+            attempts = [
+                part.strip()
+                for part in attempts_csv.split(",")
+                if part.strip()
+            ]
             recovery = await _build_recovery_options(
                 db=db,
                 preferred_category=cat,
                 check_in=ci,
                 check_out=co,
-                attempts=[],
+                attempts=attempts,
                 infeasible_dates=infeasible_dates,
             )
             return json.dumps(recovery["action_data"]["data"])
@@ -2117,6 +2152,38 @@ async def run_agent(
     # Guard: if history is empty the agent has nothing to respond to
     if not lc_messages:
         return {"reply": "How can I help you today?", "action_data": None}
+
+    handoff_result = await _run_handoff_recovery(messages, db)
+    if handoff_result is not None:
+        return handoff_result
+
+    parsed_availability = _parse_explicit_availability_request(messages)
+    if parsed_availability is not None:
+        try:
+            result = await ctrl.check_availability(
+                BookingRequestIn(
+                    category=RoomCategory(parsed_availability["category"]),
+                    check_in=date.fromisoformat(parsed_availability["check_in"]),
+                    check_out=date.fromisoformat(parsed_availability["check_out"]),
+                    guest_name="Direct Guest",
+                ),
+                db,
+            )
+            action_data = {
+                "type": "availability_result",
+                "data": _shuffle_payload(
+                    result,
+                    parsed_availability["category"],
+                    parsed_availability["check_in"],
+                    parsed_availability["check_out"],
+                ),
+            }
+            return {
+                "reply": _reply_for_action_data(action_data) or result.message,
+                "action_data": action_data,
+            }
+        except Exception:
+            logger.exception("Deterministic availability fast path failed")
 
     try:
         result = await graph.ainvoke(
