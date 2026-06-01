@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 def get_weather_forecast(start_date: date, days: int = 20) -> list[dict]:
     """Return mock NJ weather forecast for the analysis window."""
-    # Realistic NJ May 2026 weather — driven by day-of-week and seasonal norms
+    # Realistic NJ June 2026 weather — driven by day-of-week and seasonal norms
     BASE_PATTERNS: list[dict] = [
         {"condition": "Sunny", "temp_f": 72, "weekend_modifier": 1.0},
         {"condition": "Partly Cloudy", "temp_f": 68, "weekend_modifier": 0.9},
@@ -77,8 +77,8 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
     FIXED_EVENTS = [
         {
             "name": "Rutgers Spring Commencement",
-            "date": "2026-05-16",
-            "end_date": "2026-05-17",
+            "date": "2026-06-16",
+            "end_date": "2026-06-17",
             "location": "Rutgers University, New Brunswick NJ",
             "type": "graduation",
             "demand_impact": "very_high",
@@ -86,8 +86,8 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
         },
         {
             "name": "MetLife Stadium — Taylor Swift Eras Tour Night 1",
-            "date": "2026-05-08",
-            "end_date": "2026-05-08",
+            "date": "2026-06-08",
+            "end_date": "2026-06-08",
             "location": "MetLife Stadium, East Rutherford NJ",
             "type": "stadium_concert",
             "demand_impact": "high",
@@ -95,8 +95,8 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
         },
         {
             "name": "MetLife Stadium — Taylor Swift Eras Tour Night 2",
-            "date": "2026-05-09",
-            "end_date": "2026-05-09",
+            "date": "2026-06-09",
+            "end_date": "2026-06-09",
             "location": "MetLife Stadium, East Rutherford NJ",
             "type": "stadium_concert",
             "demand_impact": "high",
@@ -104,8 +104,8 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
         },
         {
             "name": "NJ Convention & Expo Center — Pharma Summit",
-            "date": "2026-05-13",
-            "end_date": "2026-05-14",
+            "date": "2026-06-13",
+            "end_date": "2026-06-14",
             "location": "Edison NJ",
             "type": "conference",
             "demand_impact": "medium",
@@ -113,17 +113,17 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
         },
         {
             "name": "Princeton University Commencement",
-            "date": "2026-06-02",
-            "end_date": "2026-06-02",
+            "date": "2026-07-02",
+            "end_date": "2026-07-02",
             "location": "Princeton NJ",
             "type": "graduation",
             "demand_impact": "medium",
-            "note": "Lead-in demand starts late May — families book Standard/Deluxe in advance",
+            "note": "Lead-in demand starts late June — families book Standard/Deluxe in advance",
         },
         {
             "name": "Memorial Day Weekend",
-            "date": "2026-05-23",
-            "end_date": "2026-05-26",
+            "date": "2026-06-23",
+            "end_date": "2026-06-26",
             "location": "NJ (holiday)",
             "type": "holiday",
             "demand_impact": "high",
@@ -131,8 +131,8 @@ def get_events_for_window(start_date: date, days: int = 20) -> list[dict]:
         },
         {
             "name": "Asbury Park Spring Music Fest",
-            "date": "2026-05-10",
-            "end_date": "2026-05-11",
+            "date": "2026-06-10",
+            "end_date": "2026-06-11",
             "location": "Asbury Park NJ",
             "type": "music_festival",
             "demand_impact": "medium",
@@ -178,16 +178,16 @@ def get_market_news() -> list[dict]:
             "note": "J&J, Sanofi, Novartis headcount growth; mid-week Standard/Deluxe demand structural",
         },
         {
-            "headline": "Priceline flash-deal inventory thinning for NJ market in May",
+            "headline": "Priceline flash-deal inventory thinning for NJ market in June",
             "source": "Priceline Partner Network Alert",
             "impact": "positive",
             "note": "Less OTA discounting pressure on Standard; room to hold BAR or slight increase",
         },
         {
-            "headline": "NJ shore towns booked 80%+ for Memorial Day — spillover to inland hotels",
+            "headline": "NJ shore towns booked 80%+ for Fourth of July — spillover to inland hotels",
             "source": "NJ Division of Tourism",
             "impact": "positive",
-            "note": "Shore overflow creates late-arriving leisure demand in week preceding Memorial Day",
+            "note": "Shore overflow creates late-arriving leisure demand in week preceding Fourth of July",
         },
         {
             "headline": "Google Travel Trends: 'hotels near Rutgers graduation' searches +340% WoW",
@@ -201,7 +201,7 @@ def get_market_news() -> list[dict]:
 def get_historical_trends() -> dict:
     """Return mock 2-year historical booking data for the same time period."""
     return {
-        "period": "May weeks 2024 and 2025",
+        "period": "June weeks 2024 and 2025",
         "source": "2-year internal PMS history (mock)",
         "by_category": {
             "ECONOMY": {
@@ -266,10 +266,10 @@ def get_historical_trends() -> dict:
             },
         },
         "key_observations": [
-            "May graduation season (Rutgers) consistently delivers highest occupancy of Q2",
+            "June graduation season (Rutgers) consistently delivers highest occupancy of Q2",
             "MetLife Stadium events add +18-25% ADR for Deluxe/Suite on event nights",
-            "Memorial Day weekend produces 3rd highest revenue week of the year",
+            "Fourth of July weekend produces 3rd highest revenue week of the year",
             "NYC overflow bookings arrive 1-2 days out — keep last-minute OTA inventory priced at premium",
-            "Pharma conference season (May-Jun) fills mid-week Standard inventory predictably",
+            "Pharma conference season (June-Jul) fills mid-week Standard inventory predictably",
         ],
     }

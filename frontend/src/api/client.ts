@@ -76,6 +76,43 @@ export const confirmSplitStay = (body: {
   }[];
 }) => api.post("/receptionist/confirm-split", body);
 
+// Booking view clone
+export const bookingCheckAvailability = (body: {
+  category: string;
+  check_in: string;
+  check_out: string;
+  guest_name?: string;
+}) => api.post("/booking/check", body);
+
+export const bookingConfirmBooking = (body: {
+  request: { category: string; check_in: string; check_out: string; guest_name?: string; channel?: string; channel_partner?: string | null };
+  room_id: string;
+  swap_plan?: SwapStep[];
+}) => api.post("/booking/confirm", body);
+
+export const bookingFindSplitStay = (body: {
+  category: string; check_in: string; check_out: string; guest_name?: string;
+}) => api.post("/booking/find-split", body);
+
+export const bookingFindSplitStayFlex = (body: {
+  category: string; check_in: string; check_out: string; guest_name?: string;
+}) => api.post("/booking/find-split-flex", body);
+
+export const bookingListBookings = () => api.get("/booking/bookings");
+
+export const bookingConfirmSplitStay = (body: {
+  guest_name:      string;
+  category:        string;
+  discount_pct:    number;
+  channel?:        string;
+  channel_partner?: string | null;
+  segments: {
+    room_id: string; floor: number;
+    check_in: string; check_out: string;
+    nights: number; base_rate: number; discounted_rate: number;
+  }[];
+}) => api.post("/booking/confirm-split", body);
+
 export const channelAllocate = (body: {
   booking_source: string;
   category: string;
@@ -88,6 +125,10 @@ export const channelAllocate = (body: {
 export const getAiContext = () => api.get("/ai/context");
 export const sendAiMessage = (messages: { role: string; content: string }[], hotelContext?: string) =>
   api.post("/ai/chat", { messages, hotel_context: hotelContext ?? null });
+
+export const getBookingAiContext = () => api.get("/booking/ai/context");
+export const sendBookingAiMessage = (messages: { role: string; content: string }[], hotelContext?: string) =>
+  api.post("/booking/ai/chat", { messages, hotel_context: hotelContext ?? null });
 
 // Pricing AI
 export const analysePricing = () => api.get("/manager/pricing/analyse");

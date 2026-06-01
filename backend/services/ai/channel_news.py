@@ -46,13 +46,13 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "impact": "MEDIUM",
                 "source": "Expedia Partner Central status feed",
                 "detail": (
-                    "Connectivity is expected to improve after May 9, but monitor conversion "
+                    "Connectivity is expected to improve after June 9, but monitor conversion "
                     "before restoring normal allocation volume."
                 ),
             },
         ],
         "signal_reason": (
-            "API downtime is active on May 8 and creates partner-health risk. Deprioritize Expedia "
+            "API downtime is active on June 8 and creates partner-health risk. Deprioritize Expedia "
             "for incremental pushes this run; use Booking.com, Priceline, or Travelocity when their "
             "campaign windows overlap the gap dates."
         ),
@@ -71,7 +71,7 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "headline": "Hotels.com loyalty campaign active in US market",
                 "impact": "MEDIUM",
                 "source": "Hotels.com Partner Hub",
-                "detail": "Loyalty promotion targets repeat US hotel shoppers through May 20.",
+                "detail": "Loyalty promotion targets repeat US hotel shoppers through June 20.",
             },
             {
                 "date": "2026-05-08",
@@ -88,7 +88,7 @@ CHANNEL_NEWS: dict[str, dict] = {
             },
         ],
         "signal_reason": (
-            "Loyalty campaign is active through May 20, but shared Expedia Group connectivity makes "
+            "Loyalty campaign is active through June 20, but shared Expedia Group connectivity makes "
             "Hotels.com a watch partner while Expedia downtime is active."
         ),
     },
@@ -108,12 +108,12 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "source": "Booking.com Extranet Pulse",
                 "detail": (
                     "Campaign targets US leisure shoppers for weekend and short-stay hotel bookings "
-                    "from May 8 through May 15."
+                    "from June 8 through June 15."
                 ),
             },
         ],
         "signal_reason": (
-            "Booking.com campaign is active May 8-15 and news impact is positive. Prioritize when "
+            "Booking.com campaign is active June 8-15 and news impact is positive. Prioritize when "
             "recommended stay dates overlap that campaign and historical channel data supports it."
         ),
     },
@@ -132,7 +132,7 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "impact": "MEDIUM",
                 "source": "Priceline Partner Network",
                 "detail": (
-                    "Opaque-rate promotion is active May 10-13 and is best suited for "
+                    "Opaque-rate promotion is active June 10-13 and is best suited for "
                     "price-sensitive Standard/Economy gaps."
                 ),
             },
@@ -141,11 +141,11 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "start_date": "2026-05-01",
                 "end_date": "2026-05-31",
                 "type": "positive_update",
-                "headline": "Priceline price-match messaging active in May",
+                "headline": "Priceline price-match messaging active in June",
                 "impact": "MEDIUM",
                 "source": "Skift / Priceline Blog",
                 "detail": (
-                    "May price-match messaging supports conversion for price-sensitive travelers. "
+                    "June price-match messaging supports conversion for price-sensitive travelers. "
                     "Use where net yield still clears the hotel's floor."
                 ),
             },
@@ -181,13 +181,13 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "impact": "MEDIUM",
                 "source": "Travelocity Partner Update",
                 "detail": (
-                    "Package leisure promotion is active May 13-16. Use as a supplemental OTA "
+                    "Package leisure promotion is active June 13-16. Use as a supplemental OTA "
                     "when gap dates overlap the campaign window."
                 ),
             },
         ],
         "signal_reason": (
-            "Travelocity has a May 13-16 package campaign. Use as a secondary OTA when the date "
+            "Travelocity has a June 13-16 package campaign. Use as a secondary OTA when the date "
             "overlap is strong and keep volume moderate because news impact is neutral."
         ),
     },
@@ -206,7 +206,7 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "impact": "MEDIUM",
                 "source": "Orbitz Partner Update",
                 "detail": (
-                    "Rewards-led shoppers are targeted for short hotel stays from May 14-21."
+                    "Rewards-led shoppers are targeted for short hotel stays from June 14-21."
                 ),
             },
             {
@@ -221,7 +221,7 @@ CHANNEL_NEWS: dict[str, dict] = {
             },
         ],
         "signal_reason": (
-            "Orbitz rewards campaign starts May 14. Use as a tertiary OTA for overlapping short-stay "
+            "Orbitz rewards campaign starts June 14. Use as a tertiary OTA for overlapping short-stay "
             "gaps when higher-performing partners are already covered."
         ),
     },

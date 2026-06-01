@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     # ── Infrastructure ────────────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://occumax:occumax@localhost:5432/occumax"
-    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:5174"
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174"
     DB_SSL_VERIFY: bool = True
     DB_SSL_CA_FILE: str | None = None
 

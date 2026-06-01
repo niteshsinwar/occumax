@@ -19,13 +19,13 @@ from typing import Optional
 
 TARGET = sys.argv[1] if len(sys.argv) > 1 else "dev"
 if TARGET == "local":
-    BASE = "http://localhost:8000/api"
+    BASE = "http://localhost:8000"
 elif TARGET == "main":
     BASE = "https://80.225.202.88.nip.io/api"
 else:
     BASE = "https://161.118.164.30.nip.io/api"
 
-TODAY = date.today()
+TODAY = date(2026, 6, 2)
 
 print(f"Target : {TARGET}  ({BASE})")
 print(f"Today  : {TODAY}\n")
@@ -65,33 +65,33 @@ def d(offset: int) -> str:
 
 ROOMS = [
     # Floor 1 — Economy (budget travellers, price-sensitive)
-    {"id": "101", "category": "ECONOMY",  "base_rate": 2200, "floor_number": 1},
-    {"id": "102", "category": "ECONOMY",  "base_rate": 2200, "floor_number": 1},
-    {"id": "103", "category": "ECONOMY",  "base_rate": 2400, "floor_number": 1},
-    {"id": "104", "category": "ECONOMY",  "base_rate": 2400, "floor_number": 1},
-    {"id": "105", "category": "ECONOMY",  "base_rate": 2600, "floor_number": 1},
-    {"id": "106", "category": "ECONOMY",  "base_rate": 2600, "floor_number": 1},
+    {"id": "101", "category": "ECONOMY",  "base_rate": 220, "floor_number": 1},
+    {"id": "102", "category": "ECONOMY",  "base_rate": 220, "floor_number": 1},
+    {"id": "103", "category": "ECONOMY",  "base_rate": 240, "floor_number": 1},
+    {"id": "104", "category": "ECONOMY",  "base_rate": 240, "floor_number": 1},
+    {"id": "105", "category": "ECONOMY",  "base_rate": 260, "floor_number": 1},
+    {"id": "106", "category": "ECONOMY",  "base_rate": 260, "floor_number": 1},
     # Floor 2 — Standard (IT corridor weekday market)
-    {"id": "201", "category": "STANDARD", "base_rate": 3800, "floor_number": 2},
-    {"id": "202", "category": "STANDARD", "base_rate": 3800, "floor_number": 2},
-    {"id": "203", "category": "STANDARD", "base_rate": 4000, "floor_number": 2},
-    {"id": "204", "category": "STANDARD", "base_rate": 4000, "floor_number": 2},
-    {"id": "205", "category": "STANDARD", "base_rate": 4200, "floor_number": 2},
+    {"id": "201", "category": "STANDARD", "base_rate": 380, "floor_number": 2},
+    {"id": "202", "category": "STANDARD", "base_rate": 380, "floor_number": 2},
+    {"id": "203", "category": "STANDARD", "base_rate": 400, "floor_number": 2},
+    {"id": "204", "category": "STANDARD", "base_rate": 400, "floor_number": 2},
+    {"id": "205", "category": "STANDARD", "base_rate": 420, "floor_number": 2},
     # Floor 3 — Deluxe (mid-market, OTA sweet spot)
-    {"id": "301", "category": "DELUXE",   "base_rate": 5800, "floor_number": 3},
-    {"id": "302", "category": "DELUXE",   "base_rate": 5800, "floor_number": 3},
-    {"id": "303", "category": "DELUXE",   "base_rate": 6200, "floor_number": 3},
-    {"id": "304", "category": "DELUXE",   "base_rate": 6200, "floor_number": 3},
+    {"id": "301", "category": "DELUXE",   "base_rate": 580, "floor_number": 3},
+    {"id": "302", "category": "DELUXE",   "base_rate": 580, "floor_number": 3},
+    {"id": "303", "category": "DELUXE",   "base_rate": 620, "floor_number": 3},
+    {"id": "304", "category": "DELUXE",   "base_rate": 620, "floor_number": 3},
     # Floor 4 — Premium (corporate accounts + direct hotel selling)
-    {"id": "401", "category": "PREMIUM",  "base_rate": 8500, "floor_number": 4},
-    {"id": "402", "category": "PREMIUM",  "base_rate": 9000, "floor_number": 4},
-    {"id": "403", "category": "PREMIUM",  "base_rate": 9500, "floor_number": 4},
+    {"id": "401", "category": "PREMIUM",  "base_rate": 850, "floor_number": 4},
+    {"id": "402", "category": "PREMIUM",  "base_rate": 900, "floor_number": 4},
+    {"id": "403", "category": "PREMIUM",  "base_rate": 950, "floor_number": 4},
     # Floor 5 — Studio (extended stay, families)
-    {"id": "501", "category": "STUDIO",   "base_rate": 7200, "floor_number": 5},
-    {"id": "502", "category": "STUDIO",   "base_rate": 7800, "floor_number": 5},
+    {"id": "501", "category": "STUDIO",   "base_rate": 720, "floor_number": 5},
+    {"id": "502", "category": "STUDIO",   "base_rate": 780, "floor_number": 5},
     # Floor 6 — Suite (luxury, direct + US-active OTA overflow)
-    {"id": "601", "category": "SUITE",    "base_rate": 15000, "floor_number": 6},
-    {"id": "602", "category": "SUITE",    "base_rate": 18000, "floor_number": 6},
+    {"id": "601", "category": "SUITE",    "base_rate": 1500, "floor_number": 6},
+    {"id": "602", "category": "SUITE",    "base_rate": 1800, "floor_number": 6},
 ]
 
 

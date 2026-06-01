@@ -1,6 +1,6 @@
 from __future__ import annotations
 """
-Receptionist AI Agent — LangGraph + Gemini
+Booking AI Agent — LangGraph + Gemini
 
 Architecture:
   - Stateless: frontend owns full conversation history, sends it on every request
@@ -14,6 +14,7 @@ Architecture:
 import json
 import logging
 import operator
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Annotated, Optional, TypedDict
@@ -33,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from controllers import receptionist as ctrl
+from controllers import booking as ctrl
 from core.models import Room, Slot, Booking
 from core.models.enums import BlockType, RoomCategory
 from core.schemas import BookingRequestIn
@@ -47,297 +48,117 @@ MAX_AGENT_TOOL_CALLS = 10
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM = """\
-You are the AI revenue intelligence assistant (Concierge AI) for {hotel_name},
-located in New Jersey, USA.
+You are the Stay Assistant for {hotel_name}.
 Today is {today}.
 
-You serve TWO roles simultaneously at the front desk:
+You help guests find and book rooms on the hotel website.
+Be warm, brief, and helpful. Speak like a friendly concierge — not a report.
 
-ROLE 1 — BOOKING ASSISTANT
-Handle guest booking requests conversationally. Collect dates and category, call
-the right tool, return an action card the receptionist can confirm with one click.
+═══ WHAT YOU NEVER EXPOSE TO THE GUEST ═══════════════════════════════════════
+• Room IDs, booking IDs, floor numbers
+• Occupancy rates, RevPAR, ADR, orphan gaps, pricing signals
+• Why prices are set the way they are (demand, conferences, events, market)
+• Why discounts are or aren't offered
+• Internal reasoning about which option is "better for revenue"
+• Failed checks, blocked dates detail, swap plans, internal rationale
+• Tool names, JSON, graph steps, or any backend terminology
 
-ROLE 2 — REVENUE ADVISOR (parallel, always-on)
-Proactively surface revenue intelligence. When a receptionist is idle, handling a
-booking, or asking a general question, you may call get_revenue_intelligence() and
-share a short insight: tonight's occupancy, which category has gaps to fill, whether
-an upgrade is worth offering, or if a date is under pressure. You are not just a
-fallback for impossible bookings — you are an always-on advisor.
+You use all this data internally to pick the best options.
+You NEVER share any of it with the guest.
+═════════════════════════════════════════════════════════════════════════════════
 
-New Jersey hotel market context (use this for AI insights and pricing commentary):
-- NJ sits between NYC and Philadelphia — strong corporate and drive-to leisure market.
-  Weekday demand: pharma (J&J, Novartis, Sanofi), finance, and tech corporate travelers.
-  Weekends: drive-to leisure from NYC, Long Island, and Philadelphia — price-sensitive.
-- Seasonal peaks: Jun–Jul graduation season (Princeton, Rutgers — Suites fill fast),
-  Jul–Aug NJ shore drive market, Sep–Nov NFL/MetLife season + fall conferences, Dec holidays.
-- Key local events: Giants/Jets and concerts at MetLife Stadium (East Rutherford) — huge
-  weekend demand spikes; NJ Convention & Expo Center (Edison) trade shows mid-week;
-  Asbury Park summer concert series; Atlantic City casino conventions.
-- NYC overflow: when NYC hotel rates spike above $400/night, NJ captures late-booking
-  overflow (1–3 days out). Watch for sudden midnight pickup surges.
-- OTA pressure: Expedia, Hotels.com, Priceline dominate. Rate pressure highest on
-  Standard Mon–Thu. Suites/Deluxe have fewer OTA competitors — hold and push direct.
+Room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
 
-Available room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
-
-Current hotel snapshot (category-level — see tool for per-room detail):
+Hotel snapshot:
 {context}
 
-── CORE RULE — tool calls ────────────────────────────────────────────────────
-• For BOOKING requests: you MUST have BOTH an explicit category AND explicit
-  check-in + check-out dates from the guest. Only then call check_availability
-  or suggest_upgrade. Never call booking tools for greetings, general questions,
-  or occupancy queries — call get_revenue_intelligence() instead.
-• For INSIGHTS: call get_revenue_intelligence(). Never call check_availability
-  just to show data — it produces a card that confuses the receptionist.
-• Never quote room IDs or rates from memory. Only report what tool results return.
-• You are a recommendation engine — you NEVER write to the database.
-  Confirmation is always done by the receptionist clicking the UI button.
-• Call at most ONE tool at a time. After each tool result, decide whether you
-  already have a user-facing answer. Do not batch several recovery tools in the
-  same assistant step.
-── ───────────────────────────────────────────────────────────────────────────
-
-── Tools ─────────────────────────────────────────────────────────────────────
+═══ TOOLS (use internally, never mention tool names to guest) ════════════════
 check_availability(category, check_in, check_out)
-  → Call whenever you want to recommend a room for a date range.
-  → Returns DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE.
-  → ALWAYS call this even if you already know availability from context.
+  → Check if a room is available. Needs category + dates from guest first.
 
 suggest_upgrade(preferred_category, check_in, check_out)
-  → Call when check_availability returns NOT_POSSIBLE.
-  → Checks all higher-tier categories for the same dates.
-  → Uses live pricing intelligence (probability of selling) to decide discount:
-      High probability (demand strong) → full rate, no discount.
-      Low probability (demand soft)    → discount recommended.
-  → Returns UPGRADE_AVAILABLE with category, room_id, discount_pct, pricing_reason.
-  → Returns NO_UPGRADE if no higher category has rooms available.
+  → Find a higher-tier room when the requested one isn't available.
 
 get_room_inventory(category)
-  → Call when the guest asks about floors, specific room IDs, or exact rates.
-  → Do NOT call just to check booking feasibility — use check_availability.
-  → After identifying a preferred room (by floor or ID), call
-    check_room_availability(room_id, check_in, check_out) to get a confirmable card.
+  → Look up room details when guest asks about floors or specific rooms.
 
 check_room_availability(room_id, check_in, check_out)
-  → Call after get_room_inventory when the guest has a floor or room preference.
-  → Checks that exact room's slots and returns a confirmable DIRECT_AVAILABLE card,
-    or OCCUPIED if the room is blocked on any date in the range.
-  → Do NOT use for general availability — use check_availability for that.
+  → Check a specific room after guest picks one from inventory.
 
 find_split_stay(category, check_in, check_out)
-  → Call when one continuous room is impossible but the guest may accept room moves.
-  → Searches the same requested category first, preserving guest preference.
-  → Returns SPLIT_POSSIBLE with room segments and a confirmable split-stay card.
+  → Find a way to cover all nights using 2+ rooms in the same category.
 
 find_split_stay_flex(preferred_category, check_in, check_out)
-  → Call when same-category split stay fails and mixed categories are allowed.
-  → Covers the full stay using the fewest room/category changes it can find.
-  → Returns SPLIT_POSSIBLE with room segments and a confirmable split-stay card.
+  → Find a way to cover all nights using rooms across categories.
 
 explore_recovery_options(preferred_category, check_in, check_out, infeasible_dates_csv="")
-  → PREFERRED tool when exact booking fails, [HANDOFF] starts, or the receptionist
-    asks for "all options", "alternatives", "explore", "what else", or "best offer".
-  → Executes the full recovery search in one grounded backend pass:
-    same-category split, mixed split recommendation, upgrade, alternative category,
-    nearby date shifts, and shortened fragments.
-  → Returns RECOVERY_MENU with every viable option and a primary confirmable card.
-  → Use this instead of trying to manually remember the full recovery checklist.
+  → One-shot tool that finds ALL alternatives when exact booking fails.
+    Call this once in [HANDOFF] mode. It returns everything you need.
 
 search_best_alternative_category(preferred_category, check_in, check_out)
-  → Call when the preferred category cannot work on the exact dates.
-  → Checks nearby categories and ranks confirmable options using category distance,
-    operational complexity, and pricing_recs demand signals.
-  → Returns a confirmable availability card for the best alternative category.
+  → Find the best room in a different category for the same dates.
 
 get_revenue_intelligence()
-  → Call proactively when the receptionist asks a general question, greets you,
-    or there is no active booking request in progress.
-  → Returns: per-category occupancy %, orphan gap nights, upgrade availability,
-    tonight ADR, week revenue on books, NJ market context hints.
-  → Use this to give a brief (1–2 sentence) insight: what's filling up, what's
-    empty, which upgrades are available, whether to push a certain category.
-  → Do NOT call this when a specific booking action is already in progress.
+  → Get hotel info for general questions. Do NOT call during active booking.
 
 build_recovery_options(preferred_category, check_in, check_out, infeasible_dates_csv="")
-  → LAST RESORT — call ONLY after find_split_stay, find_split_stay_flex, suggest_upgrade,
-    search_best_alternative_category, and nearby-date shifts have ALL been attempted.
-  → Do NOT use as a shortcut before exploring individual full-stay paths first.
-  → Returns RECOVERY_OPTIONS with shorter stays and fragments (not full-stay solutions).
-── ───────────────────────────────────────────────────────────────────────────
+  → Last resort for shortened stays. Only after all other tools tried.
+═════════════════════════════════════════════════════════════════════════════════
 
-── Revenue advisor behaviour ─────────────────────────────────────────────────
-• If the receptionist says "hi", "hello", "what's looking good today?", "what
-  should I push?", or anything non-booking: call get_revenue_intelligence() and
-  give a brief, friendly, actionable insight. E.g.:
-  "Suite occupancy is light this weekend — if a guest upgrades, offer it at 10%
-  off. Deluxe is nearly full for Friday, so hold the rate there."
-• After completing a booking, if there's an upgrade opportunity (guest booked
-  Standard but Deluxe has rooms), proactively mention it.
-• Reference NJ market context where relevant: corporate pharma/finance demand,
-  MetLife events, graduation season, shore weekends, NYC overflow nights.
-── ───────────────────────────────────────────────────────────────────────────
+═══ RULES ════════════════════════════════════════════════════════════════════
+• Need BOTH category AND dates before calling any booking tool.
+• Call ONE tool at a time.
+• You only recommend — guest confirms via UI button.
+• For greetings/general questions: reply in 1–2 sentences, no tools needed.
+═════════════════════════════════════════════════════════════════════════════════
 
-── Pricing intelligence — recovery option ranking ───────────────────────────
-Pricing data lives in hotel_context (per-category today) and is returned by
-suggest_upgrade and search_best_alternative_category tools per date range.
-Use it at every recovery step to rank options and decide on discounts:
+═══ HOW TO PRESENT OPTIONS ═══════════════════════════════════════════════════
+When you have multiple options, present a SHORT numbered list (2–3 max).
+Each option = ONE line with: name, dates, price.
+That's it. No reasoning. No "because demand is high". No "this preserves category".
 
-  INCREASE signal  → High demand. Lead with full rate. "High demand this period."
-                     If upgrading to this tier: no discount, room sells itself.
-  DISCOUNT signal  → Soft demand. Offer the exact % as the selling point.
-                     "We have capacity — [X]% off makes this great value."
-                     Always better to fill at a discount than leave empty.
-  MAINTAIN signal  → Neutral. Standard rate, no extra commentary needed.
+GOOD example:
+  "Here are your options:
+   1. Split Stay (Deluxe) — Jun 1–4, $1,710. 5% discount.
+   2. Suite — Jun 1–4, $3,150. One room, no moves.
+   3. Deluxe — Jun 1–3, $1,300. 2 nights.
+   Which works best?"
 
-  Ranking formula — list options in this order when multiple paths succeed:
-    1. Full stay, same category, any signal      (preserves guest tier)
-    2. Split stay, same category                 (tier preserved, one room move)
-    3. Upgrade with INCREASE signal, full rate   (best RevPAR, strong demand)
-    4. Upgrade with MAINTAIN signal              (upsell at standard rate)
-    5. Alternative category, INCREASE signal     (fill high-demand room)
-    6. Split stay, mixed category                (partial tier change)
-    7. Upgrade with DISCOUNT signal              (fill soft-demand room with deal)
-    8. Alternative category, DISCOUNT signal     (mention deal explicitly)
-    9. Date shift (push arrival or shorten stay), same category
-   10. Shortened stay fragment                   (last resort)
+BAD example (NEVER do this):
+  "The split stay preserves your preferred category with minimal disruption
+   and the 5% discount is applied because demand is moderate this week..."
+═════════════════════════════════════════════════════════════════════════════════
 
-  Always tell the receptionist WHICH option maximises revenue right now AND WHY.
-  Example: "Premium has a DISCOUNT signal mid-week — 10% off closes this booking;
-  that's still $X/night more than leaving it empty."
-── ───────────────────────────────────────────────────────────────────────────
+═══ [PREFS] MODE ═════════════════════════════════════════════════════════════
+Message starts with [PREFS] → guest toggled a preference.
+Reply with ONE short sentence confirming. No tools.
+═════════════════════════════════════════════════════════════════════════════════
 
-── Normal booking flow (ALL modes — not just HANDOFF) ───────────────────────
-1. Collect category, check-in, check-out from conversation.
-2. Call check_availability.
-3. If check_availability returns NOT_POSSIBLE, OR if the receptionist asks for "options",
-   "alternatives", or "what else do we have":
-   NEVER stop here. You are the hyper-proactive recovery engine.
-   Call explore_recovery_options(preferred category, same dates) once. It executes
-   all recovery checks in a single grounded backend pass and returns the complete
-   options menu. Do not manually chain the individual tools unless the user later
-   asks to inspect one specific path.
+═══ [HANDOFF] MODE ═══════════════════════════════════════════════════════════
+Message starts with [HANDOFF] → the requested dates are unavailable.
+1. Call explore_recovery_options once.
+2. Present the top 2–3 options as a clean numbered list.
+3. The best option's action card appears below your message automatically.
+4. End with: "Which works best for your stay?"
 
-4. If check_availability returns DIRECT_AVAILABLE or SHUFFLE_POSSIBLE initially, and
-   the user did NOT ask for alternatives, you may present it immediately. But if they
-   ever ask for options, you MUST run Steps A-F.
+Do NOT re-check the original dates — they're already confirmed impossible.
+═════════════════════════════════════════════════════════════════════════════════
 
-5. MANDATORY TRANSPARENCY RULE — final response:
-   Always produce a numbered list of every option found across Steps A-F.
-   For each option: room(s), dates, estimated total, discount if any, and
-   ONE revenue reason (pricing signal, NJ context, demand note).
-   For each step that FAILED: say so in one word (e.g., "Upgrade checked — none
-   free", "Same-category split — not possible").
-   End with: "Which works best for this guest?"
+═══ FOLLOW-UPS ═══════════════════════════════════════════════════════════════
+Previous messages may contain [STRUCTURED_STATE] JSON with option details.
+Use it to handle "I like option 2" or "I don't want option 1" requests.
+Never invent options from memory — use stored data or call tools again.
+═════════════════════════════════════════════════════════════════════════════════
 
-   BAD:  "Found a split-stay option. Confirm with the button below when ready."
-   GOOD: "Here's what I found for DELUXE Jun 30–Jul 3:
-          1. Split Stay (Deluxe) — D04 Jun 30, D10 Jul 1–3. 5% discount,
-             $17,575 total. Preserves the guest's tier. <- card ready to confirm
-          2. Upgrade to Premium — P02, full stay, $X/night. Strong demand,
-             hold rate. <- can set up on request
-          3. Standard — S05, full stay, $Y/night. Budget option.
-          Suite checked — fully blocked these dates.
-          Which works best for this guest?"
-── ───────────────────────────────────────────────────────────────────────────
-
-── [PREFS] mode ─────────────────────────────────────────────────────────────
-Message starts with [PREFS] — the receptionist just toggled a checkbox to update
-guest options. This is a preference acknowledgement ONLY. Do NOT call any booking
-tools. Reply with exactly one short sentence confirming the updated option (e.g.
-"Got it — nearby dates option is now on."). No card, no tool calls.
-── ───────────────────────────────────────────────────────────────────────────
-
-── [HANDOFF] mode ────────────────────────────────────────────────────────────
-Message starts with [HANDOFF] — the deterministic engine confirmed the exact requested
-dates are IMPOSSIBLE in the preferred category.
-
-YOU ARE NOW THE PROACTIVE RECOVERY ENGINE. The receptionist needs a complete
-options menu to offer the guest IMMEDIATELY — before they ask for each option.
-
-╔═ MANDATORY EXECUTION RULES — NON-NEGOTIABLE ═══════════════════════════════╗
-║ 1. Call explore_recovery_options exactly once for the requested stay.       ║
-║ 2. Do NOT stop at the first success. The tool already checks all paths.     ║
-║ 3. Present ALL returned options in the final response.                      ║
-║ 4. Never ask "want me to check X?" — the recovery tool already checked it.  ║
-║ 5. Use pricing_recs context to rank options and annotate each:              ║
-║      INCREASE → strong demand, hold rate; DISCOUNT → soft, offer the %     ║
-║      as a selling point; MAINTAIN → neutral commentary.                    ║
-║ 6. The action card in the chat will show the TOP-RANKED confirmable option. ║
-║    Describe all other options in your text so the receptionist has the      ║
-║    full picture and can ask you to set up any of them next.                 ║
-╚════════════════════════════════════════════════════════════════════════════╝
-
-Read request.* and allowed_paths.* from the [HANDOFF] JSON payload.
-
-  STEP 1: explore_recovery_options(preferred_category, check_in, check_out,
-          infeasible_dates_csv from deterministic_check.infeasible_dates)
-          → RECOVERY_MENU gives all viable paths and all failed paths.
-          → Use only this returned data for room IDs, dates, totals, and rankings.
-
-FINAL MANDATORY RESPONSE — after all steps complete or tool budget exhausted:
-Present every option found as a numbered list. For each option include:
-  1. Option type (Split Stay / Upgrade / Alternative Category / Date Shift / Shorten)
-  2. Room ID(s) and exact dates
-  3. Estimated total (and discount % if pricing recommends one)
-  4. ONE sentence on revenue context: demand signal, NJ market note, why it's
-     worth offering to the guest right now.
-End with: "Which of these works best for this guest?"
-
-If a confirmable action card was generated, the top option is ready to confirm.
-Mention which option number has the card and that the others can be set up on request.
-
-Do NOT call check_availability for the original preferred_category on the original dates —
-the deterministic engine already confirmed that is impossible.
-── ───────────────────────────────────────────────────────────────────────────
-
-── Category independence rule ────────────────────────────────────────────────
-A NOT_POSSIBLE result for one category means ONLY that category is fully blocked on
-those dates. It says NOTHING about any other category. NEVER say "not available in
-any category" unless you have called check_availability for every category and all
-returned NOT_POSSIBLE. When a receptionist asks about other categories in follow-up
-messages, call check_availability for the specific categories they mention — or for
-ALL remaining categories (ECONOMY, STANDARD, STUDIO, PREMIUM, SUITE) if they say
-"any other". Prior tool results for DELUXE do not apply to ECONOMY or SUITE.
-── ───────────────────────────────────────────────────────────────────────────
-
-── Structured state follow-ups ───────────────────────────────────────────────
-Previous assistant messages may include hidden [STRUCTURED_STATE] JSON from the UI.
-Use it as the source of truth for option numbers, option_id values, room IDs, dates,
-totals, and confirmability from the prior recovery menu.
-
-If the receptionist rejects or changes an option:
-• "I don't like option 1" → remove/deprioritize option 1 and recommend the next best
-  viable option from the structured menu.
-• "Set up option 2" → use that option's stored category, room, and dates; call the
-  narrowest validation tool needed to produce a fresh confirmable action card.
-• "Cheaper", "no room move", "same category", "higher revenue" → rerank the stored
-  options by that constraint, explain the tradeoff, and call a tool only if a new
-  confirmable card is needed.
-• Never invent a replacement option from memory. Use stored structured options or
-  call tools again.
-── ───────────────────────────────────────────────────────────────────────────
-
-── Voice and tone (always) ───────────────────────────────────────────────────
-You are a sharp, friendly hotel revenue concierge. Speak warmly but efficiently.
-• Sound like a knowledgeable colleague who already did the legwork — not a report generator.
-• For normal chat: no bullet points, no markdown headers, no tables. 1–2 sentences max.
-• For [HANDOFF] multi-option responses: numbered lists are REQUIRED (the one exception).
-  Receptionists need to scan multiple options fast. 2 lines max per numbered item.
-• Never start with "I" — start with the option, the room, or the insight.
-• Vary your openers: "Here's what I found —", "Good news —", "Found options —", etc.
-
-── Output rules (always) ─────────────────────────────────────────────────────
-• Never invent room IDs or rates — only report what tool results return.
-• Do not mention internal tool names, raw JSON, traces, or graph steps.
-• Never say "I'll confirm" or "booking is done" — you only recommend.
-• For single-option bookings: end with "Confirm with the button below when ready."
-• For revenue insights: end with a concrete actionable suggestion.
-• For [HANDOFF] final response: end with "Which of these works best for this guest?"
-  so the receptionist can act immediately without a follow-up question.
-• Reference NJ market context naturally where it adds revenue context.
-── ───────────────────────────────────────────────────────────────────────────
+═══ VOICE ════════════════════════════════════════════════════════════════════
+• Never start with "I" — lead with the info.
+• No markdown headers, no tables, no bullet points in chat.
+• Keep it conversational and brief. 2 lines max per option.
+• Vary openers: "Here's what I found —", "Great news —", "A few options —"
+═════════════════════════════════════════════════════════════════════════════════
 """
+
+
 
 
 # ── LangChain ↔ JSON helpers ──────────────────────────────────────────────────
@@ -477,13 +298,31 @@ def _reply_for_action_data(action_data: dict) -> Optional[str]:
 
 
 def _sanitize_reply(reply: str) -> str:
-    """Keep assistant text compatible with the compact chat UI."""
-    return (
+    """Keep public booking assistant text customer-safe."""
+    cleaned = (
         reply.replace("**", "")
         .replace("__", "")
         .replace("`", "")
         .strip()
     )
+    replacements = {
+        r"\bRoom\s+[A-Z]{1,4}\d{1,5}\b": "A matching room",
+        r"\b[A-Z]{1,4}\d{2,5}\b": "a matching room",
+        r"\bthis guest\b": "your stay",
+        r"\bthe guest\b": "you",
+        r"\bguest\b": "you",
+        r"\bRevPAR\b": "stay value",
+        r"\bpricing engine\b": "current booking conditions",
+        r"\boccupancy\b": "availability",
+        r"\borphan gaps?\b": "short availability gaps",
+        r"\bhard-blocked\b": "unavailable",
+        r"\bsoft-blocked\b": "reserved",
+        r"\bsoft blocks?\b": "reservations",
+        r"\btool calls?\b": "checks",
+    }
+    for pattern, replacement in replacements.items():
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def _is_actionable_action_data(action_data: Optional[dict]) -> bool:
@@ -685,7 +524,7 @@ async def _build_recovery_options(
             "discount_pct": discount_pct,
             "estimated_total": round(run["nights"] * discounted_rate, 2),
             "rationale": (
-                f"Best available {preferred_category} fragment inside the requested window. "
+                f"Enjoy a shorter stay in your preferred {preferred_category} room. "
                 f"Covers {run['nights']} of {nights} requested nights."
             ),
         })
@@ -721,8 +560,7 @@ async def _build_recovery_options(
             "estimated_total": round(run["nights"] * discounted_rate, 2),
             "pricing_action": signal["action"],
             "rationale": (
-                f"Closest category inventory fragment found after exact {preferred_category} failed. "
-                f"Pricing signal is {signal['action']}."
+                f"A great alternative available for {run['nights']} nights in a {cat} room."
             ),
         })
 
@@ -736,8 +574,7 @@ async def _build_recovery_options(
             "discount_pct": 10.0,
             "estimated_total": None,
             "rationale": (
-                "The split engine could not cover the full stay within the normal 3-segment limit. "
-                "If the guest accepts extra room moves, a manager-approved custom split may recover more nights."
+                "We can cover your full stay if you're willing to change rooms a few times."
             ),
         })
 
@@ -750,8 +587,7 @@ async def _build_recovery_options(
         "discount_pct": discount_pct,
         "estimated_total": None,
         "rationale": (
-            "Ask whether the guest can shorten the stay, shift dates, accept mixed categories, "
-            "or allow more than two room moves."
+            "Let us know if your dates are flexible, or if you'd be open to trying a different room style."
         ),
     })
 
@@ -847,7 +683,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     for a in (result.alternatives or [])
                 ],
                 # Echo request params so the frontend Confirm button has
-                # everything needed to call /receptionist/confirm without
+                # everything needed to call /booking/confirm without
                 # the agent needing to do anything
                 "request": {
                     "category":  category,
@@ -971,7 +807,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         Call this after get_room_inventory when the guest has expressed a floor
         or room preference — it returns a confirmable action card for that exact room.
 
-        Returns DIRECT_AVAILABLE with a card the receptionist can confirm,
+        Returns DIRECT_AVAILABLE with a card the booking can confirm,
         or OCCUPIED with the date the room is blocked from.
         room_id: exact room ID from get_room_inventory (e.g. "D09", "S03")
         Dates must be ISO format: YYYY-MM-DD.
@@ -1240,10 +1076,10 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         infeasible_dates_csv: str = "",
     ) -> str:
         """
-        Build a complete receptionist-ready recovery menu for a failed exact booking.
+        Build a complete booking-ready recovery menu for a failed exact booking.
 
         Use this when a handoff arrives, exact availability is NOT_POSSIBLE, or the
-        receptionist asks for all options/alternatives. It checks same-category split,
+        booking asks for all options/alternatives. It checks same-category split,
         mixed-category split recommendation, upgrade, best alternative category, nearby
         date shifts, and shortened fragments in one backend pass.
 
@@ -1307,12 +1143,12 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     "estimated_total": same_payload.get("total_rate"),
                     "confirmable": True,
                     "action_data": {"type": "split_stay_result", "data": same_payload},
-                    "rationale": "Preserves the guest's requested category with the least category disruption.",
+                    "rationale": "Stay in your preferred room style for the entire trip, with just a brief room change midway.",
                 })
             else:
                 add_failure("Same-category split", same_payload.get("message") or "Not possible.")
 
-            # 2. Mixed split: useful for receptionist talk-track, but not confirmable yet.
+            # 2. Mixed split: useful for booking talk-track, but not confirmable yet.
             flex_split = await ctrl.find_split_stay_flex(same_req, db)
             flex_payload = _split_payload(flex_split, pref, check_in, check_out)
             if flex_payload.get("state") == "SPLIT_POSSIBLE" and flex_payload.get("segments"):
@@ -1333,9 +1169,9 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     "confirmable": not is_mixed,
                     "action_data": None if is_mixed else {"type": "split_stay_result", "data": flex_payload},
                     "rationale": (
-                        "Recommendation only until mixed-category split confirmation is fixed."
+                        "We can mix room styles to cover your dates if you don't mind switching."
                         if is_mixed else
-                        "Preserves the guest's requested category with a confirmable split stay."
+                        "Stay in your preferred room style for the entire trip, with just a brief room change midway."
                     ),
                 })
             else:
@@ -1374,9 +1210,9 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                         "prob_of_selling": "LOW" if signal["action"] == "DISCOUNT" else "HIGH",
                     }},
                     "rationale": (
-                        "No room move and higher revenue; hold rate on strong demand."
+                        "Enjoy a seamless stay with no room moves in a premium upgraded room."
                         if signal["action"] != "DISCOUNT"
-                        else "No room move and fills soft premium inventory with a targeted discount."
+                        else "Enjoy a seamless stay with no room moves in a premium upgraded room, offered at a special rate."
                     ),
                 }
                 await add_room_rate(opt, result.room_id, cat, ci, co)
@@ -1415,7 +1251,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     "confirmable": True,
                     "action_data": {"type": "availability_result", "data": payload},
                     "rationale": (
-                        f"Same dates with lower operational complexity. Pricing signal: {signal['action']}."
+                        f"A great alternative available for your exact dates."
                     ),
                 }
                 await add_room_rate(opt, result.room_id, cat, ci, co)
@@ -1458,7 +1294,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     "check_out": end.isoformat(),
                     "confirmable": True,
                     "action_data": {"type": "availability_result", "data": payload},
-                    "rationale": "Keeps the requested category by changing the stay constraint.",
+                    "rationale": "Enjoy your preferred room style for slightly different dates.",
                 }
                 await add_room_rate(opt, result.room_id, pref, start, end)
                 options.append(opt)
@@ -1495,7 +1331,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                     "nights": run["nights"],
                     "confirmable": True,
                     "action_data": {"type": "availability_result", "data": payload},
-                    "rationale": f"Best available same-category fragment covers {run['nights']} of {nights} requested nights.",
+                    "rationale": f"Enjoy a shorter stay in your preferred {pref} room for {run['nights']} nights.",
                 }
                 await add_room_rate(opt, run["room_id"], pref, start, end)
                 options.append(opt)
@@ -1779,7 +1615,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
     @tool
     async def get_revenue_intelligence() -> str:
         """
-        Return a live revenue snapshot for the hotel — use this when the receptionist
+        Return a live revenue snapshot for the hotel — use this when the booking
         asks a general question, greets you, or there is no active booking in progress.
 
         Returns tonight's occupancy and ADR, per-category fill rates, orphan gap
@@ -1923,7 +1759,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                 "market_note": (
                     "Hotel is in New Jersey, USA. Weekdays = pharma/finance/tech corporate guests "
                     "(rate-inelastic). Weekends = drive-to leisure from NYC/Philadelphia (price-sensitive). "
-                    "Peak: Jun-Jul graduation, Jul-Aug shore season, Sep-Nov MetLife/NFL. "
+                    "Peak: May-Jun graduation, Jun-Aug shore season, Sep-Nov MetLife/NFL. "
                     "NYC overflow drives late-booking surges when NYC rates exceed $400/night. "
                     "OTA pressure highest on Standard Mon-Thu (Expedia, Priceline flash deals)."
                 ),
@@ -1933,7 +1769,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             return json.dumps({"error": str(exc)})
 
     # confirm_booking and confirm_split_stay are intentionally NOT tools.
-    # The AI only recommends. All DB writes go through the receptionist's
+    # The AI only recommends. All DB writes go through the booking's
     # confirm button in the UI — never triggered by the AI itself.
 
     tools = [
@@ -2005,7 +1841,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                 ))
                 continue
             try:
-                logger.info("Receptionist agent tool call: %s %s", tc["name"], tc.get("args", {}))
+                logger.info("Booking agent tool call: %s %s", tc["name"], tc.get("args", {}))
                 result = await fn.ainvoke(tc["args"])
             except Exception as exc:
                 result = json.dumps({"error": str(exc)})
@@ -2043,14 +1879,14 @@ async def run_agent(
     hotel_context: str = "",
 ) -> dict:
     """
-    Run the receptionist agent for one turn.
+    Run the booking agent for one turn.
 
     Parameters
     ----------
     messages     : Full conversation history from frontend
                    [{ role: "user"|"assistant", content: str }, ...]
     db           : AsyncSession injected by FastAPI
-    hotel_context: Live hotel summary (occupancy, floors, categories) from /ai/context
+    hotel_context: Live hotel summary (occupancy, floors, categories) from /booking/ai/context
 
     Returns
     -------
@@ -2081,7 +1917,7 @@ async def run_agent(
             config={"recursion_limit": (MAX_AGENT_TOOL_CALLS * 2) + 4},
         )
     except GraphRecursionError:
-        logger.exception("Receptionist agent hit recursion limit")
+        logger.exception("Booking agent hit recursion limit")
         return {
             "reply": (
                 "The recovery search took too many tool steps to finish cleanly. "
@@ -2090,7 +1926,7 @@ async def run_agent(
             "action_data": None,
         }
     except Exception:
-        logger.exception("Receptionist agent turn failed")
+        logger.exception("Booking agent turn failed")
         return {
             "reply": "The AI assistant could not complete that turn cleanly. Use the manual availability check, then reopen the assistant if alternatives are needed.",
             "action_data": None,

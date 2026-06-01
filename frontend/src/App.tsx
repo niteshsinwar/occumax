@@ -2,8 +2,9 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from "react-router-do
 import { Dashboard } from "./pages/Dashboard";
 import { DashboardV2 } from "./pages/DashboardV2";
 import { ReceptionistView } from "./pages/ReceptionistView";
+import { BookingView } from "./pages/BookingView";
 import { AdminPanel } from "./pages/AdminPanel";
-import { Users, Settings, Grid3x3 } from "lucide-react";
+import { Users, Settings, Grid3x3, CalendarCheck } from "lucide-react";
 import type { ReactNode } from "react";
 
 /** Padded main + white content card for routes that are not the full-bleed Overview (/dashboard). */
@@ -67,17 +68,20 @@ function AppLayout() {
                 </NavLink>
               </nav>
             </div>
-            <div className="flex items-center">
-              <div
-                className="flex items-center gap-2 text-[9px] font-bold text-[#E8E0D8] uppercase tracking-[0.2em] bg-nav-elevated/80 px-4 py-1.5 rounded-full border border-white/15 shadow-subtle"
-                title="Live production data"
+            <div className="flex items-center gap-3">
+              <NavLink
+                to="/booking"
+                className={({ isActive }) =>
+                  `hidden sm:inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[9px] font-bold uppercase tracking-[0.18em] transition-colors ${
+                    isActive
+                      ? "border-occuyellow bg-occuyellow text-nav"
+                      : "border-white/15 bg-nav-elevated/80 text-[#E8E0D8] hover:border-occuyellow/50 hover:text-occuyellow"
+                  }`
+                }
               >
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-40" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-                </span>
-                Live
-              </div>
+                <CalendarCheck className="w-3.5 h-3.5 shrink-0" /> Website Preview
+              </NavLink>
+
             </div>
           </div>
         </div>
@@ -108,6 +112,14 @@ function AppLayout() {
             <PageShell>
               <ReceptionistView />
             </PageShell>
+          }
+        />
+        <Route
+          path="/booking"
+          element={
+            <main className="flex-1 w-full">
+              <BookingView />
+            </main>
           }
         />
         <Route

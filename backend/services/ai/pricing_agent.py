@@ -269,7 +269,7 @@ Output schema (no fences, raw JSON):
   "week_note": "specific insight about this week historically vs full year"
 }
 
-Context: NJ hotel in May — graduation season, shore drive-to market opening, pharma conference season.
+Context: NJ hotel in June — graduation season, shore drive-to market opening, pharma conference season.
 """
 
 async def _call_history_agent(llm: ChatOpenAI, history: dict, today: date) -> dict:
