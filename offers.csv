@@ -1,0 +1,4 @@
+id,offer_type,category,offer_date,discount_pct,original_rate,discounted_rate,reason,created_at
+PROMO_SANDWICH,SANDWICH_ORPHAN,DELUXE,,15,5000,4250,Fill 1-night gap between bookings,2026-05-31 09:47:55.571179
+EXTEND_STAY,EXTENSION_OFFER,PREMIUM,,10,7500,6750,Encourage Friday extension,2026-05-31 09:47:55.571179
+LMT_DEAL,LAST_MINUTE,SUITE,,20,12000,9600,Same-day walk-in special,2026-05-31 09:47:55.571179
