@@ -39,9 +39,20 @@ interface RecentBooking {
 
 const trimAiHistory = (messages: ChatMsg[]) => messages.slice(-MAX_AI_HISTORY_MESSAGES);
 const persistableAiHistory = (messages: ChatMsg[]) =>
-  trimAiHistory(messages)
-    .filter((msg) => !msg.content.startsWith("[HANDOFF]") && !msg.content.startsWith("[PREFS]"))
-    .map((msg) => ({ role: msg.role, content: msg.content }) as ChatMsg);
+  trimAiHistory(messages);
+
+const latestStructuredStateMessage = (messages: ChatMsg[]): ChatMsg | null => {
+  const latest = [...messages].reverse().find((msg) => msg.role === "assistant" && msg.action_data);
+  if (!latest?.action_data) return null;
+  const payload = {
+    source: "previous_assistant_action_data",
+    action_data: latest.action_data,
+  };
+  return {
+    role: "user",
+    content: `[STRUCTURED_STATE]\n${JSON.stringify(payload)}`,
+  };
+};
 
 const BT_BG: Record<string, string> = {
   EMPTY: "var(--green)",
@@ -219,7 +230,12 @@ export function ReceptionistView() {
   // ── AI core: accepts explicit text + history so handoff can fire directly ──
   const fireAiMessage = async (text: string, history: ChatMsg[], runId = aiRunIdRef.current) => {
     const userMsg: ChatMsg = { role: "user", content: text };
-    const updated = trimAiHistory([...history, userMsg]);
+    const stateMsg = latestStructuredStateMessage(history);
+    const updated = trimAiHistory([
+      ...history,
+      ...(stateMsg && !text.startsWith("[HANDOFF]") && !text.startsWith("[PREFS]") ? [stateMsg] : []),
+      userMsg,
+    ]);
     if (runId !== aiRunIdRef.current) return;
     setChatMessages(updated);
     setChatLoading(true);
@@ -676,6 +692,122 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
     );
   }
 
+  if (data.type === "recovery_menu") {
+    const d = data.data as {
+      preferred_category: string;
+      check_in: string;
+      check_out: string;
+      requested_nights: number;
+      options?: {
+        option_id?: string;
+        display_rank?: number;
+        kind: string;
+        title: string;
+        category?: string;
+        room_id?: string;
+        state?: string;
+        check_in?: string;
+        check_out?: string;
+        nights?: number;
+        segments?: SplitSegment[];
+        discount_pct?: number;
+        estimated_total?: number | null;
+        confirmable?: boolean;
+        rationale?: string;
+        pricing_signal?: { action?: string; confidence?: string; reason?: string };
+      }[];
+      failures?: { path: string; detail: string }[];
+      primary_action_data?: { type: string; data: Record<string, unknown> } | null;
+    };
+
+    return (
+      <div className="mt-2 border border-accent/30 bg-accent/3">
+        <div className="flex items-center gap-2 px-3 py-2 bg-accent/10 border-b border-accent/20 text-xs font-bold uppercase tracking-wider text-accent">
+          <Sparkles className="w-3.5 h-3.5 shrink-0" />
+          Recovery Menu
+          <span className="ml-auto font-mono font-normal normal-case text-text">
+            {d.preferred_category} · {d.requested_nights}n
+          </span>
+        </div>
+
+        <div className="p-3 space-y-2">
+          {(d.options ?? []).map((opt, i) => {
+            const rank = opt.display_rank ?? i + 1;
+            const segments = opt.segments ?? [];
+            return (
+              <div key={opt.option_id ?? `${opt.kind}-${i}`} className="border border-border bg-surface p-3 text-xs">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 bg-accent/15 text-accent font-bold flex items-center justify-center text-[10px] shrink-0">
+                        {rank}
+                      </span>
+                      <span className="font-bold text-text">{opt.title}</span>
+                    </div>
+                    <div className="mt-1 text-text-muted leading-relaxed">{opt.rationale}</div>
+                  </div>
+                  <span className={`text-[9px] uppercase tracking-widest border px-2 py-1 shrink-0 ${
+                    opt.confirmable ? "border-occugreen/30 text-occugreen" : "border-border text-text-muted"
+                  }`}>
+                    {opt.confirmable ? "Ready" : "Advisory"}
+                  </span>
+                </div>
+
+                {segments.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {segments.map((seg, idx) => (
+                      <div key={`${seg.room_id}-${seg.check_in}-${idx}`} className="grid grid-cols-4 gap-2 text-[10px] text-text-muted">
+                        <span className="font-mono text-text">Room {seg.room_id}</span>
+                        <span>Floor {seg.floor}</span>
+                        <span className="col-span-2">{seg.check_in} → {seg.check_out} · {seg.nights}n</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-text-muted">
+                  {opt.room_id && <div>Room <span className="font-mono text-text">{opt.room_id}</span></div>}
+                  {opt.category && <div>Category <span className="text-text">{opt.category}</span></div>}
+                  {opt.check_in && opt.check_out && (
+                    <div className="col-span-2">
+                      Dates <span className="font-mono text-text">{opt.check_in} → {opt.check_out}</span>
+                      {typeof opt.nights === "number" && <span> · {opt.nights}n</span>}
+                    </div>
+                  )}
+                  {typeof opt.discount_pct === "number" && opt.discount_pct > 0 && (
+                    <div>Offer <span className="text-accent">{opt.discount_pct}% discount</span></div>
+                  )}
+                  {typeof opt.estimated_total === "number" && (
+                    <div>Total <span className="text-text">${Math.round(opt.estimated_total).toLocaleString("en-US")}</span></div>
+                  )}
+                  {opt.pricing_signal?.action && (
+                    <div>Pricing <span className="text-text">{opt.pricing_signal.action}</span></div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {(d.failures?.length ?? 0) > 0 && (
+          <div className="border-t border-border bg-surface-2 px-3 py-2 text-[10px] text-text-muted space-y-1">
+            {d.failures?.slice(0, 3).map((failure) => (
+              <div key={failure.path}>
+                <span className="font-bold text-text">{failure.path}:</span> {failure.detail}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {d.primary_action_data && (
+          <div className="border-t border-accent/20 p-3">
+            <ActionCard data={d.primary_action_data} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (data.type === "recovery_options") {
     const d = data.data as {
       preferred_category: string;
@@ -987,7 +1119,11 @@ function ActionCard({ data }: { data: { type: string; data: Record<string, unkno
 
 function ChatBubble({ msg }: { msg: ChatMsg }) {
   const isUser = msg.role === "user";
-  if (isUser && (msg.content.startsWith("[HANDOFF]") || msg.content.startsWith("[PREFS]"))) return null;
+  if (isUser && (
+    msg.content.startsWith("[HANDOFF]")
+    || msg.content.startsWith("[PREFS]")
+    || msg.content.startsWith("[STRUCTURED_STATE]")
+  )) return null;
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className={`w-7 h-7 flex items-center justify-center shrink-0 mt-0.5 border ${

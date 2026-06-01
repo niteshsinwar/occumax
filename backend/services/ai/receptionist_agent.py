@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Optional
 """
 Receptionist AI Agent — LangGraph + Gemini
 
@@ -15,7 +14,6 @@ Architecture:
 import json
 import logging
 import operator
-import re
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Annotated, Optional, TypedDict
@@ -137,6 +135,15 @@ find_split_stay_flex(preferred_category, check_in, check_out)
   → Covers the full stay using the fewest room/category changes it can find.
   → Returns SPLIT_POSSIBLE with room segments and a confirmable split-stay card.
 
+explore_recovery_options(preferred_category, check_in, check_out, infeasible_dates_csv="")
+  → PREFERRED tool when exact booking fails, [HANDOFF] starts, or the receptionist
+    asks for "all options", "alternatives", "explore", "what else", or "best offer".
+  → Executes the full recovery search in one grounded backend pass:
+    same-category split, mixed split recommendation, upgrade, alternative category,
+    nearby date shifts, and shortened fragments.
+  → Returns RECOVERY_MENU with every viable option and a primary confirmable card.
+  → Use this instead of trying to manually remember the full recovery checklist.
+
 search_best_alternative_category(preferred_category, check_in, check_out)
   → Call when the preferred category cannot work on the exact dates.
   → Checks nearby categories and ranks confirmable options using category distance,
@@ -206,22 +213,10 @@ Use it at every recovery step to rank options and decide on discounts:
 3. If check_availability returns NOT_POSSIBLE, OR if the receptionist asks for "options",
    "alternatives", or "what else do we have":
    NEVER stop here. You are the hyper-proactive recovery engine.
-   Execute ALL steps below WITHOUT asking permission, one tool per turn, CONTINUING
-   through every single path regardless of whether a prior step succeeded:
-
-   STEP A: find_split_stay(same category, same dates)
-           Result: note it. CONTINUE to B.
-   STEP B: find_split_stay_flex(same category, same dates)
-           Result: note it. CONTINUE to C.
-   STEP C: suggest_upgrade(preferred category, same dates)
-           Result: note it with pricing discount. CONTINUE to D.
-   STEP D: search_best_alternative_category(preferred category, same dates)
-           Result: note it with pricing signal. CONTINUE to E.
-   STEP E: check_availability(same category, check_in +1 day, same duration) (push arrival back 1 day)
-           check_availability(same category, check_in, check_out -1 day) (shorten stay by 1 day at the end)
-           Result: note any hits. Continue.
-   STEP F: [if all above failed] get_room_inventory(preferred category)
-           Find longest free fragment. Offer as "shorten stay" option.
+   Call explore_recovery_options(preferred category, same dates) once. It executes
+   all recovery checks in a single grounded backend pass and returns the complete
+   options menu. Do not manually chain the individual tools unless the user later
+   asks to inspect one specific path.
 
 4. If check_availability returns DIRECT_AVAILABLE or SHUFFLE_POSSIBLE initially, and
    the user did NOT ask for alternatives, you may present it immediately. But if they
@@ -261,12 +256,10 @@ YOU ARE NOW THE PROACTIVE RECOVERY ENGINE. The receptionist needs a complete
 options menu to offer the guest IMMEDIATELY — before they ask for each option.
 
 ╔═ MANDATORY EXECUTION RULES — NON-NEGOTIABLE ═══════════════════════════════╗
-║ 1. Execute ALL allowed steps in sequence, one tool per turn.               ║
-║ 2. Do NOT stop at the first success — CONTINUE through all allowed_paths.  ║
-║    You have up to 10 tool calls; use them all if needed.                   ║
-║ 3. Tally EVERY option found (splits, upgrades, alt categories, date        ║
-║    shifts, shortened fragments). Present ALL of them in the final response. ║
-║ 4. Never ask "want me to check X?" — just check it. All paths. Always.     ║
+║ 1. Call explore_recovery_options exactly once for the requested stay.       ║
+║ 2. Do NOT stop at the first success. The tool already checks all paths.     ║
+║ 3. Present ALL returned options in the final response.                      ║
+║ 4. Never ask "want me to check X?" — the recovery tool already checked it.  ║
 ║ 5. Use pricing_recs context to rank options and annotate each:              ║
 ║      INCREASE → strong demand, hold rate; DISCOUNT → soft, offer the %     ║
 ║      as a selling point; MAINTAIN → neutral commentary.                    ║
@@ -277,41 +270,10 @@ options menu to offer the guest IMMEDIATELY — before they ask for each option.
 
 Read request.* and allowed_paths.* from the [HANDOFF] JSON payload.
 
-  [if allowed_paths.same_category_split=true]
-  STEP 1: find_split_stay(preferred_category, check_in, check_out)
-          SPLIT_POSSIBLE → add to options tally. CONTINUE to STEP 2.
-          NOT_POSSIBLE   → note failure. CONTINUE to STEP 2.
-
-  [if allowed_paths.mixed_category_split=true]
-  STEP 2: find_split_stay_flex(preferred_category, check_in, check_out)
-          SPLIT_POSSIBLE → add to tally. CONTINUE to STEP 3.
-          NOT_POSSIBLE   → note failure. CONTINUE to STEP 3.
-
-  [if allowed_paths.upgrade=true]
-  STEP 3: suggest_upgrade(preferred_category, check_in, check_out)
-          UPGRADE_AVAILABLE → add to tally with pricing discount note. CONTINUE.
-          NO_UPGRADE        → note it. CONTINUE to STEP 4.
-
-  [if allowed_paths.alternative_category=true]
-  STEP 4: search_best_alternative_category(preferred_category, check_in, check_out)
-          Available → add to tally with pricing signal. CONTINUE to STEP 5.
-          NOT_POSSIBLE → note it. CONTINUE to STEP 5.
-
-  [if allowed_paths.nearby_dates_pm1=true and budget allows]
-  STEP 5a: check_availability(preferred_category, check_in + 1 day, same duration)
-           Available → add "shift 1 day later" to tally. Continue.
-  STEP 5b: check_availability(preferred_category, check_in - 1 day, same duration)
-           (skip if check_in - 1 < today)
-           Available → add "shift 1 day earlier" to tally. Continue.
-
-  [if allowed_paths.shortened_stay_fragment=true and budget allows]
-  STEP 6: get_room_inventory(preferred_category)
-          → Find the longest consecutive free run in the preferred category.
-          → If ≥ 2 nights found: add a "shorten stay to N nights in room X" option.
-
-  [absolute last resort — only if every step above returned nothing confirmable]
-  STEP 7: build_recovery_options(preferred_category, check_in, check_out)
-          → Present whatever partial fragments it returns as shortened-stay choices.
+  STEP 1: explore_recovery_options(preferred_category, check_in, check_out,
+          infeasible_dates_csv from deterministic_check.infeasible_dates)
+          → RECOVERY_MENU gives all viable paths and all failed paths.
+          → Use only this returned data for room IDs, dates, totals, and rankings.
 
 FINAL MANDATORY RESPONSE — after all steps complete or tool budget exhausted:
 Present every option found as a numbered list. For each option include:
@@ -337,6 +299,23 @@ returned NOT_POSSIBLE. When a receptionist asks about other categories in follow
 messages, call check_availability for the specific categories they mention — or for
 ALL remaining categories (ECONOMY, STANDARD, STUDIO, PREMIUM, SUITE) if they say
 "any other". Prior tool results for DELUXE do not apply to ECONOMY or SUITE.
+── ───────────────────────────────────────────────────────────────────────────
+
+── Structured state follow-ups ───────────────────────────────────────────────
+Previous assistant messages may include hidden [STRUCTURED_STATE] JSON from the UI.
+Use it as the source of truth for option numbers, option_id values, room IDs, dates,
+totals, and confirmability from the prior recovery menu.
+
+If the receptionist rejects or changes an option:
+• "I don't like option 1" → remove/deprioritize option 1 and recommend the next best
+  viable option from the structured menu.
+• "Set up option 2" → use that option's stored category, room, and dates; call the
+  narrowest validation tool needed to produce a fresh confirmable action card.
+• "Cheaper", "no room move", "same category", "higher revenue" → rerank the stored
+  options by that constraint, explain the tradeoff, and call a tool only if a new
+  confirmable card is needed.
+• Never invent a replacement option from memory. Use stored structured options or
+  call tools again.
 ── ───────────────────────────────────────────────────────────────────────────
 
 ── Voice and tone (always) ───────────────────────────────────────────────────
@@ -434,6 +413,9 @@ def _extract_action_data(messages: list[BaseMessage]) -> Optional[dict]:
         elif data.get("state") == "SPLIT_POSSIBLE" and data.get("segments"):
             if actionable is None:
                 actionable = {"type": "split_stay_result", "data": data}
+        elif data.get("state") == "RECOVERY_MENU":
+            if actionable is None:
+                actionable = {"type": "recovery_menu", "data": data}
         elif data.get("state") == "RECOVERY_OPTIONS" and data.get("options"):
             if actionable is None:
                 actionable = {"type": "recovery_options", "data": data}
@@ -481,6 +463,16 @@ def _reply_for_action_data(action_data: dict) -> Optional[str]:
                 f"to {lead.get('check_out', 'flexible')}. Review the options below with the guest."
             )
 
+    if kind == "recovery_menu":
+        options = data.get("options") or []
+        if options:
+            lead = options[0]
+            return (
+                f"Found {len(options)} recovery options. Lead with option "
+                f"{lead.get('display_rank', 1)}: {lead.get('title', 'best available option')}. "
+                "Review the recovery menu below and choose the best fit for the guest."
+            )
+
     return None
 
 
@@ -505,76 +497,12 @@ def _is_actionable_action_data(action_data: Optional[dict]) -> bool:
         return data.get("state") in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE", "UPGRADE_AVAILABLE")
     if kind == "recovery_options":
         return data.get("state") == "RECOVERY_OPTIONS" and bool(data.get("options"))
+    if kind == "recovery_menu":
+        return data.get("state") == "RECOVERY_MENU" and bool(data.get("options"))
     return kind in ("booking_confirmed", "split_stay_confirmed")
 
 
-def _parse_handoff_message(messages: list[dict]) -> Optional[dict]:
-    """Return the latest structured [HANDOFF] payload sent by the frontend."""
-    for raw in reversed(messages):
-        if raw.get("role") != "user":
-            continue
-        content = str(raw.get("content", ""))
-        if not content.startswith("[HANDOFF]"):
-            continue
-        body = content[len("[HANDOFF]"):].strip()
-        if not body:
-            return None
-        try:
-            parsed = json.loads(body)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", body)
-            category = next((cat for cat in _CATEGORY_ORDER if re.search(rf"\b{cat}\b", body, re.IGNORECASE)), None)
-            if category and len(dates) >= 2:
-                return {
-                    "type": "booking_recovery_handoff",
-                    "request": {
-                        "preferred_category": category,
-                        "check_in": dates[0],
-                        "check_out": dates[1],
-                    },
-                    "deterministic_check": {"state": "NOT_POSSIBLE", "infeasible_dates": []},
-                    "allowed_paths": {
-                        "same_category_split": True,
-                        "mixed_category_split": True,
-                        "upgrade": True,
-                        "alternative_category": True,
-                        "nearby_dates_pm1": True,
-                    },
-                }
-            return None
-    return None
-
-
-def _parse_explicit_availability_request(messages: list[dict]) -> Optional[dict]:
-    """Parse a single-turn category/date availability request without an LLM."""
-    for raw in reversed(messages):
-        if raw.get("role") != "user":
-            continue
-        content = str(raw.get("content", ""))
-        if content.startswith("[HANDOFF]"):
-            return None
-
-        category = next(
-            (cat for cat in _CATEGORY_ORDER if re.search(rf"\b{cat}\b", content, re.IGNORECASE)),
-            None,
-        )
-        dates = re.findall(r"\d{4}-\d{2}-\d{2}", content)
-        if not category or len(dates) < 2:
-            return None
-
-        if not re.search(r"\b(available|availability|check|book|booking|need|room)\b", content, re.IGNORECASE):
-            return None
-
-        return {
-            "category": category,
-            "check_in": dates[0],
-            "check_out": dates[1],
-        }
-    return None
-
-
-def _shuffle_payload(result, category: str, check_in: str, check_out: str) -> dict:
+def _availability_payload(result, category: str, check_in: str, check_out: str) -> dict:
     comparison = result.comparison if isinstance(result.comparison, dict) else None
     return {
         "state": result.state,
@@ -588,7 +516,7 @@ def _shuffle_payload(result, category: str, check_in: str, check_out: str) -> di
             for a in (result.alternatives or [])
         ],
         "request": {
-            "category": category,
+            "category": category.upper(),
             "check_in": check_in,
             "check_out": check_out,
         },
@@ -597,9 +525,9 @@ def _shuffle_payload(result, category: str, check_in: str, check_out: str) -> di
 
 def _split_payload(result, category: str, check_in: str, check_out: str) -> dict:
     payload = result.model_dump(mode="json")
-    payload["category"] = category
+    payload["category"] = category.upper()
     payload["request"] = {
-        "category": category,
+        "category": category.upper(),
         "check_in": check_in,
         "check_out": check_out,
     }
@@ -673,152 +601,6 @@ async def _pricing_signal(
         "score": round(score / max(1, len(recs)), 2),
         "discount_pct": discount_pct,
         "reason": " ".join(reasons) or f"{top_action} pricing signal across the stay.",
-    }
-
-
-async def _search_best_alternative_payload(
-    db: AsyncSession,
-    preferred_category: str,
-    check_in: str,
-    check_out: str,
-) -> dict:
-    pref = preferred_category.upper()
-    if pref not in _CATEGORY_ORDER:
-        return {"error": f"Unknown category: {preferred_category}"}
-
-    pref_idx = _CATEGORY_ORDER.index(pref)
-    candidates = [cat for cat in _CATEGORY_ORDER if cat != pref]
-    candidates.sort(key=lambda cat: (
-        abs(_CATEGORY_ORDER.index(cat) - pref_idx),
-        0 if _CATEGORY_ORDER.index(cat) > pref_idx else 1,
-    ))
-
-    ci = date.fromisoformat(check_in)
-    co = date.fromisoformat(check_out)
-    checked: list[dict] = []
-    options: list[dict] = []
-
-    for cat in candidates:
-        req = BookingRequestIn(
-            category=RoomCategory(cat),
-            check_in=ci,
-            check_out=co,
-            guest_name="Direct Guest",
-        )
-        result = await ctrl.check_availability(req, db)
-        checked.append({"category": cat, "state": result.state})
-        if result.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
-            continue
-
-        cat_idx = _CATEGORY_ORDER.index(cat)
-        distance = abs(cat_idx - pref_idx)
-        upgrade_bonus = 5.0 if cat_idx > pref_idx else -4.0
-        operational_score = 4.0 if result.state == "DIRECT_AVAILABLE" else 1.0
-        signal = await _pricing_signal(db, cat, ci, co)
-        rank_score = round(
-            (24.0 - distance * 8.0)
-            + upgrade_bonus
-            + operational_score
-            + float(signal["score"]),
-            2,
-        )
-        payload = _shuffle_payload(result, cat, check_in, check_out)
-        payload.update({
-            "rank_score": rank_score,
-            "pricing_signal": signal,
-            "alternative_from": pref,
-        })
-        options.append(payload)
-
-    if options:
-        best = max(options, key=lambda item: item["rank_score"])
-        best["message"] = (
-            f"{best['request']['category']} is the best same-date alternative to {pref}. "
-            f"{best['message']} Pricing signal: {best['pricing_signal']['action']} "
-            f"({best['pricing_signal']['confidence']})."
-        )
-        best["evaluated_options"] = [
-            {
-                "category": opt["request"]["category"],
-                "state": opt["state"],
-                "rank_score": opt["rank_score"],
-                "pricing_action": opt["pricing_signal"]["action"],
-            }
-            for opt in sorted(options, key=lambda item: item["rank_score"], reverse=True)
-        ]
-        return best
-
-    return {
-        "state": "NOT_POSSIBLE",
-        "message": f"No nearby category can cover {check_in} to {check_out}.",
-        "checked_categories": checked,
-        "request": {
-            "category": pref,
-            "check_in": check_in,
-            "check_out": check_out,
-        },
-    }
-
-
-async def _find_upgrade_payload(
-    db: AsyncSession,
-    preferred_category: str,
-    check_in: str,
-    check_out: str,
-) -> dict:
-    pref = preferred_category.upper()
-    if pref not in _CATEGORY_ORDER:
-        return {"error": f"Unknown category: {preferred_category}"}
-
-    ci = date.fromisoformat(check_in)
-    co = date.fromisoformat(check_out)
-    higher_categories = _CATEGORY_ORDER[_CATEGORY_ORDER.index(pref) + 1:]
-    if not higher_categories:
-        return {
-            "state": "NO_UPGRADE",
-            "preferred_category": pref,
-            "message": f"{pref} is already the highest tier.",
-        }
-
-    for cat in higher_categories:
-        req = BookingRequestIn(
-            category=RoomCategory(cat),
-            check_in=ci,
-            check_out=co,
-            guest_name="Direct Guest",
-        )
-        result = await ctrl.check_availability(req, db)
-        if result.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
-            continue
-
-        signal = await _pricing_signal(db, cat, ci, co)
-        discount_pct = float(signal["discount_pct"]) if signal["action"] == "DISCOUNT" else 0.0
-        comparison = result.comparison if isinstance(result.comparison, dict) else None
-        return {
-            "state": "UPGRADE_AVAILABLE",
-            "preferred_category": pref,
-            "upgrades": [{
-                "category": cat,
-                "room_id": result.room_id,
-                "state": result.state,
-                "swap_plan": result.swap_plan,
-                "comparison": comparison,
-                "prob_of_selling": "LOW" if signal["action"] == "DISCOUNT" else "HIGH",
-                "discount_recommended": discount_pct > 0,
-                "discount_pct": discount_pct,
-                "pricing_reason": signal["reason"],
-                "request": {
-                    "category": cat,
-                    "check_in": check_in,
-                    "check_out": check_out,
-                },
-            }],
-        }
-
-    return {
-        "state": "NO_UPGRADE",
-        "preferred_category": pref,
-        "message": f"No higher-tier rooms available for {check_in} to {check_out}.",
     }
 
 
@@ -1010,193 +792,6 @@ async def _build_recovery_options(
             },
         },
     }
-
-
-async def _synthesize_recovery_brief(recovery: dict) -> str:
-    """
-    Use the LLM for the handoff magic after deterministic recovery evidence is gathered.
-    This is a single no-tools call, so it cannot loop or mutate state.
-    """
-    data = (recovery.get("action_data") or {}).get("data") or {}
-    options = data.get("options") or []
-    preferred_category = data.get("preferred_category", "the requested category")
-    requested_nights = data.get("requested_nights", 0)
-
-    if not options:
-        return recovery.get("reply", "No recovery options are available under the current rules.")
-
-    llm = ChatOpenAI(
-        model="auto",
-        openai_api_base=settings.POLYAI_API_BASE,
-        openai_api_key=settings.POLYAI_API_KEY,
-        temperature=0.25,
-    )
-    prompt = (
-        "You are a senior hotel front-desk revenue assistant. "
-        "The exact requested booking failed, but recovery options were computed from live DB inventory. "
-        "Write a proactive receptionist script, not a technical report. "
-        "Do not say 'deterministic', do not mention tools, and do not apologize. "
-        "Give 2-4 concrete options the receptionist can offer the guest, including dates, room/category, "
-        "discount/total when present, and the best next question. Use US dollars with $ only. "
-        "Do not use any other currency symbol. Do not offer to check split stays or alternatives again; "
-        "the recovery options below are already checked. If no full-stay option exists, ask for a real "
-        "constraint change: shorter stay, shifted dates, another category, or manager approval for extra moves. "
-        "Keep it under 130 words. No markdown bullets or tables.\n\n"
-        f"Requested category: {preferred_category}\n"
-        f"Requested nights: {requested_nights}\n"
-        f"Recovery options JSON:\n{json.dumps(options[:5], default=str)}"
-    )
-
-    try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)])
-        raw = response.content if hasattr(response, "content") else ""
-        if isinstance(raw, list):
-            text = " ".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in raw
-            )
-        else:
-            text = str(raw)
-        return _sanitize_reply(text) or recovery.get("reply", "")
-    except Exception:
-        logger.exception("Recovery brief synthesis failed")
-        return recovery.get("reply", "Recovery options are available in the card below.")
-
-
-async def _run_handoff_recovery(
-    messages: list[dict],
-    db: AsyncSession,
-) -> Optional[dict]:
-    """
-    Deterministic recovery path for frontend handoffs.
-
-    This prevents hard booking-recovery cases from becoming unbounded LLM tool
-    loops. The LLM still handles normal chat, but handoff sequencing is business
-    logic and should be deterministic.
-    """
-    handoff = _parse_handoff_message(messages)
-    if handoff is None:
-        return None
-
-    request = handoff.get("request", {})
-    preferred_category = str(request.get("preferred_category", "")).upper()
-    check_in = str(request.get("check_in", ""))
-    check_out = str(request.get("check_out", ""))
-    allowed = handoff.get("allowed_paths", {}) or {}
-
-    try:
-        ci = date.fromisoformat(check_in)
-        co = date.fromisoformat(check_out)
-        RoomCategory(preferred_category)
-    except Exception:
-        return {
-            "reply": "The handoff is missing a valid room category or date range, so I need the stay dates and preferred category again.",
-            "action_data": None,
-        }
-
-    attempts: list[str] = []
-
-    if allowed.get("same_category_split", True):
-        result = await ctrl.find_split_stay(
-            BookingRequestIn(
-                category=RoomCategory(preferred_category),
-                check_in=ci,
-                check_out=co,
-                guest_name="Direct Guest",
-            ),
-            db,
-        )
-        if result.state == "SPLIT_POSSIBLE":
-            data = _split_payload(result, preferred_category, check_in, check_out)
-            return {
-                "reply": "Found a same-category split stay that preserves the requested dates. Confirm with the button below when ready.",
-                "action_data": {"type": "split_stay_result", "data": data},
-            }
-        attempts.append(f"same-category split failed: {result.message}")
-
-    if allowed.get("mixed_category_split", False):
-        result = await ctrl.find_split_stay_flex(
-            BookingRequestIn(
-                category=RoomCategory(preferred_category),
-                check_in=ci,
-                check_out=co,
-                guest_name="Direct Guest",
-            ),
-            db,
-        )
-        if result.state == "SPLIT_POSSIBLE":
-            data = _split_payload(result, preferred_category, check_in, check_out)
-            return {
-                "reply": "Found a mixed-category split stay for the full requested dates. Confirm with the button below when ready.",
-                "action_data": {"type": "split_stay_result", "data": data},
-            }
-        attempts.append(f"mixed-category split failed: {result.message}")
-
-    if allowed.get("upgrade", allowed.get("different_category", True)):
-        upgrade = await _find_upgrade_payload(db, preferred_category, check_in, check_out)
-        if upgrade.get("state") == "UPGRADE_AVAILABLE" and upgrade.get("upgrades"):
-            best = upgrade["upgrades"][0]
-            data = {
-                "state": best["state"],
-                "room_id": best["room_id"],
-                "swap_plan": best.get("swap_plan"),
-                "comparison": best.get("comparison"),
-                "request": best["request"],
-                "is_upgrade": True,
-                "upgrade_from": preferred_category,
-                "discount_recommended": best.get("discount_recommended", False),
-                "discount_pct": best.get("discount_pct", 0.0),
-                "pricing_reason": best.get("pricing_reason", ""),
-                "prob_of_selling": best.get("prob_of_selling", ""),
-            }
-            return {
-                "reply": f"{best['category']} is available for the exact dates, with pricing intelligence applied. Confirm with the button below when ready.",
-                "action_data": {"type": "availability_result", "data": data},
-            }
-        attempts.append(str(upgrade.get("message", "no upgrade available")))
-
-    if allowed.get("alternative_category", allowed.get("different_category", True)):
-        alternative = await _search_best_alternative_payload(db, preferred_category, check_in, check_out)
-        if alternative.get("state") in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
-            return {
-                "reply": f"{alternative['request']['category']} is the strongest same-date alternative after pricing and inventory ranking. Confirm with the button below when ready.",
-                "action_data": {"type": "availability_result", "data": alternative},
-            }
-        attempts.append(str(alternative.get("message", "no alternative category available")))
-
-    if allowed.get("nearby_dates_pm1", True):
-        for delta in (1, -1):
-            shifted_ci = ci + timedelta(days=delta)
-            shifted_co = co + timedelta(days=delta)
-            if shifted_ci < date.today():
-                continue
-            result = await ctrl.check_availability(
-                BookingRequestIn(
-                    category=RoomCategory(preferred_category),
-                    check_in=shifted_ci,
-                    check_out=shifted_co,
-                    guest_name="Direct Guest",
-                ),
-                db,
-            )
-            if result.state in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
-                data = _shuffle_payload(result, preferred_category, str(shifted_ci), str(shifted_co))
-                return {
-                    "reply": f"{preferred_category} works if the stay shifts {'one day later' if delta > 0 else 'one day earlier'}. Confirm with the button below when ready.",
-                    "action_data": {"type": "availability_result", "data": data},
-                }
-            attempts.append(f"{delta:+d} day date shift failed: {result.message}")
-
-    recovery = await _build_recovery_options(
-        db=db,
-        preferred_category=preferred_category,
-        check_in=ci,
-        check_out=co,
-        attempts=attempts,
-        infeasible_dates=handoff.get("deterministic_check", {}).get("infeasible_dates", []),
-    )
-    recovery["reply"] = await _synthesize_recovery_brief(recovery)
-    return recovery
 
 
 # ── Agent state ───────────────────────────────────────────────────────────────
@@ -1638,6 +1233,331 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
             return json.dumps({"error": str(exc)})
 
     @tool
+    async def explore_recovery_options(
+        preferred_category: str,
+        check_in: str,
+        check_out: str,
+        infeasible_dates_csv: str = "",
+    ) -> str:
+        """
+        Build a complete receptionist-ready recovery menu for a failed exact booking.
+
+        Use this when a handoff arrives, exact availability is NOT_POSSIBLE, or the
+        receptionist asks for all options/alternatives. It checks same-category split,
+        mixed-category split recommendation, upgrade, best alternative category, nearby
+        date shifts, and shortened fragments in one backend pass.
+
+        Returns RECOVERY_MENU with all options, failed paths, rankings, pricing signals,
+        and a primary confirmable action card. Mixed-category split stays are returned
+        as recommendations only until the core split-confirm category bug is fixed.
+        """
+        try:
+            pref = preferred_category.upper()
+            if pref not in _CATEGORY_ORDER:
+                return json.dumps({"error": f"Unknown category: {preferred_category}"})
+
+            ci = date.fromisoformat(check_in)
+            co = date.fromisoformat(check_out)
+            if co <= ci:
+                return json.dumps({"error": "check_out must be after check_in"})
+
+            nights = (co - ci).days
+            failures: list[dict] = []
+            options: list[dict] = []
+
+            async def add_room_rate(option: dict, room_id: Optional[str], category: str, start: date, end: date) -> None:
+                if not room_id:
+                    return
+                row = (await db.execute(
+                    select(Room.base_rate, Room.floor_number)
+                    .where(Room.id == room_id, Room.is_active == True)
+                )).first()
+                if not row:
+                    return
+                base_rate, floor = row
+                signal = await _pricing_signal(db, category, start, end)
+                discount_pct = float(signal["discount_pct"]) if signal["action"] == "DISCOUNT" else 0.0
+                rate = round(float(base_rate) * (1 - discount_pct / 100), 2)
+                option["floor"] = floor
+                option["base_rate"] = float(base_rate)
+                option["discount_pct"] = discount_pct
+                option["estimated_total"] = round(rate * max(1, (end - start).days), 2)
+                option["pricing_signal"] = signal
+
+            def add_failure(path: str, detail: str) -> None:
+                failures.append({"path": path, "detail": detail})
+
+            # 1. Same-category split: confirmable and usually the best guest-fit fallback.
+            same_req = BookingRequestIn(
+                category=RoomCategory(pref),
+                check_in=ci,
+                check_out=co,
+                guest_name="Direct Guest",
+            )
+            same_split = await ctrl.find_split_stay(same_req, db)
+            same_payload = _split_payload(same_split, pref, check_in, check_out)
+            if same_payload.get("state") == "SPLIT_POSSIBLE" and same_payload.get("segments"):
+                options.append({
+                    "kind": "SAME_CATEGORY_SPLIT",
+                    "rank": 10,
+                    "title": f"Split Stay ({pref})",
+                    "category": pref,
+                    "segments": same_payload["segments"],
+                    "discount_pct": same_payload.get("discount_pct", 0),
+                    "estimated_total": same_payload.get("total_rate"),
+                    "confirmable": True,
+                    "action_data": {"type": "split_stay_result", "data": same_payload},
+                    "rationale": "Preserves the guest's requested category with the least category disruption.",
+                })
+            else:
+                add_failure("Same-category split", same_payload.get("message") or "Not possible.")
+
+            # 2. Mixed split: useful for receptionist talk-track, but not confirmable yet.
+            flex_split = await ctrl.find_split_stay_flex(same_req, db)
+            flex_payload = _split_payload(flex_split, pref, check_in, check_out)
+            if flex_payload.get("state") == "SPLIT_POSSIBLE" and flex_payload.get("segments"):
+                segment_categories = {
+                    str(seg.get("category") or pref).upper()
+                    for seg in flex_payload.get("segments", [])
+                    if isinstance(seg, dict)
+                }
+                is_mixed = len(segment_categories) > 1
+                options.append({
+                    "kind": "MIXED_CATEGORY_SPLIT" if is_mixed else "SAME_CATEGORY_SPLIT",
+                    "rank": 60 if is_mixed else 11,
+                    "title": "Mixed Category Split" if is_mixed else f"Split Stay ({pref})",
+                    "category": pref,
+                    "segments": flex_payload["segments"],
+                    "discount_pct": flex_payload.get("discount_pct", 0),
+                    "estimated_total": flex_payload.get("total_rate"),
+                    "confirmable": not is_mixed,
+                    "action_data": None if is_mixed else {"type": "split_stay_result", "data": flex_payload},
+                    "rationale": (
+                        "Recommendation only until mixed-category split confirmation is fixed."
+                        if is_mixed else
+                        "Preserves the guest's requested category with a confirmable split stay."
+                    ),
+                })
+            else:
+                add_failure("Mixed-category split", flex_payload.get("message") or "Not possible.")
+
+            # 3. Upgrades: full stay, no room move, usually strongest revenue path.
+            pref_idx = _CATEGORY_ORDER.index(pref)
+            upgrade_found = False
+            for cat in _CATEGORY_ORDER[pref_idx + 1:]:
+                req = BookingRequestIn(
+                    category=RoomCategory(cat),
+                    check_in=ci,
+                    check_out=co,
+                    guest_name="Direct Guest",
+                )
+                result = await ctrl.check_availability(req, db)
+                if result.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
+                    continue
+                payload = _availability_payload(result, cat, check_in, check_out)
+                signal = await _pricing_signal(db, cat, ci, co)
+                opt = {
+                    "kind": "UPGRADE",
+                    "rank": 20 if signal["action"] in ("INCREASE", "UNKNOWN") else 70,
+                    "title": f"Upgrade to {cat}",
+                    "category": cat,
+                    "room_id": result.room_id,
+                    "state": result.state,
+                    "confirmable": True,
+                    "action_data": {"type": "availability_result", "data": {
+                        **payload,
+                        "is_upgrade": True,
+                        "upgrade_from": pref,
+                        "discount_recommended": signal["action"] == "DISCOUNT",
+                        "discount_pct": signal["discount_pct"] if signal["action"] == "DISCOUNT" else 0.0,
+                        "pricing_reason": signal["reason"],
+                        "prob_of_selling": "LOW" if signal["action"] == "DISCOUNT" else "HIGH",
+                    }},
+                    "rationale": (
+                        "No room move and higher revenue; hold rate on strong demand."
+                        if signal["action"] != "DISCOUNT"
+                        else "No room move and fills soft premium inventory with a targeted discount."
+                    ),
+                }
+                await add_room_rate(opt, result.room_id, cat, ci, co)
+                options.append(opt)
+                upgrade_found = True
+                break
+            if not upgrade_found:
+                add_failure("Upgrade", "No higher category can cover the full stay.")
+
+            # 4. Alternatives: same dates, lower/nearby categories.
+            alt_candidates = [cat for cat in _CATEGORY_ORDER if cat != pref]
+            alt_candidates.sort(key=lambda cat: (
+                abs(_CATEGORY_ORDER.index(cat) - pref_idx),
+                0 if _CATEGORY_ORDER.index(cat) > pref_idx else 1,
+            ))
+            alt_found = False
+            for cat in alt_candidates:
+                req = BookingRequestIn(
+                    category=RoomCategory(cat),
+                    check_in=ci,
+                    check_out=co,
+                    guest_name="Direct Guest",
+                )
+                result = await ctrl.check_availability(req, db)
+                if result.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
+                    continue
+                signal = await _pricing_signal(db, cat, ci, co)
+                payload = _availability_payload(result, cat, check_in, check_out)
+                opt = {
+                    "kind": "ALTERNATIVE_CATEGORY",
+                    "rank": 40 + abs(_CATEGORY_ORDER.index(cat) - pref_idx),
+                    "title": f"Alternative {cat}",
+                    "category": cat,
+                    "room_id": result.room_id,
+                    "state": result.state,
+                    "confirmable": True,
+                    "action_data": {"type": "availability_result", "data": payload},
+                    "rationale": (
+                        f"Same dates with lower operational complexity. Pricing signal: {signal['action']}."
+                    ),
+                }
+                await add_room_rate(opt, result.room_id, cat, ci, co)
+                options.append(opt)
+                alt_found = True
+                break
+            if not alt_found:
+                add_failure("Alternative category", "No other category can cover the full stay.")
+
+            # 5. Date shifts and shortened stay in the requested category.
+            shift_later_ci = ci + timedelta(days=1)
+            shift_later_co = co + timedelta(days=1)
+            shift_checks = [("DATE_SHIFT_LATER", shift_later_ci, shift_later_co)]
+            if ci - timedelta(days=1) >= date.today():
+                shift_checks.append(("DATE_SHIFT_EARLIER", ci - timedelta(days=1), co - timedelta(days=1)))
+            shift_checks.append(("SHORTEN_BY_ONE_NIGHT", ci, co - timedelta(days=1)))
+
+            for kind, start, end in shift_checks:
+                if end <= start:
+                    continue
+                req = BookingRequestIn(
+                    category=RoomCategory(pref),
+                    check_in=start,
+                    check_out=end,
+                    guest_name="Direct Guest",
+                )
+                result = await ctrl.check_availability(req, db)
+                if result.state not in ("DIRECT_AVAILABLE", "SHUFFLE_POSSIBLE"):
+                    add_failure(kind.replace("_", " ").title(), result.message)
+                    continue
+                payload = _availability_payload(result, pref, start.isoformat(), end.isoformat())
+                opt = {
+                    "kind": kind,
+                    "rank": 80 if kind.startswith("DATE_SHIFT") else 90,
+                    "title": "Shift dates" if kind.startswith("DATE_SHIFT") else "Shorten by one night",
+                    "category": pref,
+                    "room_id": result.room_id,
+                    "state": result.state,
+                    "check_in": start.isoformat(),
+                    "check_out": end.isoformat(),
+                    "confirmable": True,
+                    "action_data": {"type": "availability_result", "data": payload},
+                    "rationale": "Keeps the requested category by changing the stay constraint.",
+                }
+                await add_room_rate(opt, result.room_id, pref, start, end)
+                options.append(opt)
+
+            # 6. Longest free fragments inside the requested window.
+            runs = await _longest_free_runs(db, pref, ci, co, limit=3)
+            for run in runs:
+                if int(run["nights"]) < 2:
+                    continue
+                start = date.fromisoformat(run["check_in"])
+                end = date.fromisoformat(run["check_out"])
+                payload = {
+                    "state": "DIRECT_AVAILABLE",
+                    "room_id": run["room_id"],
+                    "message": f"Room {run['room_id']} can cover the best {pref} fragment.",
+                    "swap_plan": None,
+                    "comparison": None,
+                    "infeasible_dates": [],
+                    "alternatives": [],
+                    "request": {
+                        "category": pref,
+                        "check_in": run["check_in"],
+                        "check_out": run["check_out"],
+                    },
+                }
+                opt = {
+                    "kind": "SHORTENED_FRAGMENT",
+                    "rank": 100,
+                    "title": f"Shorten stay in {pref}",
+                    "category": pref,
+                    "room_id": run["room_id"],
+                    "check_in": run["check_in"],
+                    "check_out": run["check_out"],
+                    "nights": run["nights"],
+                    "confirmable": True,
+                    "action_data": {"type": "availability_result", "data": payload},
+                    "rationale": f"Best available same-category fragment covers {run['nights']} of {nights} requested nights.",
+                }
+                await add_room_rate(opt, run["room_id"], pref, start, end)
+                options.append(opt)
+
+            deduped: list[dict] = []
+            seen: set[tuple] = set()
+            for opt in sorted(options, key=lambda item: (item.get("rank", 999), -float(item.get("estimated_total") or 0))):
+                segments_key = tuple(
+                    (
+                        seg.get("room_id"),
+                        seg.get("check_in"),
+                        seg.get("check_out"),
+                    )
+                    for seg in opt.get("segments", [])
+                    if isinstance(seg, dict)
+                )
+                key = (
+                    opt.get("kind"),
+                    opt.get("category"),
+                    opt.get("room_id"),
+                    opt.get("check_in"),
+                    opt.get("check_out"),
+                    segments_key,
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(opt)
+
+            primary_action_data = next(
+                (opt.get("action_data") for opt in deduped if opt.get("confirmable") and opt.get("action_data")),
+                None,
+            )
+            for idx, opt in enumerate(deduped, start=1):
+                opt["option_id"] = f"option_{idx}"
+                opt["display_rank"] = idx
+
+            return json.dumps({
+                "state": "RECOVERY_MENU",
+                "preferred_category": pref,
+                "check_in": check_in,
+                "check_out": check_out,
+                "requested_nights": nights,
+                "infeasible_dates": [
+                    part.strip()
+                    for part in infeasible_dates_csv.split(",")
+                    if part.strip()
+                ],
+                "options": deduped[:8],
+                "failures": failures,
+                "primary_action_data": primary_action_data,
+                "instruction": (
+                    "Present every option in numbered form. Mention failed paths briefly. "
+                    "The primary action card is attached for the top confirmable option."
+                ),
+            })
+
+        except Exception as exc:
+            logger.exception("explore_recovery_options tool error")
+            return json.dumps({"error": str(exc)})
+
+    @tool
     async def search_best_alternative_category(
         preferred_category: str,
         check_in: str,
@@ -2022,6 +1942,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         suggest_upgrade,
         find_split_stay,
         find_split_stay_flex,
+        explore_recovery_options,
         search_best_alternative_category,
         build_recovery_options,
         get_room_inventory,
@@ -2084,6 +2005,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
                 ))
                 continue
             try:
+                logger.info("Receptionist agent tool call: %s %s", tc["name"], tc.get("args", {}))
                 result = await fn.ainvoke(tc["args"])
             except Exception as exc:
                 result = json.dumps({"error": str(exc)})
@@ -2152,38 +2074,6 @@ async def run_agent(
     # Guard: if history is empty the agent has nothing to respond to
     if not lc_messages:
         return {"reply": "How can I help you today?", "action_data": None}
-
-    handoff_result = await _run_handoff_recovery(messages, db)
-    if handoff_result is not None:
-        return handoff_result
-
-    parsed_availability = _parse_explicit_availability_request(messages)
-    if parsed_availability is not None:
-        try:
-            result = await ctrl.check_availability(
-                BookingRequestIn(
-                    category=RoomCategory(parsed_availability["category"]),
-                    check_in=date.fromisoformat(parsed_availability["check_in"]),
-                    check_out=date.fromisoformat(parsed_availability["check_out"]),
-                    guest_name="Direct Guest",
-                ),
-                db,
-            )
-            action_data = {
-                "type": "availability_result",
-                "data": _shuffle_payload(
-                    result,
-                    parsed_availability["category"],
-                    parsed_availability["check_in"],
-                    parsed_availability["check_out"],
-                ),
-            }
-            return {
-                "reply": _reply_for_action_data(action_data) or result.message,
-                "action_data": action_data,
-            }
-        except Exception:
-            logger.exception("Deterministic availability fast path failed")
 
     try:
         result = await graph.ainvoke(
