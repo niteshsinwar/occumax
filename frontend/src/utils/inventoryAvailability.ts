@@ -91,10 +91,10 @@ export function computeEmptyRunInventory(
 /** Stable category ordering aligned with the heatmap grid. */
 export const CATEGORY_ORDER: RoomCategory[] = [
   "STANDARD",
-  "STUDIO",
+
   "DELUXE",
   "SUITE",
-  "PREMIUM",
+
   "ECONOMY",
 ];
 

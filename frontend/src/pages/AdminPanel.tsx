@@ -11,7 +11,7 @@ import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import type { HeatmapResponse, AdminBookingRow } from "../types";
 import { Building2, Calendar as CalendarIcon, RefreshCw, Plus, Trash2, Edit2, Check, X, Sparkles, Settings } from "lucide-react";
 
-const KNOWN_CATEGORIES = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"];
+const KNOWN_CATEGORIES = ["STANDARD", "DELUXE", "SUITE", "ECONOMY"];
 
 type Tab = "rooms" | "calendar" | "bookings";
 

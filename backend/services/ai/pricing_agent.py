@@ -30,7 +30,7 @@ from services.ai.pricing_mock_data import get_historical_trends
 logger = logging.getLogger(__name__)
 
 WINDOW_DAYS = 20
-CATEGORIES = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
+CATEGORIES = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 SYNTHESIS_CATEGORIES = CATEGORIES  # categories priced by AI when present in the live snapshot
 WINDOW_SIZE = 5   # days per micro-synthesis shard
 _CACHE_TTL_SECONDS = 15 * 60
@@ -234,10 +234,7 @@ Output schema (no fences, raw JSON):
   "category_outlook": {
     "ECONOMY": "brief pricing outlook",
     "STANDARD": "brief pricing outlook",
-    "STUDIO": "brief pricing outlook",
-    "DELUXE": "brief pricing outlook",
-    "SUITE": "brief pricing outlook",
-    "PREMIUM": "brief pricing outlook"
+    "SUITE": "brief pricing outlook"
   }
 }
 """
@@ -260,10 +257,7 @@ Output schema (no fences, raw JSON):
   "seasonal_multipliers": {
     "ECONOMY": 1.05,
     "STANDARD": 1.10,
-    "STUDIO": 1.08,
-    "DELUXE": 1.15,
-    "SUITE": 1.25,
-    "PREMIUM": 1.12
+    "SUITE": 1.25
   },
   "pattern_insight": "2-3 sentences about YoY booking patterns for this period",
   "week_note": "specific insight about this week historically vs full year"

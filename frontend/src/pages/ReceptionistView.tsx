@@ -9,7 +9,7 @@ import { FloatingAiWidget, type ChatMsg, ComparisonSection } from "../components
 const AI_HISTORY_KEY = "optihost_front_desk_ai_history";
 const MAX_AI_HISTORY_MESSAGES = 20;
 const AI_HISTORY_TTL_MS = 30 * 60 * 1000;
-const FALLBACK_CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"];
+const FALLBACK_CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"];
 
 interface AdminCategorySummary {
   name: RoomCategory;

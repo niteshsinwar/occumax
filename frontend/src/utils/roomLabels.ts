@@ -5,8 +5,8 @@ const CATEGORY_PREFIX: Record<string, string> = {
   STANDARD: "S",
   DELUXE: "D",
   SUITE: "U",
-  STUDIO: "T",
-  PREMIUM: "P",
+
+
 };
 
 function isOperationalTestId(roomId: string): boolean {

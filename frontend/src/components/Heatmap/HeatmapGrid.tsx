@@ -65,7 +65,7 @@ function cellClass(blockType: string, channel: string | null | undefined, palett
   return p.FALLBACK;
 }
 
-const CATEGORIES = ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"] as const;
+const CATEGORIES = ["STANDARD", "DELUXE", "SUITE", "ECONOMY"] as const;
 
 export function HeatmapGrid({
   dates,

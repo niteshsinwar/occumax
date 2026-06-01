@@ -42,10 +42,10 @@ function mergeTotal(snap: EmptyRunInventorySnapshot, buckets: readonly Availabil
 /** Fill colors for donut segments (theme-aligned; matches prior bar emphasis). */
 const CATEGORY_DONUT_FILL: Partial<Record<RoomCategory, string>> = {
   STANDARD: "rgba(44, 27, 24, 0.35)",
-  STUDIO: "rgba(197, 160, 89, 0.55)",
+
   DELUXE: "rgba(21, 71, 52, 0.55)",
   SUITE: "rgba(166, 106, 56, 0.6)",
-  PREMIUM: "#c5a059",
+
   ECONOMY: "rgba(120, 113, 108, 0.55)",
 };
 

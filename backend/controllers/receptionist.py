@@ -343,7 +343,7 @@ async def _compute_alternatives(
         if len(suggestions) >= 3:
             break
 
-    for alt_cat in ["STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM", "ECONOMY"]:
+    for alt_cat in ["STANDARD", "DELUXE", "SUITE", "ECONOMY"]:
         if len(suggestions) >= 5:
             break
         if alt_cat == category_str:
@@ -689,9 +689,7 @@ async def find_split_stay_flex(request: BookingRequestIn, db: AsyncSession) -> S
     categories = [
         RoomCategory.ECONOMY,
         RoomCategory.STANDARD,
-        RoomCategory.STUDIO,
         RoomCategory.DELUXE,
-        RoomCategory.PREMIUM,
         RoomCategory.SUITE,
     ]
     slots = await _load_slots_for_categories(db, categories, today)

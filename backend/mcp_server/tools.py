@@ -39,7 +39,7 @@ Read tools may be used proactively. Write tools require explicit staff approval 
 Checkout dates are exclusive. All dates must be ISO YYYY-MM-DD.
 """
 
-_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 
 
 def _enum_value(value: Any) -> Any:

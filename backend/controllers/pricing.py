@@ -34,7 +34,7 @@ from services.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
-CATEGORY_ORDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "SUITE", "PREMIUM"]
+CATEGORY_ORDER = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 
 
 # ── Snapshot builder ──────────────────────────────────────────────────────────

@@ -50,9 +50,7 @@ class FlexSplitPlan:
 _LADDER: list[RoomCategory] = [
     RoomCategory.ECONOMY,
     RoomCategory.STANDARD,
-    RoomCategory.STUDIO,
     RoomCategory.DELUXE,
-    RoomCategory.PREMIUM,
     RoomCategory.SUITE,
 ]
 

@@ -40,9 +40,9 @@ function rand01(seed: number): number {
 const categoryBias: Record<RoomCategory, number> = {
   ECONOMY: 0.92,
   STANDARD: 0.98,
-  STUDIO: 1.02,
+
   DELUXE: 1.06,
-  PREMIUM: 1.10,
+
   SUITE: 1.14,
 };
 

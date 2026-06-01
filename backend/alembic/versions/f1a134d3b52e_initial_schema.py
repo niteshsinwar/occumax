@@ -23,7 +23,7 @@ def upgrade() -> None:
     op.create_table(
         'rooms',
         sa.Column('id', sa.String(), nullable=False),
-        sa.Column('category', sa.Enum('DELUXE', 'SUITE', 'STUDIO', 'STANDARD', 'PREMIUM', 'ECONOMY', name='roomcategory'), nullable=False),
+        sa.Column('category', sa.Enum('DELUXE', 'SUITE', 'STANDARD', 'ECONOMY', name='roomcategory'), nullable=False),
         sa.Column('base_rate', sa.Float(), nullable=False),
         sa.Column('floor_number', sa.Integer(), nullable=False),
         sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column('id', sa.String(), nullable=False),
         sa.Column('guest_name', sa.String(), nullable=False),
         sa.Column('guest_id', sa.String(), nullable=False),
-        sa.Column('room_category', sa.Enum('DELUXE', 'SUITE', 'STUDIO', 'STANDARD', 'PREMIUM', 'ECONOMY', name='roomcategory'), nullable=False),
+        sa.Column('room_category', sa.Enum('DELUXE', 'SUITE', 'STANDARD', 'ECONOMY', name='roomcategory'), nullable=False),
         sa.Column('assigned_room_id', sa.String(), sa.ForeignKey('rooms.id'), nullable=True),
         sa.Column('check_in', sa.Date(), nullable=False),
         sa.Column('check_out', sa.Date(), nullable=False),

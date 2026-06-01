@@ -41,7 +41,7 @@ from core.schemas import BookingRequestIn
 
 logger = logging.getLogger(__name__)
 
-_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 MAX_AGENT_TOOL_CALLS = 10
 
 
@@ -67,7 +67,7 @@ You use all this data internally to pick the best options.
 You NEVER share any of it with the guest.
 ═════════════════════════════════════════════════════════════════════════════════
 
-Room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+Room categories (lowest → highest): ECONOMY, STANDARD, DELUXE, SUITE.
 
 Hotel snapshot:
 {context}
@@ -658,7 +658,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         Check room availability for a category and date range.
         Returns state: DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE,
         plus room_id, message, swap_plan, and alternatives.
-        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         Dates must be ISO format: YYYY-MM-DD.
         """
         try:
@@ -708,7 +708,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
           timeline (20-day window: date → status),
           booked_until (last consecutive blocked date from today, if occupied),
           first_free (first EMPTY date).
-        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         """
         try:
             cat = RoomCategory(category.upper())
@@ -893,7 +893,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         - High probability (INCREASE action / majority demand): full rate, no discount.
         - Low probability (DISCOUNT action / soft demand): recommend a discount.
 
-        preferred_category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        preferred_category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         Dates must be ISO format: YYYY-MM-DD.
 
         Returns UPGRADE_AVAILABLE with category, room_id, prob_of_selling,
@@ -903,7 +903,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         try:
             from core.models.pricing_recommendation import PricingRec
 
-            cat_order = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+            cat_order = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
             pref = preferred_category.upper()
             ci = date.fromisoformat(check_in)
             co = date.fromisoformat(check_out)
@@ -1409,7 +1409,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         try:
             from core.models.pricing_recommendation import PricingRec
 
-            cat_order = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+            cat_order = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
             pref = preferred_category.upper()
             if pref not in cat_order:
                 return json.dumps({"error": f"Unknown category: {preferred_category}"})

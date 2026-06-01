@@ -1,5 +1,5 @@
 export type BlockType = "HARD" | "SOFT" | "EMPTY";
-export type RoomCategory = "DELUXE" | "SUITE" | "STUDIO" | "STANDARD" | "PREMIUM" | "ECONOMY";
+export type RoomCategory = "DELUXE" | "SUITE" | "STANDARD" | "ECONOMY";
 
 
 export type Channel = "OTA" | "DIRECT" | "GDS" | "WALKIN" | "CLOSED";

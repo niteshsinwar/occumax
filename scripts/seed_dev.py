@@ -82,13 +82,6 @@ ROOMS = [
     {"id": "302", "category": "DELUXE",   "base_rate": 580, "floor_number": 3},
     {"id": "303", "category": "DELUXE",   "base_rate": 620, "floor_number": 3},
     {"id": "304", "category": "DELUXE",   "base_rate": 620, "floor_number": 3},
-    # Floor 4 — Premium (corporate accounts + direct hotel selling)
-    {"id": "401", "category": "PREMIUM",  "base_rate": 850, "floor_number": 4},
-    {"id": "402", "category": "PREMIUM",  "base_rate": 900, "floor_number": 4},
-    {"id": "403", "category": "PREMIUM",  "base_rate": 950, "floor_number": 4},
-    # Floor 5 — Studio (extended stay, families)
-    {"id": "501", "category": "STUDIO",   "base_rate": 720, "floor_number": 5},
-    {"id": "502", "category": "STUDIO",   "base_rate": 780, "floor_number": 5},
     # Floor 6 — Suite (luxury, direct + US-active OTA overflow)
     {"id": "601", "category": "SUITE",    "base_rate": 1500, "floor_number": 6},
     {"id": "602", "category": "SUITE",    "base_rate": 1800, "floor_number": 6},
@@ -220,22 +213,7 @@ BOOKINGS = [
     ("DELUXE",   d(14), d(17), "David Okonkwo"),
     ("DELUXE",   d(15), d(18), "Mei Lin Wang"),
     ("DELUXE",   d(7),  d(11), "Pablo Rodriguez"),
-    # Premium — corporate + direct hotel selling
-    ("PREMIUM",  d(1),  d(5),  "Victoria Blackwood"),
-    ("PREMIUM",  d(2),  d(6),  "Alexander Volkov"),
-    ("PREMIUM",  d(6),  d(10), "Isabelle Dupont"),
-    ("PREMIUM",  d(7),  d(11), "Hiroshi Tanaka"),
-    ("PREMIUM",  d(11), d(15), "Elena Sokolova"),
-    ("PREMIUM",  d(12), d(16), "Marcus Williams"),
-    ("PREMIUM",  d(16), d(19), "Ananya Krishnan"),
-    # Studio — extended stay, families
-    ("STUDIO",   d(1),  d(6),  "Liam O'Brien"),
-    ("STUDIO",   d(2),  d(5),  "Camille Lefebvre"),
-    ("STUDIO",   d(6),  d(10), "Aiko Suzuki"),
-    ("STUDIO",   d(7),  d(11), "Ethan Goldstein"),
-    ("STUDIO",   d(11), d(15), "Priya Iyer"),
-    ("STUDIO",   d(12), d(16), "Björn Lindqvist"),
-    ("STUDIO",   d(16), d(19), "Sun Wei"),
+
     # Suite — luxury, mostly direct + US-active OTA overflow
     ("SUITE",    d(2),  d(6),  "Lord Ashworth"),
     ("SUITE",    d(3),  d(7),  "Contessa Romano"),

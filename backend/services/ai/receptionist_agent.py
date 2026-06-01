@@ -40,7 +40,7 @@ from core.schemas import BookingRequestIn
 
 logger = logging.getLogger(__name__)
 
-_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+_CATEGORY_ORDER = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 MAX_AGENT_TOOL_CALLS = 10
 
 
@@ -78,7 +78,7 @@ New Jersey hotel market context (use this for AI insights and pricing commentary
 - OTA pressure: Expedia, Hotels.com, Priceline dominate. Rate pressure highest on
   Standard Mon–Thu. Suites/Deluxe have fewer OTA competitors — hold and push direct.
 
-Available room categories (lowest → highest): ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+Available room categories (lowest → highest): ECONOMY, STANDARD, DELUXE, SUITE.
 
 Current hotel snapshot (category-level — see tool for per-room detail):
 {context}
@@ -297,7 +297,7 @@ those dates. It says NOTHING about any other category. NEVER say "not available 
 any category" unless you have called check_availability for every category and all
 returned NOT_POSSIBLE. When a receptionist asks about other categories in follow-up
 messages, call check_availability for the specific categories they mention — or for
-ALL remaining categories (ECONOMY, STANDARD, STUDIO, PREMIUM, SUITE) if they say
+ALL remaining categories (ECONOMY, STANDARD, SUITE) if they say
 "any other". Prior tool results for DELUXE do not apply to ECONOMY or SUITE.
 ── ───────────────────────────────────────────────────────────────────────────
 
@@ -822,7 +822,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         Check room availability for a category and date range.
         Returns state: DIRECT_AVAILABLE, SHUFFLE_POSSIBLE, or NOT_POSSIBLE,
         plus room_id, message, swap_plan, and alternatives.
-        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         Dates must be ISO format: YYYY-MM-DD.
         """
         try:
@@ -872,7 +872,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
           timeline (20-day window: date → status),
           booked_until (last consecutive blocked date from today, if occupied),
           first_free (first EMPTY date).
-        category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         """
         try:
             cat = RoomCategory(category.upper())
@@ -1057,7 +1057,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         - High probability (INCREASE action / majority demand): full rate, no discount.
         - Low probability (DISCOUNT action / soft demand): recommend a discount.
 
-        preferred_category must be one of: ECONOMY, STANDARD, STUDIO, DELUXE, PREMIUM, SUITE.
+        preferred_category must be one of: ECONOMY, STANDARD, DELUXE, SUITE.
         Dates must be ISO format: YYYY-MM-DD.
 
         Returns UPGRADE_AVAILABLE with category, room_id, prob_of_selling,
@@ -1067,7 +1067,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         try:
             from core.models.pricing_recommendation import PricingRec
 
-            cat_order = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+            cat_order = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
             pref = preferred_category.upper()
             ci = date.fromisoformat(check_in)
             co = date.fromisoformat(check_out)
@@ -1573,7 +1573,7 @@ def _build_graph(db: AsyncSession, system_msg: SystemMessage):
         try:
             from core.models.pricing_recommendation import PricingRec
 
-            cat_order = ["ECONOMY", "STANDARD", "STUDIO", "DELUXE", "PREMIUM", "SUITE"]
+            cat_order = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
             pref = preferred_category.upper()
             if pref not in cat_order:
                 return json.dumps({"error": f"Unknown category: {preferred_category}"})

@@ -25,9 +25,7 @@ def upgrade() -> None:
     roomcategory_enum = postgresql.ENUM(
         "DELUXE",
         "SUITE",
-        "STUDIO",
         "STANDARD",
-        "PREMIUM",
         "ECONOMY",
         name="roomcategory",
         create_type=False,

@@ -224,16 +224,7 @@ def get_historical_trends() -> dict:
                 "peak_days": ["Thursday", "Friday", "Saturday"],
                 "note": "Corporate Mon-Thu + leisure Fri-Sun; graduation weekends spike to 95%+",
             },
-            "STUDIO": {
-                "avg_occ_pct_2024": 61.0,
-                "avg_occ_pct_2025": 65.3,
-                "avg_adr_2024": 155.0,
-                "avg_adr_2025": 168.0,
-                "yoy_occ_growth": 7.0,
-                "yoy_adr_growth": 8.4,
-                "peak_days": ["Friday", "Saturday", "Sunday"],
-                "note": "Extended-stay + leisure mix; packages outperform flat rates",
-            },
+
             "DELUXE": {
                 "avg_occ_pct_2024": 71.2,
                 "avg_occ_pct_2025": 76.5,
@@ -254,16 +245,7 @@ def get_historical_trends() -> dict:
                 "peak_days": ["Friday", "Saturday", "Sunday"],
                 "note": "Graduation families book Suites 2+ weeks out; luxury leisure growing segment",
             },
-            "PREMIUM": {
-                "avg_occ_pct_2024": 68.5,
-                "avg_occ_pct_2025": 73.1,
-                "avg_adr_2024": 299.0,
-                "avg_adr_2025": 325.0,
-                "yoy_occ_growth": 6.7,
-                "yoy_adr_growth": 8.7,
-                "peak_days": ["Thursday", "Friday", "Saturday"],
-                "note": "Corporate + high-end leisure mix; rate-inelastic mid-week demand",
-            },
+
         },
         "key_observations": [
             "June graduation season (Rutgers) consistently delivers highest occupancy of Q2",

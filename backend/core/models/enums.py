@@ -4,9 +4,7 @@ from enum import Enum as PyEnum
 class RoomCategory(str, PyEnum):
     DELUXE = "DELUXE"
     SUITE = "SUITE"
-    STUDIO = "STUDIO"
     STANDARD = "STANDARD"
-    PREMIUM = "PREMIUM"
     ECONOMY = "ECONOMY"
 
 
