@@ -335,6 +335,18 @@ class GapDetector:
             if max_score == -1:
                 return []
                 
+            orig_ends = list(init_ends)
+            for bid, orig_r, dates, start_d, end_d in bookings_info:
+                orig_r_idx = next(i for i, r in enumerate(cat_rooms) if r == orig_r)
+                orig_ends[orig_r_idx] = end_d
+            original_score = sum(
+                compute_gap_score(r_idx, orig_ends[r_idx], scan_end)
+                for r_idx in range(len(cat_rooms))
+            )
+            
+            if max_score <= original_score:
+                return []
+
             assignments = {}
             curr_ends = list(init_ends)
             for idx in range(len(bookings_info)):

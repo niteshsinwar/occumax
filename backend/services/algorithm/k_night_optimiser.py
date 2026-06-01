@@ -68,6 +68,8 @@ class KNightWindowOptimiser:
         if not booking_map:
             return []
 
+        movable_bids = set(booking_map.keys())
+
         all_dates: set[date] = set()
         hard_blocks: dict[str, set[date]] = {r: set() for r in cat_rooms}
         valid_dates: dict[str, set[date]] = {r: set() for r in cat_rooms}
@@ -76,7 +78,13 @@ class KNightWindowOptimiser:
             for d, cell in working[r].items():
                 valid_dates[r].add(d)
                 all_dates.add(d)
-                if cell["block_type"] == BlockType.HARD:
+                if (
+                    cell["block_type"] == BlockType.HARD
+                    or (
+                        cell["block_type"] == BlockType.SOFT
+                        and cell["booking_id"] not in movable_bids
+                    )
+                ):
                     hard_blocks[r].add(d)
 
         if not all_dates:
@@ -87,11 +95,21 @@ class KNightWindowOptimiser:
         scan_end = min(raw_end, scan_start + timedelta(days=20))
 
         bookings_info: list[tuple[str, str, frozenset[date], date, date]] = []
+        excluded_bids = set()
         for bid, (r, dates) in booking_map.items():
             start_d = min(dates)
             end_d = max(dates) + timedelta(days=1)
             if start_d < scan_end:
                 bookings_info.append((bid, r, dates, start_d, end_d))
+            else:
+                excluded_bids.add(bid)
+
+        # Treat soft bookings that start outside the scan horizon as hard blocks
+        for r in cat_rooms:
+            for d, cell in working[r].items():
+                if cell["block_type"] == BlockType.SOFT and cell["booking_id"] in excluded_bids:
+                    hard_blocks[r].add(d)
+
         bookings_info.sort(key=lambda x: x[3])
 
         # symmetry breaking based on identical hard-block schedules

@@ -31,6 +31,8 @@ class ShufflePlan:
     check_out: date
     swap_steps: list[dict]
     message: str
+    evaluations_used: int = 0
+    search_exhausted: bool = False
 
 
 class ShuffleEngine:
@@ -201,7 +203,7 @@ class ShuffleEngine:
                 slot = self._matrix.get(target_room, {}).get(d)
                 if slot and slot.block_type == BlockType.SOFT and slot.booking_id:
                     displaced_bids_set.add(slot.booking_id)
-            displaced_bids = list(displaced_bids_set)
+            displaced_bids = sorted(list(displaced_bids_set))
             
             cache_displaced = {}
             for bid in displaced_bids:
@@ -210,13 +212,15 @@ class ShuffleEngine:
                     cache_displaced[(bid, d)] = working_state[target_room][d]
                     working_state[target_room][d] = BlockType.EMPTY
                     
-            # 100% Exhaustive search without arbitrary limits
+            # Bounded exhaustive DFS. If the cap is hit, the result may be partial.
             _dfs_enumerate(target_room, displaced_bids, 0, [])
             
             for bid in displaced_bids:
                 dates = self._booking_dates_in_room(target_room, bid)
                 for d in dates:
                     working_state[target_room][d] = cache_displaced[(bid, d)]
+
+        is_exhausted = eval_count[0] >= settings.MAX_SHUFFLE_DFS_EVALS
 
         if best_target is not None:
             if is_direct:
@@ -243,6 +247,8 @@ class ShuffleEngine:
                 check_out=check_out,
                 swap_steps=best_swaps,
                 message=message,
+                evaluations_used=eval_count[0],
+                search_exhausted=is_exhausted,
             )
 
         return ShufflePlan(
@@ -258,4 +264,6 @@ class ShuffleEngine:
                 f"({check_in} → {check_out}). All rooms are either hard-blocked or their "
                 f"bookings cannot be rearranged without conflicts."
             ),
+            evaluations_used=eval_count[0],
+            search_exhausted=is_exhausted,
         )

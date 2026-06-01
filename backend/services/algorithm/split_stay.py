@@ -58,14 +58,15 @@ class SplitStayEngine:
         floor_map : {room_id: floor_number} — loaded separately since SlotInfo is floor-blind
         """
         self._floor_map = floor_map
-        # {room_id: {date: block_type}}
         self._matrix: dict[str, dict[date, BlockType]] = {}
-        # {room_id: base_rate}
-        self._rates: dict[str, float] = {}
+        # {room_id: {date: rate}}
+        self._rates: dict[str, dict[date, float]] = {}
+        self._cat: dict[str, RoomCategory] = {}
 
         for s in slots:
             self._matrix.setdefault(s.room_id, {})[s.date] = s.block_type
-            self._rates[s.room_id] = s.base_rate
+            self._rates.setdefault(s.room_id, {})[s.date] = s.current_rate
+            self._cat[s.room_id] = s.category
 
     # ── public entry point ────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ class SplitStayEngine:
         if not nights:
             return SplitPlan(state="NOT_POSSIBLE", message="Invalid date range.")
 
-        all_rooms = list(self._matrix.keys())
+        all_rooms = [r for r in self._matrix.keys() if self._cat.get(r) == category]
         if not all_rooms:
             return SplitPlan(
                 state="NOT_POSSIBLE",
@@ -89,10 +90,11 @@ class SplitStayEngine:
         # For each night, which rooms are EMPTY?
         free: dict[date, list[str]] = {}
         for night in nights:
-            free[night] = [
-                r for r in all_rooms
-                if self._matrix.get(r, {}).get(night, BlockType.EMPTY) == BlockType.EMPTY
-            ]
+            free[night] = []
+            for r in all_rooms:
+                room_map = self._matrix.get(r, {})
+                if night in room_map and room_map[night] == BlockType.EMPTY:
+                    free[night].append(r)
 
         # If any night has zero free rooms → split stay physically impossible
         blocked = [n for n in nights if not free[n]]
@@ -125,7 +127,7 @@ class SplitStayEngine:
                     state="NOT_POSSIBLE",
                     message=(
                         f"A {category.value} split stay would require more than "
-                        f"{MAX_SEGMENTS} room changes — not offered."
+                        f"{MAX_SEGMENTS} segments — not offered."
                     ),
                 )
 
@@ -163,18 +165,25 @@ class SplitStayEngine:
         built: list[SplitSegment] = []
 
         for i, (room_id, ci, co) in enumerate(segments):
-            n      = (co - ci).days
-            rate   = self._rates.get(room_id, 0.0)
-            disc_r = round(rate * (1 - discount_pct / 100), 2)
-            total_rate += n * disc_r
+            n = (co - ci).days
+            segment_total = 0.0
+            avg_base_rate = 0.0
+            for night in _date_range(ci, co):
+                rate = self._rates.get(room_id, {}).get(night, 0.0)
+                avg_base_rate += rate
+                segment_total += rate * (1 - discount_pct / 100)
+            avg_base_rate = avg_base_rate / n if n else 0.0
+            avg_disc_rate = segment_total / n if n else 0.0
+
+            total_rate += segment_total
             built.append(SplitSegment(
                 room_id         = room_id,
                 floor           = self._floor_map.get(room_id, 0),
                 check_in        = ci,
                 check_out       = co,
                 nights          = n,
-                base_rate       = rate,
-                discounted_rate = disc_r,
+                base_rate       = round(avg_base_rate, 2),
+                discounted_rate = round(avg_disc_rate, 2),
             ))
 
         n_changes = len(built) - 1
