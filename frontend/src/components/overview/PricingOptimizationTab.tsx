@@ -124,6 +124,52 @@ function computeCompositeFromFactors(factors: ContextFeedItem["factors"]): numbe
   return Math.round(weighted / ws);
 }
 
+function addDaysIso(anchorDate: string, offsetDays: number): string {
+  const d = new Date(`${anchorDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+function contextWindowForItem(item: ContextFeedItem, anchorDate: string): { start: string; end: string } {
+  const startOffset = clamp(item.impact_start_offset_days ?? 0, 0, 60);
+  const rawEnd = item.impact_end_offset_days ?? startOffset;
+  const endOffset = clamp(Math.max(startOffset, rawEnd), 0, 60);
+  return {
+    start: addDaysIso(anchorDate, startOffset),
+    end: addDaysIso(anchorDate, endOffset),
+  };
+}
+
+function contextItemsForDate(items: ContextFeedItem[], date: string, anchorDate: string): ContextFeedItem[] {
+  return items.filter(item => {
+    const { start, end } = contextWindowForItem(item, anchorDate);
+    return date >= start && date <= end;
+  });
+}
+
+function contextItemWindowLabel(item: ContextFeedItem, anchorDate: string): string {
+  const { start, end } = contextWindowForItem(item, anchorDate);
+  return start === end ? `${item.title} (${start})` : `${item.title} (${start}..${end})`;
+}
+
+function contextTextForKinds(items: ContextFeedItem[], kinds: ContextFeedItem["kind"][]): string {
+  const wanted = new Set(kinds);
+  return items
+    .filter(item => wanted.has(item.kind))
+    .map(item => item.detail || item.title)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function contextTitleBundle(items: ContextFeedItem[]): string {
+  return items.map(item => item.title).filter(Boolean).join(" · ");
+}
+
+function compositeForContextItems(items: ContextFeedItem[]): number {
+  const factors = items.flatMap(item => item.factors);
+  return factors.length > 0 ? computeCompositeFromFactors(factors as ContextFeedItem["factors"]) : 50;
+}
+
 function computeCategoryDayStats(rows: HeatmapRow[], date: string, category: string): {
   total: number;
   otb: number;
@@ -393,32 +439,6 @@ export function PricingOptimizationTab() {
   const [customRates, setCustomRates] = useState<Record<string, number>>({});
 
   const WINDOW_DAYS = 15; // Align with Occupancy/Overview 15-day window
-  const activeSignalBundle = useMemo(
-    () => [selectedItems.EVENT, selectedItems.WEATHER, selectedItems.TRAVEL, selectedItems.MARKET],
-    [selectedItems],
-  );
-
-  const mergedBundleFactors = useMemo(() => {
-    const items = activeSignalBundle.filter(Boolean) as ContextFeedItem[];
-    const agg = new Map<ContextFeedItem["factors"][number]["type"], { scoreSum: number; weightSum: number }>();
-    for (const it of items) for (const f of it.factors) {
-      const w = Math.max(0.01, Math.min(0.9, f.weight ?? 0.25));
-      const s = clamp(f.score ?? 0, 0, 100);
-      const prev = agg.get(f.type) ?? { scoreSum: 0, weightSum: 0 };
-      prev.scoreSum += s * w;
-      prev.weightSum += w;
-      agg.set(f.type, prev);
-    }
-    return [...agg.entries()].map(([type, a]) => ({
-      type,
-      label: type,
-      value: "bundle",
-      score: Math.round(a.scoreSum / Math.max(0.0001, a.weightSum)),
-      weight: Math.max(0.05, Math.min(0.9, a.weightSum / Math.max(1, items.length))),
-    })) as ContextFeedItem["factors"];
-  }, [activeSignalBundle]);
-
-  const activeCompositeScore = useMemo(() => computeCompositeFromFactors(mergedBundleFactors), [mergedBundleFactors]);
 
   // ── Load heatmap on mount ──────────────────────────────────────────────────
 
@@ -533,30 +553,32 @@ export function PricingOptimizationTab() {
         calendar_rows: (aiData.calendar_rows ?? []).map(r => ({ ...r, cells: (r.cells ?? []).slice(0, WINDOW_DAYS) })),
       };
 
-      const selectedBundle = [
-        selectedItems.EVENT?.title,
-        selectedItems.WEATHER?.title,
-        selectedItems.TRAVEL?.title,
-        selectedItems.MARKET?.title,
-      ].filter(Boolean).join(" · ");
+      const analysisAnchorDate = aiWindowed.analysis_date || aiWindowed.dates?.[0] || heatmap.dates?.[0] || new Date().toISOString().slice(0, 10);
+      const selectedBundle = contextItems.map(item => contextItemWindowLabel(item, analysisAnchorDate)).join(" · ");
 
       // Keep AI rates/reasons, but:
       // - only allow actions on unsold nights (EMPTY exists in that category/date)
       // - emphasize sandwich nights
-      // - overwrite tooltip factor strings with mocked contextFeed + mocked competitor pricing
+      // - show mocked contextFeed factors only on dates inside each signal's active window
       const nextCalendarRows = aiWindowed.calendar_rows.map(row => {
         const cells = row.cells.map(cell => {
           const stats = computeCategoryDayStats(heatmap.rows, cell.date, row.category);
           const isUnsold = stats.emptyRooms > 0;
           const isSandwich = stats.sandwichEmptyRooms > 0;
+          const activeDateItems = contextItemsForDate(contextItems, cell.date, analysisAnchorDate);
+          const dateSignalBundle = contextTitleBundle(activeDateItems);
+          const weatherFactor = contextTextForKinds(activeDateItems, ["WEATHER"]);
+          const eventFactor = contextTextForKinds(activeDateItems, ["EVENT"]);
+          const marketFactor = contextTextForKinds(activeDateItems, ["TRAVEL", "MARKET"]);
 
           const category = row.category as RoomCategory;
           const competitor = getCompetitorRatePoint({
             date: cell.date,
             category,
             baseRate: cell.current_rate || 0,
-            marketHeat: activeCompositeScore,
+            marketHeat: compositeForContextItems(activeDateItems),
           });
+          const competitorText = `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`;
 
           const baseReason = cell.reason || "";
           const scopeReason = !isUnsold
@@ -565,7 +587,7 @@ export function PricingOptimizationTab() {
               ? "Sandwich night gap detected. Clearance prioritized."
               : "Unsold inventory detected. Clearance eligible.";
 
-          const mergedReason = `${scopeReason} ${baseReason}${selectedBundle ? ` Signals: ${selectedBundle}.` : ""}`.trim();
+          const mergedReason = `${scopeReason} ${baseReason}${dateSignalBundle ? ` Active signals: ${dateSignalBundle}.` : ""}`.trim();
 
           if (!isUnsold) {
             return {
@@ -574,19 +596,19 @@ export function PricingOptimizationTab() {
               change_pct: 0,
               action: "MAINTAIN" as const,
               reason: mergedReason,
-              weather_factor: selectedItems.WEATHER?.detail ?? "",
-              event_factor: selectedItems.EVENT?.detail ?? "",
-              news_factor: `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`,
+              weather_factor: weatherFactor,
+              event_factor: eventFactor,
+              news_factor: [marketFactor, competitorText].filter(Boolean).join(" "),
             };
           }
 
-          // Unsold night: keep AI suggested_rate/confidence/reason, but replace factor strings.
+          // Unsold night: keep AI suggested_rate/confidence/reason, but scope factor strings by date.
           return {
             ...cell,
             reason: mergedReason,
-            weather_factor: selectedItems.WEATHER?.detail ?? cell.weather_factor ?? "",
-            event_factor: selectedItems.EVENT?.detail ?? cell.event_factor ?? "",
-            news_factor: `Competitor median $${competitor.competitorMedianRate} (P10 $${competitor.competitorP10Rate} · P90 $${competitor.competitorP90Rate}). ${competitor.sourceNote}`,
+            weather_factor: weatherFactor || cell.weather_factor || "",
+            event_factor: eventFactor || cell.event_factor || "",
+            news_factor: [marketFactor, competitorText].filter(Boolean).join(" "),
           };
         });
 
@@ -618,7 +640,7 @@ export function PricingOptimizationTab() {
             : "Context (Overview): —"
         } AI generated the pricing recommendations in the calendar grid. ` +
         `Market research (competitor pricing) is demo data. ` +
-        `(15-day window · filtered to unsold nights · context + competitor details in tooltip.)`,
+        `(15-day window · filtered to unsold nights · date-scoped context + competitor details in tooltip.)`,
         calendar_rows: nextCalendarRows,
         recommendations: nextRecommendations,
       };
@@ -637,7 +659,7 @@ export function PricingOptimizationTab() {
     } finally {
       setAnalysing(false);
     }
-  }, [applyAnalysis, show, heatmap, activeCompositeScore, selectedItems]);
+  }, [applyAnalysis, show, heatmap, selectedItems]);
 
   // ── Toggle cell selection ─────────────────────────────────────────────────
 

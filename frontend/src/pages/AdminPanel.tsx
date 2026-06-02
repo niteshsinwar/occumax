@@ -6,6 +6,7 @@ import {
   getHeatmap, patchSlot,
   adminListBookings, adminUpdateBooking, adminDeleteBooking,
 } from "../api/client";
+import { getHotelTodayStr } from "../utils/dateUtils";
 import { useToast } from "../components/shared/Toast";
 import { HeatmapGrid } from "../components/Heatmap/HeatmapGrid";
 import type { HeatmapResponse, AdminBookingRow } from "../types";
@@ -35,7 +36,7 @@ export function AdminPanel() {
   const [heatmap, setHeatmap] = useState<HeatmapResponse | null>(null);
   const [bookingsLoading, setBookingsLoading] = useState(false);
   const [bookings, setBookings] = useState<AdminBookingRow[]>([]);
-  const [bookingStart, setBookingStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [bookingStart, setBookingStart] = useState<string>(() => getHotelTodayStr());
   const [bookingEnd, setBookingEnd] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);
@@ -55,7 +56,7 @@ export function AdminPanel() {
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
   const [editRate, setEditRate] = useState("");
   const [seedLoading, setSeedLoading] = useState(false);
-  const [seedStart, setSeedStart] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [seedStart, setSeedStart] = useState<string>(() => getHotelTodayStr());
   const [seedEnd, setSeedEnd] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 30);

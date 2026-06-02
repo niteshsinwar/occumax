@@ -1,4 +1,10 @@
 import logging
+import os
+import time
+
+# Enforce hotel timezone globally to prevent date-boundary bugs across distributed deployments.
+os.environ["TZ"] = "America/New_York"
+time.tzset()
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

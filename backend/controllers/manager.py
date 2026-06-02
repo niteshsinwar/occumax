@@ -405,6 +405,62 @@ def _confidence_rank(confidence: str | None) -> int:
     return 35
 
 
+def _channel_partner_news_override(partner: str, today: date) -> dict | None:
+    """Return hard partner-health guidance from date-active OTA news."""
+    from services.ai.channel_news import get_partner_news
+
+    news = get_partner_news(partner, today=today)
+    signal = str(news.get("signal") or "NEUTRAL").upper()
+    active_events = [e for e in news.get("recent_events", []) or [] if isinstance(e, dict)]
+    risky_events = [
+        e for e in active_events
+        if str(e.get("type") or "") in {"partner_connectivity", "infrastructure_watch"}
+    ]
+    if signal not in {"PENALIZE", "AVOID"} and not risky_events:
+        return None
+
+    headline = str((risky_events[0] if risky_events else active_events[0]).get("headline") or "active partner-health risk") if active_events else "active partner-health risk"
+    reason = str(news.get("signal_reason") or "").strip()
+    if partner == "Expedia" or signal == "AVOID":
+        return {
+            "preference": "AVOID",
+            "health": "RED",
+            "confidence": "HIGH",
+            "score": 5.0,
+            "reasoning": (
+                f"{headline}: {reason} Shift flexible inventory to Booking.com, Priceline, "
+                "Travelocity, or Orbitz until Expedia connectivity stabilises."
+            ).strip(),
+        }
+
+    return {
+        "preference": "WATCH",
+        "health": "AMBER",
+        "confidence": "MEDIUM",
+        "score": 55.0,
+        "reasoning": f"{headline}: {reason} Keep volume limited while this partner-health watch is active.".strip(),
+    }
+
+
+def _channel_partner_blocked_for_push(partner: str, today: date) -> bool:
+    override = _channel_partner_news_override(partner, today)
+    if not override:
+        return False
+    return override["health"] == "RED" or override["preference"] in {"AVOID", "WATCH"}
+
+
+def _channel_risk_summary(today: date) -> str:
+    override = _channel_partner_news_override("Expedia", today)
+    if not override:
+        return ""
+    return (
+        "Expedia is excluded from incremental OTA pushes this cycle because the date-active "
+        "API downtime and negative sentiment create partner-health risk. Flexible inventory "
+        "should be steered toward Booking.com, Priceline, Travelocity, and Orbitz until the "
+        "downtime window clears."
+    )
+
+
 def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], today: date) -> list[ChannelPartnerInsight]:
     valid_preferences = {"PREFER", "WATCH", "HOLD", "AVOID"}
     valid_health = {"GREEN", "AMBER", "RED"}
@@ -431,6 +487,15 @@ def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], to
             score = float(item.get("score", _confidence_rank(confidence)))
         except (TypeError, ValueError):
             score = float(_confidence_rank(confidence))
+        override = _channel_partner_news_override(partner, today)
+        if override:
+            preference = override["preference"]
+            health = override["health"]
+            confidence = override["confidence"]
+            score = float(override["score"])
+            reasoning = override["reasoning"]
+        else:
+            reasoning = str(item.get("reasoning", "YieldIQ did not provide partner-specific reasoning.")).strip()
         category = item.get("category")
         insights.append(ChannelPartnerInsight(
             partner=partner,
@@ -438,7 +503,7 @@ def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], to
             health=health,
             confidence=confidence,
             score=score,
-            reasoning=str(item.get("reasoning", "YieldIQ did not provide partner-specific reasoning.")).strip(),
+            reasoning=reasoning,
             category=str(category).upper() if category else None,
             check_in=item.get("check_in") or None,
             check_out=item.get("check_out") or None,
@@ -455,14 +520,21 @@ def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], to
         if prev is None or next_score > prev_score:
             best_by_partner[rec.booking_source] = rec
 
-    expedia_downtime_active = date(2026, 5, 8) <= today < date(2026, 5, 9)
-    hotels_watch_active = date(2026, 5, 8) <= today < date(2026, 5, 9)
-
     for partner in OTA_PARTNER_NAMES_LIST:
         if partner in seen:
             continue
+        override = _channel_partner_news_override(partner, today)
         rec = best_by_partner.get(partner)
-        if rec:
+        if override:
+            insights.append(ChannelPartnerInsight(
+                partner=partner,
+                preference=override["preference"],
+                health=override["health"],
+                confidence=override["confidence"],
+                score=override["score"],
+                reasoning=override["reasoning"],
+            ))
+        elif rec:
             preference = "PREFER" if rec.confidence == "HIGH" else "WATCH" if rec.confidence == "MEDIUM" else "HOLD"
             insights.append(ChannelPartnerInsight(
                 partner=partner,
@@ -476,24 +548,6 @@ def _normalise_partner_insights(raw: dict, recs: list[ChannelRecommendation], to
                 check_out=rec.check_out,
                 room_count=rec.room_count,
                 expected_net=rec.expected_net,
-            ))
-        elif partner == "Expedia" and expedia_downtime_active:
-            insights.append(ChannelPartnerInsight(
-                partner=partner,
-                preference="AVOID",
-                health="RED",
-                confidence="HIGH",
-                score=0,
-                reasoning="OTA news feed shows Expedia API downtime on May 8-9; avoid incremental slot pushes until connectivity clears.",
-            ))
-        elif partner == "Hotels.com" and hotels_watch_active:
-            insights.append(ChannelPartnerInsight(
-                partner=partner,
-                preference="WATCH",
-                health="AMBER",
-                confidence="MEDIUM",
-                score=55,
-                reasoning="Hotels.com loyalty campaign is active, but shared Expedia Group connectivity keeps it on watch during the downtime window.",
             ))
         else:
             insights.append(ChannelPartnerInsight(
@@ -579,14 +633,20 @@ async def get_channel_recommendations() -> ChannelRecommendResponse:
         channel_type = str(r.get("channel_type", "")).strip().upper()
         if booking_source not in OTA_PARTNER_NAMES or channel_type != "OTA":
             continue
+        if _channel_partner_blocked_for_push(booking_source, today):
+            continue
         recs.append(ChannelRecommendation(**{**r, "category": str(r.get("category", "")).upper(), "channel_type": "OTA"}))
     partner_insights = _normalise_partner_insights(raw, recs, today)
+    summary = str(raw.get("summary", "") or "").strip()
+    risk_summary = _channel_risk_summary(today)
+    if risk_summary:
+        summary = f"{risk_summary} {summary}".strip()
     response = ChannelRecommendResponse(
         as_of=today.isoformat(),
         analysis_window_days=14,
         recommendations=recs,
         partner_insights=partner_insights,
-        summary=raw.get("summary", ""),
+        summary=summary,
         run_id=uuid.uuid4().hex,
         cache_hit=False,
         context_hash=context_hash,

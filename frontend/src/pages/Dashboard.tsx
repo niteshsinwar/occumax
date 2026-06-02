@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
+import { getHotelTodayStr } from "../utils/dateUtils";
 import { useSearchParams } from "react-router-dom";
 import {
   dashboardCommitShuffle,
@@ -332,7 +333,7 @@ export function Dashboard() {
   const [scorecardLoading, setScorecardLoading] = useState(false);
   const { show, Toasts } = useToast();
 
-  const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
+  const todayStr = useMemo(() => getHotelTodayStr(), []);
   const [pace, setPace] = useState<PaceResponse | null>(null);
   const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
   /** Used for yesterday / same-date-last-year occupancy (realized counts from analytics). */

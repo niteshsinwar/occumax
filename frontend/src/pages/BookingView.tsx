@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { addDays, format } from "date-fns";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getHotelTodayStr } from "../utils/dateUtils";
 import {
   bookingCheckAvailability,
   getBookingAiContext,
@@ -12,6 +12,7 @@ import { CalendarDays, Loader2, BedDouble, MessageCircle, Sparkles } from "lucid
 import { FloatingAiWidget, ActionCard, type ChatMsg } from "../components/shared/FloatingAiWidget";
 
 const CUSTOMER_HISTORY_LIMIT = 20;
+const FALLBACK_BOOKING_WINDOW_DAYS = 20;
 const CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"];
 
 const categoryCopy: Record<string, { title: string; description: string; image: string }> = {
@@ -40,6 +41,19 @@ const categoryCopy: Record<string, { title: string; description: string; image: 
 const publicLabelForCategory = (category: string) => category.toUpperCase();
 const trimHistory = (messages: ChatMsg[]) => messages.slice(-CUSTOMER_HISTORY_LIMIT);
 
+function addIsoDays(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function getErrorDetail(e: unknown): string | null {
+  const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item?.msg ?? JSON.stringify(item)).join("; ");
+  return null;
+}
+
 const sanitizeCustomerText = (text: string) =>
   text
     .replace(/\bRoom\s+[A-Z]{1,4}\d{1,5}\b/g, "A matching room")
@@ -66,13 +80,13 @@ const latestStructuredStateMessage = (messages: ChatMsg[]): ChatMsg | null => {
 };
 
 export function BookingView() {
-  const today = format(new Date(), "yyyy-MM-dd");
-  const defaultOut = format(addDays(new Date(), 3), "yyyy-MM-dd");
-  const maxDate = format(addDays(new Date(), 20), "yyyy-MM-dd");
+  const browserToday = getHotelTodayStr();
   
   const [category, setCategory] = useState<RoomCategory>("STANDARD");
-  const [checkIn, setCheckIn] = useState(today);
-  const [checkOut, setCheckOut] = useState(defaultOut);
+  const [serverToday, setServerToday] = useState(browserToday);
+  const [bookingWindowDays, setBookingWindowDays] = useState(FALLBACK_BOOKING_WINDOW_DAYS);
+  const [checkIn, setCheckIn] = useState(browserToday);
+  const [checkOut, setCheckOut] = useState(addIsoDays(browserToday, 3));
   const [guestName, setGuestName] = useState("");
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<ShuffleResult | null>(null);
@@ -87,6 +101,9 @@ export function BookingView() {
   const { show, Toasts } = useToast();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const aiRunIdRef = useRef(0);
+  const today = serverToday;
+  const maxDate = addIsoDays(serverToday, bookingWindowDays);
+  const maxCheckInDate = addIsoDays(serverToday, Math.max(0, bookingWindowDays - 1));
 
   const nights = useMemo(() => {
     if (!checkIn || !checkOut || checkOut <= checkIn) return 0;
@@ -94,6 +111,27 @@ export function BookingView() {
   }, [checkIn, checkOut]);
 
   const selectedCategory = categoryCopy[category] ?? categoryCopy.STANDARD;
+
+  useEffect(() => {
+    getBookingAiContext()
+      .then((res) => {
+        const data = res.data as { today?: string; booking_window?: number; context_text?: string };
+        const nextToday = data.today || browserToday;
+        const nextWindow = Number(data.booking_window || FALLBACK_BOOKING_WINDOW_DAYS);
+        setHotelContext(data.context_text ?? null);
+        setServerToday(nextToday);
+        setBookingWindowDays(nextWindow);
+        setCheckIn((prev) => (prev < nextToday ? nextToday : prev));
+        setCheckOut((prev) => {
+          const fallbackOut = addIsoDays(nextToday, Math.min(3, nextWindow));
+          const latestOut = addIsoDays(nextToday, nextWindow);
+          if (prev <= nextToday || prev === addIsoDays(browserToday, 3)) return fallbackOut;
+          if (prev > latestOut) return latestOut;
+          return prev;
+        });
+      })
+      .catch(() => {});
+  }, [browserToday]);
 
   const triggerAiHandoff = async (data: ShuffleResult, runId = aiRunIdRef.current) => {
     if (runId !== aiRunIdRef.current) return;
@@ -160,8 +198,8 @@ export function BookingView() {
           }
         }]);
       }
-    } catch {
-      show("Availability check failed. Please try again.", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Availability check failed. Please try again.", "error");
     } finally {
       setChecking(false);
     }
@@ -255,11 +293,24 @@ export function BookingView() {
               </label>
               <label>
                 Check-in
-                <input type="date" min={today} max={maxDate} value={checkIn} onChange={(event) => setCheckIn(event.target.value)} />
+                <input
+                  type="date"
+                  min={today}
+                  max={maxCheckInDate}
+                  value={checkIn}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setCheckIn(next);
+                    if (checkOut <= next) {
+                      const nextOut = addIsoDays(next, 1);
+                      setCheckOut(nextOut > maxDate ? maxDate : nextOut);
+                    }
+                  }}
+                />
               </label>
               <label>
                 Check-out
-                <input type="date" min={checkIn || today} max={maxDate} value={checkOut} onChange={(event) => setCheckOut(event.target.value)} />
+                <input type="date" min={addIsoDays(checkIn, 1)} max={maxDate} value={checkOut} onChange={(event) => setCheckOut(event.target.value)} />
               </label>
               <label>
                 Guest name

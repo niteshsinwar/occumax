@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { getHotelTodayStr } from '../utils/dateUtils';
 import {
   dashboardCommitShuffle,
   dashboardOptimiseKNightPreview,
@@ -174,7 +175,7 @@ export function DashboardV2() {
   const [channelPerf, setChannelPerf] = useState<ChannelPerformanceResponse | null>(null);
   const { show, Toasts } = useToast();
 
-  const todayStr = useMemo(() => new Date().toISOString().split("T")[0]!, []);
+  const todayStr = useMemo(() => getHotelTodayStr(), []);
 
   // ── Data loading ────────────────────────────────────────────────────────────
 

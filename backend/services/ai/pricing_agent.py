@@ -143,12 +143,17 @@ def _context_payload(context_items: Optional[list[dict]], today: date) -> tuple[
         end_offset = int(item.get("impact_end_offset_days") if item.get("impact_end_offset_days") is not None else start_offset)
         start_offset = max(0, min(60, start_offset))
         end_offset = max(start_offset, min(60, end_offset))
+        start_date = today + timedelta(days=start_offset)
+        end_date = today + timedelta(days=end_offset)
         signal = {
             "kind": kind,
             "severity": severity,
             "title": title,
+            "detail": detail[:240],
             "score": score,
             "segment": segment,
+            "impact_start_date": start_date.isoformat(),
+            "impact_end_date": end_date.isoformat(),
         }
         for delta in range(start_offset, end_offset + 1):
             d = (today + timedelta(days=delta)).isoformat()
@@ -292,7 +297,10 @@ Rules:
 - action: INCREASE or DISCOUNT only (omit dates where BAR should hold unchanged).
 - INCREASE when: weekend pickup strength OR category occ_pct suggests compression OR demand signals warrant uplift.
 - DISCOUNT when: weak pickup AND discretionary/unsold inventory should clear faster — prioritize realistic BAR reductions vs OTB/floor.
-- Use each day's signals/context_score plus market_insight as supplied external context. Do not invent events, weather, travel shocks, or market news.
+- External signals are date-scoped. Use ONLY signals listed in that day's signals array for that date.
+- Do not apply storms, travel shocks, convention demand, OTA downtime, or market news to dates whose signals array is empty.
+- market_insight is a non-decision summary only; it must not justify recommendations on dates without matching day signals.
+- Do not invent events, weather, travel shocks, or market news.
 - rate: integer, must be >= floor_rate from payload, rounded to nearest $5
 - conf: HIGH / MEDIUM / LOW based on confidence given occupancy totals vs OTB in payload.
 - Keep JSON compact — fewer dates analyzed means shorter arrays are acceptable.
@@ -329,10 +337,31 @@ def _derive_reason(
     wx = weather_analysis.get(date_str, {})
     occ = snap_day.get("occ_pct", 50)
 
-    event_factor = ev.get("brief", "") or ""
-    weather_factor = wx.get("brief", "") or ""
-    news_factor = market_analysis.get("key_insight", "")[:80] if market_analysis.get("key_insight") else ""
     date_signals = market_analysis.get("date_signals", {}).get(date_str, [])
+    event_signals = [s for s in date_signals if str(s.get("kind", "")).upper() == "EVENT"]
+    weather_signals = [s for s in date_signals if str(s.get("kind", "")).upper() == "WEATHER"]
+    market_signals = [
+        s for s in date_signals
+        if str(s.get("kind", "")).upper() in {"MARKET", "TRAVEL"}
+    ]
+
+    event_factor = ev.get("brief", "") or "; ".join(
+        str(s.get("title") or "") for s in event_signals[:2] if s.get("title")
+    )
+    weather_factor = wx.get("brief", "") or "; ".join(
+        str(s.get("title") or "") for s in weather_signals[:2] if s.get("title")
+    )
+    news_factor = "; ".join(
+        str(s.get("title") or "") for s in market_signals[:2] if s.get("title")
+    )
+
+    pricing_signals = [
+        s for s in date_signals
+        if not (
+            str(s.get("kind", "")).upper() == "MARKET"
+            and "expedia" in str(s.get("title") or "").lower()
+        )
+    ]
 
     # Build reason from strongest signal
     if ev.get("demand_boost_pct", 0) > 0 and ev.get("event"):
@@ -341,16 +370,15 @@ def _derive_reason(
         reason = f"Favorable NJ weekend weather — {weather_factor[:80]}"
     elif wx.get("impact") == "negative" and weather_factor:
         reason = f"Adverse weather dampens leisure demand — {weather_factor[:80]}"
+    elif pricing_signals:
+        titles = ", ".join(str(s.get("title") or "") for s in pricing_signals[:2] if s.get("title"))
+        reason = f"{cat} date-scoped signal active: {titles}. Price only this active window where occupancy and floor support it."
     elif occ >= 70:
         reason = f"{cat} occupancy at {occ:.0f}% — strong on-books demand supports rate increase."
     elif occ < 35:
         reason = f"{cat} occupancy at {occ:.0f}% — rate support needed to drive advance bookings."
-    elif date_signals:
-        titles = ", ".join(str(s.get("title") or "") for s in date_signals[:2] if s.get("title"))
-        reason = f"{cat} date-aware demand signal: {titles} — rate adjustment warranted."
     else:
-        insight = market_analysis.get("key_insight", "")
-        reason = (insight[:120] + " — rate adjustment warranted.") if insight else f"Day-of-week demand pattern for {cat} warrants pricing action."
+        reason = f"Day-of-week and live {cat} occupancy pattern warrants pricing action."
 
     return reason[:200], weather_factor[:80], event_factor[:80], news_factor[:80]
 
@@ -391,15 +419,18 @@ async def _synthesis_shard(
             "event_boost": ev.get("demand_boost_pct", 0),
             "weather": wx.get("impact", "neutral"),
             "signals": day_signals[:4],
+            "active_signal_titles": [str(s.get("title") or "") for s in day_signals[:4] if s.get("title")],
             "context_score": max([int(s.get("score") or 0) for s in day_signals] or [0]),
             "is_weekend": date.fromisoformat(d).weekday() >= 4,
         })
 
+    has_date_scoped_signals = bool(market_analysis.get("date_signals"))
     context = json.dumps({
         "days": day_rows,
         "seasonal_multiplier": history_analysis.get("seasonal_multipliers", {}).get(category, 1.0),
         "market_rate_pressure": market_analysis.get("rate_pressure", "flat"),
-        "market_insight": market_analysis.get("key_insight", "")[:1200],
+        "market_insight": "" if has_date_scoped_signals else market_analysis.get("key_insight", "")[:1200],
+        "date_scoping_rule": "A context feed signal affects only the dates where it appears in day.signals.",
     }, ensure_ascii=False)
 
     system = _SHARD_SYSTEM.format(
@@ -506,6 +537,8 @@ async def _call_summary_agent_from_context(
                     "severity": i.get("severity"),
                     "title": i.get("title"),
                     "detail": i.get("detail"),
+                    "impact_start_offset_days": i.get("impact_start_offset_days"),
+                    "impact_end_offset_days": i.get("impact_end_offset_days"),
                     "factors": i.get("factors", []),
                 }
                 for i in (context_items or [])

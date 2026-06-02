@@ -25,9 +25,9 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "PENALIZE",
         "recent_events": [
             {
-                "date": "2026-05-08",
-                "start_date": "2026-05-08",
-                "end_date": "2026-05-09",
+                "date": "2026-06-02",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-03",
                 "type": "partner_connectivity",
                 "headline": "Expedia reports one-day partner API downtime",
                 "impact": "HIGH",
@@ -38,21 +38,21 @@ CHANNEL_NEWS: dict[str, dict] = {
                 ),
             },
             {
-                "date": "2026-05-09",
-                "start_date": "2026-05-09",
-                "end_date": "2026-05-15",
+                "date": "2026-06-04",
+                "start_date": "2026-06-04",
+                "end_date": "2026-06-08",
                 "type": "recovery_watch",
                 "headline": "Expedia recovery window begins after API downtime",
                 "impact": "MEDIUM",
                 "source": "Expedia Partner Central status feed",
                 "detail": (
-                    "Connectivity is expected to improve after June 9, but monitor conversion "
+                    "Connectivity is expected to improve after June 3, but monitor conversion "
                     "before restoring normal allocation volume."
                 ),
             },
         ],
         "signal_reason": (
-            "API downtime is active on June 8 and creates partner-health risk. Deprioritize Expedia "
+            "API downtime is active on June 2-3 and creates partner-health risk. Deprioritize Expedia "
             "for incremental pushes this run; use Booking.com, Priceline, or Travelocity when their "
             "campaign windows overlap the gap dates."
         ),
@@ -64,9 +64,9 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "PENALIZE",
         "recent_events": [
             {
-                "date": "2026-05-05",
-                "start_date": "2026-05-05",
-                "end_date": "2026-05-20",
+                "date": "2026-06-01",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-20",
                 "type": "positive_campaign",
                 "headline": "Hotels.com loyalty campaign active in US market",
                 "impact": "MEDIUM",
@@ -74,9 +74,9 @@ CHANNEL_NEWS: dict[str, dict] = {
                 "detail": "Loyalty promotion targets repeat US hotel shoppers through June 20.",
             },
             {
-                "date": "2026-05-08",
-                "start_date": "2026-05-08",
-                "end_date": "2026-05-09",
+                "date": "2026-06-02",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-03",
                 "type": "infrastructure_watch",
                 "headline": "Hotels.com monitoring shared Expedia Group connectivity",
                 "impact": "MEDIUM",
@@ -99,21 +99,21 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "PREFER",
         "recent_events": [
             {
-                "date": "2026-05-08",
-                "start_date": "2026-05-08",
-                "end_date": "2026-05-15",
+                "date": "2026-06-02",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-09",
                 "type": "positive_campaign",
                 "headline": "Booking.com Northeast Weekend Escape campaign starts",
                 "impact": "HIGH",
                 "source": "Booking.com Extranet Pulse",
                 "detail": (
                     "Campaign targets US leisure shoppers for weekend and short-stay hotel bookings "
-                    "from June 8 through June 15."
+                    "from June 2 through June 9."
                 ),
             },
         ],
         "signal_reason": (
-            "Booking.com campaign is active June 8-15 and news impact is positive. Prioritize when "
+            "Booking.com campaign is active June 2-9 and news impact is positive. Prioritize when "
             "recommended stay dates overlap that campaign and historical channel data supports it."
         ),
     },
@@ -124,22 +124,22 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "NEUTRAL",
         "recent_events": [
             {
-                "date": "2026-05-10",
-                "start_date": "2026-05-10",
-                "end_date": "2026-05-13",
+                "date": "2026-06-02",
+                "start_date": "2026-06-02",
+                "end_date": "2026-06-06",
                 "type": "positive_campaign",
                 "headline": "Priceline weekday opaque-rate promotion starts",
                 "impact": "MEDIUM",
                 "source": "Priceline Partner Network",
                 "detail": (
-                    "Opaque-rate promotion is active June 10-13 and is best suited for "
+                    "Opaque-rate promotion is active June 2-6 and is best suited for "
                     "price-sensitive Standard/Economy gaps."
                 ),
             },
             {
-                "date": "2026-05-01",
-                "start_date": "2026-05-01",
-                "end_date": "2026-05-31",
+                "date": "2026-06-01",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
                 "type": "positive_update",
                 "headline": "Priceline price-match messaging active in June",
                 "impact": "MEDIUM",
@@ -150,9 +150,9 @@ CHANNEL_NEWS: dict[str, dict] = {
                 ),
             },
             {
-                "date": "2026-05-03",
-                "start_date": "2026-05-03",
-                "end_date": "2026-05-31",
+                "date": "2026-06-01",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
                 "type": "minor_concern",
                 "headline": "Priceline opaque model carries ADR compression risk",
                 "impact": "LOW",
@@ -173,21 +173,21 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "NEUTRAL",
         "recent_events": [
             {
-                "date": "2026-05-13",
-                "start_date": "2026-05-13",
-                "end_date": "2026-05-16",
+                "date": "2026-06-03",
+                "start_date": "2026-06-03",
+                "end_date": "2026-06-07",
                 "type": "positive_campaign",
                 "headline": "Travelocity US package leisure campaign starts",
                 "impact": "MEDIUM",
                 "source": "Travelocity Partner Update",
                 "detail": (
-                    "Package leisure promotion is active June 13-16. Use as a supplemental OTA "
+                    "Package leisure promotion is active June 3-7. Use as a supplemental OTA "
                     "when gap dates overlap the campaign window."
                 ),
             },
         ],
         "signal_reason": (
-            "Travelocity has a June 13-16 package campaign. Use as a secondary OTA when the date "
+            "Travelocity has a June 3-7 package campaign. Use as a secondary OTA when the date "
             "overlap is strong and keep volume moderate because news impact is neutral."
         ),
     },
@@ -198,21 +198,21 @@ CHANNEL_NEWS: dict[str, dict] = {
         "signal": "NEUTRAL",
         "recent_events": [
             {
-                "date": "2026-05-14",
-                "start_date": "2026-05-14",
-                "end_date": "2026-05-21",
+                "date": "2026-06-04",
+                "start_date": "2026-06-04",
+                "end_date": "2026-06-12",
                 "type": "positive_update",
                 "headline": "Orbitz Rewards-led US leisure campaign starts",
                 "impact": "MEDIUM",
                 "source": "Orbitz Partner Update",
                 "detail": (
-                    "Rewards-led shoppers are targeted for short hotel stays from June 14-21."
+                    "Rewards-led shoppers are targeted for short hotel stays from June 4-12."
                 ),
             },
             {
-                "date": "2026-05-01",
-                "start_date": "2026-05-01",
-                "end_date": "2026-05-31",
+                "date": "2026-06-01",
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
                 "type": "minor_concern",
                 "headline": "Orbitz mobile conversion trails larger OTA partners",
                 "impact": "LOW",
@@ -221,7 +221,7 @@ CHANNEL_NEWS: dict[str, dict] = {
             },
         ],
         "signal_reason": (
-            "Orbitz rewards campaign starts June 14. Use as a tertiary OTA for overlapping short-stay "
+            "Orbitz rewards campaign starts June 4. Use as a tertiary OTA for overlapping short-stay "
             "gaps when higher-performing partners are already covered."
         ),
     },

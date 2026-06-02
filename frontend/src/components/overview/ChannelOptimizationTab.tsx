@@ -43,6 +43,10 @@ const ANALYSIS_STEPS = [
 
 type PartnerHealth = "GREEN" | "AMBER" | "RED";
 type PartnerPreference = "PREFER" | "WATCH" | "HOLD" | "AVOID";
+const DEMO_PARTNER_BASELINE_HEALTH: Partial<Record<string, PartnerHealth>> = {
+  Expedia: "RED",
+  "Hotels.com": "AMBER",
+};
 type PartnerIntel = {
   preference: PartnerPreference;
   confidence: "HIGH" | "MEDIUM" | "LOW";
@@ -68,7 +72,7 @@ type ChannelIntelCacheEntry = {
 
 function buildDefaultHealthMap(partners: string[]): Record<string, PartnerHealth> {
   const map: Record<string, PartnerHealth> = {};
-  for (const p of partners) map[p] = "GREEN";
+  for (const p of partners) map[p] = DEMO_PARTNER_BASELINE_HEALTH[p] ?? "GREEN";
   return map;
 }
 
@@ -483,9 +487,9 @@ export function ChannelOptimizationTab() {
                         </span>
                       )}
                       <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 border ${
-                        hasPartnerIntel ? healthBadgeClass(health) : baselineBadgeClass()
+                        hasPartnerIntel || health !== "GREEN" ? healthBadgeClass(health) : baselineBadgeClass()
                       }`}>
-                        {hasPartnerIntel ? healthLabel(health) : "Baseline"}
+                        {hasPartnerIntel || health !== "GREEN" ? healthLabel(health) : "Baseline"}
                       </span>
                     </div>
                     {intel && (
@@ -561,7 +565,7 @@ export function ChannelOptimizationTab() {
               <div className={`mt-4 border border-dashed border-border/70 ${overviewInsetClass} p-4 text-xs text-text-muted`}>
                 {channelData?.recommendation
                   ? channelData.recommendation
-                  : "Run Channel Intelligence to send current inventory, booking history, and date-aware OTA news into YieldIQ for partner-level recommendations."}
+                  : "Expedia partner-risk watch is active in the mock OTA feed. Run Channel Intelligence to combine current inventory, booking history, OTA news sentiment, and partner health into date/category recommendations."}
               </div>
             )}
 

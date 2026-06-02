@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { format, addDays } from "date-fns";
+import { getHotelTodayStr } from "../utils/dateUtils";
 import { checkAvailability, confirmBooking, listBookings, getAiContext, sendAiMessage, adminListCategories } from "../api/client";
 import type { ShuffleResult, RoomCategory } from "../types";
 import { useToast } from "../components/shared/Toast";
@@ -10,6 +10,7 @@ const AI_HISTORY_KEY = "optihost_front_desk_ai_history";
 const MAX_AI_HISTORY_MESSAGES = 20;
 const AI_HISTORY_TTL_MS = 30 * 60 * 1000;
 const FALLBACK_CATEGORIES: RoomCategory[] = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"];
+const FALLBACK_BOOKING_WINDOW_DAYS = 20;
 
 interface AdminCategorySummary {
   name: RoomCategory;
@@ -35,6 +36,19 @@ const trimAiHistory = (messages: ChatMsg[]) => messages.slice(-MAX_AI_HISTORY_ME
 const persistableAiHistory = (messages: ChatMsg[]) =>
   trimAiHistory(messages);
 
+function addIsoDays(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function getErrorDetail(e: unknown): string | null {
+  const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((item) => item?.msg ?? JSON.stringify(item)).join("; ");
+  return null;
+}
+
 const latestStructuredStateMessage = (messages: ChatMsg[]): ChatMsg | null => {
   const latest = [...messages].reverse().find((msg) => msg.role === "assistant" && msg.action_data);
   if (!latest?.action_data) return null;
@@ -49,15 +63,18 @@ const latestStructuredStateMessage = (messages: ChatMsg[]): ChatMsg | null => {
 };
 
 export function ReceptionistView() {
-  const today      = format(new Date(), "yyyy-MM-dd");
-  const maxDate    = format(addDays(new Date(), 20), "yyyy-MM-dd");
-  const defaultOut = format(addDays(new Date(), 3), "yyyy-MM-dd");
+  const browserToday = getHotelTodayStr();
 
   const [category,       setCategory]       = useState<RoomCategory>("DELUXE");
-  const [checkIn,        setCheckIn]        = useState(today);
-  const [checkOut,       setCheckOut]       = useState(defaultOut);
+  const [serverToday,    setServerToday]    = useState(browserToday);
+  const [bookingWindowDays, setBookingWindowDays] = useState(FALLBACK_BOOKING_WINDOW_DAYS);
+  const [checkIn,        setCheckIn]        = useState(browserToday);
+  const [checkOut,       setCheckOut]       = useState(addIsoDays(browserToday, 3));
   const [guestName,      setGuestName]      = useState("");
   const searchKey = useMemo(() => `${category}|${checkIn}|${checkOut}`, [category, checkIn, checkOut]);
+  const today = serverToday;
+  const maxDate = addIsoDays(serverToday, bookingWindowDays);
+  const maxCheckInDate = addIsoDays(serverToday, Math.max(0, bookingWindowDays - 1));
 
   const [checking,       setChecking]       = useState(false);
   const [confirming,     setConfirming]     = useState(false);
@@ -80,6 +97,27 @@ export function ReceptionistView() {
   const [activeCategories, setActiveCategories] = useState<RoomCategory[]>(FALLBACK_CATEGORIES);
 
   useEffect(() => {
+    getAiContext()
+      .then((res) => {
+        const data = res.data as { today?: string; booking_window?: number; context_text?: string };
+        const nextToday = data.today || browserToday;
+        const nextWindow = Number(data.booking_window || FALLBACK_BOOKING_WINDOW_DAYS);
+        setHotelContext(data.context_text ?? null);
+        setServerToday(nextToday);
+        setBookingWindowDays(nextWindow);
+        setCheckIn((prev) => (prev < nextToday ? nextToday : prev));
+        setCheckOut((prev) => {
+          const fallbackOut = addIsoDays(nextToday, Math.min(3, nextWindow));
+          const latestOut = addIsoDays(nextToday, nextWindow);
+          if (prev <= nextToday || prev === addIsoDays(browserToday, 3)) return fallbackOut;
+          if (prev > latestOut) return latestOut;
+          return prev;
+        });
+      })
+      .catch(() => {});
+  }, [browserToday]);
+
+  useEffect(() => {
     adminListCategories().then((res) => {
       const live = (res.data as AdminCategorySummary[])
         .filter((c) => c.room_count > 0)
@@ -98,8 +136,8 @@ export function ReceptionistView() {
     try {
       const r = await listBookings();
       setRecentBookings(r.data.slice(0, 8));
-    } catch {
-      show("Failed to load recent bookings", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to load recent bookings", "error");
     } finally {
       setLoadingRecent(false);
     }
@@ -185,8 +223,8 @@ export function ReceptionistView() {
         setAiHasProactive(true);
         setTimeout(() => triggerAiHandoff(data, runId), 100);
       }
-    } catch {
-      show("Failed to check availability", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to check availability", "error");
       setSteps({ direct: "idle", shuffle: "idle" });
     } finally {
       setChecking(false);
@@ -207,8 +245,8 @@ export function ReceptionistView() {
       setSteps({ direct: "idle", shuffle: "idle" });
       show(`Booking ${res.data.booking_id} confirmed!`, "success");
       loadRecent();
-    } catch {
-      show("Failed to confirm booking", "error");
+    } catch (e: unknown) {
+      show(getErrorDetail(e) || "Failed to confirm booking", "error");
     } finally {
       setConfirming(false);
     }
@@ -362,11 +400,25 @@ export function ReceptionistView() {
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Check-in</label>
-            <input type="date" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={checkIn} min={today} max={maxDate} onChange={(e) => setCheckIn(e.target.value)} />
+            <input
+              type="date"
+              className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none"
+              value={checkIn}
+              min={today}
+              max={maxCheckInDate}
+              onChange={(e) => {
+                const next = e.target.value;
+                setCheckIn(next);
+                if (checkOut <= next) {
+                  const nextOut = addIsoDays(next, 1);
+                  setCheckOut(nextOut > maxDate ? maxDate : nextOut);
+                }
+              }}
+            />
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Check-out</label>
-            <input type="date" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={checkOut} min={checkIn} max={maxDate} onChange={(e) => setCheckOut(e.target.value)} />
+            <input type="date" className="w-full bg-surface-2 border border-border rounded-sm text-sm px-3 py-3 focus:border-accent focus:ring-1 focus:ring-accent outline-none" value={checkOut} min={addIsoDays(checkIn, 1)} max={maxDate} onChange={(e) => setCheckOut(e.target.value)} />
           </div>
           <div className="space-y-1.5">
             <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Guest Name</label>
