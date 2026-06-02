@@ -133,6 +133,17 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
   const apiConfirmBooking = apiRole === "booking" ? bookingConfirmBooking : confirmBooking;
   const apiConfirmSplitStay = apiRole === "booking" ? bookingConfirmSplitStay : confirmSplitStay;
 
+  if (data.type === "live_agent_handoff") {
+    return (
+      <div className="mt-2 rounded-md border border-accent/25 bg-accent/5 px-4 py-3 text-sm text-text">
+        <p className="font-bold text-text">Connecting with our team</p>
+        <p className="mt-1 text-text-muted leading-relaxed">
+          A live team member will follow up shortly to help with your stay and any promotional rates.
+        </p>
+      </div>
+    );
+  }
+
   if (data.type === "booking_confirmed") {
     const d = data.data as { booking_id: string; room_id: string };
     return (

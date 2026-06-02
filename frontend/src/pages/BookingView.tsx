@@ -181,6 +181,11 @@ export function BookingView() {
       if (data.state === "NOT_POSSIBLE") {
         setChatOpen(true);
         setAiHasProactive(true);
+        setChatMessages([{
+          role: "assistant",
+          content:
+            "No inventory is available for your selected dates. Redirecting you to our stay assistant to help find alternate options.",
+        }]);
         setTimeout(() => triggerAiHandoff(data, runId), 100);
       } else if (data.state === "DIRECT_AVAILABLE" || data.state === "SHUFFLE_POSSIBLE") {
         setAiHasProactive(true);
@@ -368,8 +373,13 @@ export function BookingView() {
               </div>
               <div className="mt-4">
                 {result?.state === "NOT_POSSIBLE" ? (
-                  <div className="rounded-md border border-orange/25 bg-orange-dim px-4 py-3 text-sm text-text">
-                    This room style is not available for the full stay. Check the chat widget for a close alternative.
+                  <div className="rounded-md border border-orange/25 bg-orange-dim px-4 py-3 text-sm text-text space-y-2">
+                    <p className="font-bold text-text">No inventory available</p>
+                    <p className="text-text-muted leading-relaxed">
+                      {chatLoading
+                        ? "Redirecting to our stay assistant to help find alternate options…"
+                        : "Our stay assistant can help find alternate options — open the chat in the lower-right corner."}
+                    </p>
                   </div>
                 ) : result?.state === "DIRECT_AVAILABLE" || result?.state === "SHUFFLE_POSSIBLE" ? (
                   <div className="mt-2">

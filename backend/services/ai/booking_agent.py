@@ -44,6 +44,31 @@ logger = logging.getLogger(__name__)
 _CATEGORY_ORDER = ["ECONOMY", "STANDARD", "DELUXE", "SUITE"]
 MAX_AGENT_TOOL_CALLS = 10
 
+_DISCOUNT_ASK_RE = re.compile(
+    r"\b("
+    r"discount|discounted|coupon|promo(?:tion| code)?|promo\s*code|"
+    r"cheaper|lower\s+price|price\s+match|special\s+rate|"
+    r"deal|bargain|percent\s+off|%\s*off|reduce\s+(?:the\s+)?(?:rate|price)|"
+    r"can\s+you\s+do\s+better|better\s+price|price\s+reduction"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_EXTRA_DISCOUNT_ASK_RE = re.compile(
+    r"\b("
+    r"(?:more|additional|extra|bigger|better|another|higher)\s+(?:\w+\s+){0,3}"
+    r"(?:discount|off)|"
+    r"(?:discount|off)\s+(?:than|on\s+top)|"
+    r"match\s+(?:that|this|it)|beat\s+(?:that|this|the)\s+price"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_LIVE_AGENT_DISCOUNT_REPLY = (
+    "Promotional rates need to be approved by our front desk team. "
+    "Redirecting you to a live team member who can review your stay and any offers that may apply."
+)
+
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -58,7 +83,6 @@ Be warm, brief, and helpful. Speak like a friendly concierge — not a report.
 • Room IDs, booking IDs, floor numbers
 • Occupancy rates, RevPAR, ADR, orphan gaps, pricing signals
 • Why prices are set the way they are (demand, conferences, events, market)
-• Why discounts are or aren't offered
 • Internal reasoning about which option is "better for revenue"
 • Failed checks, blocked dates detail, swap plans, internal rationale
 • Tool names, JSON, graph steps, or any backend terminology
@@ -110,6 +134,13 @@ build_recovery_options(preferred_category, check_in, check_out, infeasible_dates
 • Call ONE tool at a time.
 • You only recommend — guest confirms via UI button.
 • For greetings/general questions: reply in 1–2 sentences, no tools needed.
+• NEVER invent, negotiate, or promise a discount. Only mention a % off when the
+  confirmable option card already includes discount_pct > 0 from a tool result.
+• If the guest asks for a discount, coupon, or lower price and no approved offer
+  is on the current option card, reply exactly:
+  "Promotional rates need to be approved by our front desk team. Redirecting you
+  to a live team member who can review your stay and any offers that may apply."
+  Do not call tools for discount-only requests.
 ═════════════════════════════════════════════════════════════════════════════════
 
 ═══ HOW TO PRESENT OPTIONS ═══════════════════════════════════════════════════
@@ -119,7 +150,7 @@ That's it. No reasoning. No "because demand is high". No "this preserves categor
 
 GOOD example:
   "Here are your options:
-   1. Split Stay (Deluxe) — Jun 1–4, $1,710. 5% discount.
+   1. Split Stay (Deluxe) — Jun 1–4, $1,710. (Include % off only if the card shows it.)
    2. Suite — Jun 1–4, $3,150. One room, no moves.
    3. Deluxe — Jun 1–3, $1,300. 2 nights.
    Which works best?"
@@ -295,6 +326,99 @@ def _reply_for_action_data(action_data: dict) -> Optional[str]:
             )
 
     return None
+
+
+def _visible_user_text(messages: list[dict]) -> str:
+    """Return the latest guest-visible user message (skip protocol payloads)."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if content.startswith(("[HANDOFF]", "[PREFS]", "[STRUCTURED_STATE]")):
+            continue
+        return content
+    return ""
+
+
+def _structured_action_data_from_history(messages: list[dict]) -> list[dict]:
+    """Collect action_data blobs injected via [STRUCTURED_STATE] user messages."""
+    blobs: list[dict] = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if not content.startswith("[STRUCTURED_STATE]"):
+            continue
+        try:
+            payload = json.loads(content.split("\n", 1)[1])
+        except (json.JSONDecodeError, IndexError):
+            continue
+        action_data = payload.get("action_data")
+        if isinstance(action_data, dict):
+            blobs.append(action_data)
+    return blobs
+
+
+def _max_approved_discount_pct(action_data: dict) -> float:
+    """Largest tool-approved discount % embedded in a structured action card."""
+    if not action_data:
+        return 0.0
+
+    def _pct(value: object) -> float:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return 0.0
+
+    kind = action_data.get("type")
+    data = action_data.get("data") or {}
+    best = 0.0
+
+    if kind == "availability_result":
+        best = max(best, _pct(data.get("discount_pct")))
+        if data.get("discount_recommended") and best <= 0:
+            best = max(best, _pct(data.get("discount_pct")))
+
+    elif kind == "split_stay_result":
+        best = max(best, _pct(data.get("discount_pct")))
+
+    elif kind == "recovery_menu":
+        primary = data.get("primary_action_data")
+        if isinstance(primary, dict):
+            best = max(best, _max_approved_discount_pct(primary))
+        for opt in data.get("options") or []:
+            if isinstance(opt, dict):
+                best = max(best, _pct(opt.get("discount_pct")))
+                nested = opt.get("action_data")
+                if isinstance(nested, dict):
+                    best = max(best, _max_approved_discount_pct(nested))
+
+    elif kind == "recovery_options":
+        for opt in data.get("options") or []:
+            if isinstance(opt, dict):
+                best = max(best, _pct(opt.get("discount_pct")))
+
+    return best
+
+
+def _guest_requests_unapproved_discount(messages: list[dict]) -> bool:
+    """
+    True when the guest is asking for a discount that is not already on an
+    approved option card — route to live staff instead of the LLM/tools.
+    """
+    user_text = _visible_user_text(messages)
+    if not user_text or not _DISCOUNT_ASK_RE.search(user_text):
+        return False
+
+    approved = 0.0
+    for blob in _structured_action_data_from_history(messages):
+        approved = max(approved, _max_approved_discount_pct(blob))
+
+    if approved <= 0:
+        return True
+    if _EXTRA_DISCOUNT_ASK_RE.search(user_text):
+        return True
+    return False
 
 
 def _sanitize_reply(reply: str) -> str:
@@ -1910,6 +2034,15 @@ async def run_agent(
     # Guard: if history is empty the agent has nothing to respond to
     if not lc_messages:
         return {"reply": "How can I help you today?", "action_data": None}
+
+    if _guest_requests_unapproved_discount(messages):
+        return {
+            "reply": _LIVE_AGENT_DISCOUNT_REPLY,
+            "action_data": {
+                "type": "live_agent_handoff",
+                "data": {"reason": "discount_request"},
+            },
+        }
 
     try:
         result = await graph.ainvoke(
