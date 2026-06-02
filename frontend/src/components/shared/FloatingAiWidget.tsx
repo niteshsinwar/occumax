@@ -6,6 +6,25 @@ import { useToast } from "./Toast";
 
 export type ApiRole = "receptionist" | "booking";
 
+export type SearchRequestRef = {
+  category: string;
+  check_in: string;
+  check_out: string;
+};
+
+/** True when a confirmable option differs from the guest's original search. */
+export function isAlternateToSearch(
+  option: SearchRequestRef | undefined,
+  original: SearchRequestRef | undefined,
+): boolean {
+  if (!option || !original) return false;
+  return (
+    option.check_in !== original.check_in
+    || option.check_out !== original.check_out
+    || option.category.toUpperCase() !== original.category.toUpperCase()
+  );
+}
+
 export interface ChatMsg {
   role: "user" | "assistant";
   content: string;
@@ -123,7 +142,15 @@ export function ComparisonSection({ comparison }: { comparison: ComparisonTable 
   );
 }
 
-export function ActionCard({ data, apiRole }: { data: { type: string; data: Record<string, unknown> }, apiRole: ApiRole }) {
+export function ActionCard({
+  data,
+  apiRole,
+  originalSearchRequest = null,
+}: {
+  data: { type: string; data: Record<string, unknown> };
+  apiRole: ApiRole;
+  originalSearchRequest?: SearchRequestRef | null;
+}) {
   const [guestName, setGuestName] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [confirmed, setConfirmed] = useState<{ booking_id: string; room_id: string } | null>(null);
@@ -199,11 +226,20 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
     };
 
     if (apiRole === "booking") {
+      const failedSearch: SearchRequestRef = {
+        category: d.preferred_category,
+        check_in: d.check_in,
+        check_out: d.check_out,
+      };
       return (
         <div className="mt-2 space-y-3">
+          <p className="text-xs text-text-muted leading-relaxed px-1">
+            Your search ({d.check_in} → {d.check_out}, {d.preferred_category}) is not available.
+            These are alternate options — confirm only if the dates and room style work for you.
+          </p>
           {d.options && d.options.length > 0 && (
             <div className="space-y-2">
-              <div className="text-xs font-bold text-text mb-2 px-1">Recommended Options</div>
+              <div className="text-xs font-bold text-text mb-2 px-1">Alternate options</div>
               {d.options.slice(0, 3).map((opt, i) => (
                 <div key={i} className="bg-surface border border-accent/20 rounded-[8px] p-3 shadow-sm hover:border-accent/50 transition-colors">
                   <div className="flex items-center justify-between mb-2">
@@ -232,7 +268,11 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
           )}
           {d.primary_action_data && (
             <div className="pt-2">
-              <ActionCard data={d.primary_action_data} apiRole={apiRole} />
+              <ActionCard
+                data={d.primary_action_data}
+                apiRole={apiRole}
+                originalSearchRequest={failedSearch}
+              />
             </div>
           )}
         </div>
@@ -409,7 +449,11 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
       total_nights: number;
       total_rate: number;
       segments: SplitSegment[];
+      request?: { category: string; check_in: string; check_out: string };
     };
+    const isAlternateSplit =
+      apiRole === "booking"
+      && isAlternateToSearch(d.request, originalSearchRequest ?? undefined);
     const handleConfirmSplit = async () => {
       if (!guestName.trim()) { setConfirmErr("Enter guest name to confirm."); return; }
       if (!d.segments?.length) return;
@@ -437,9 +481,16 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
       <div className="mt-2 border border-accent/30 bg-accent/3">
         <div className="flex items-center gap-2 px-3 py-2 bg-accent/10 border-b border-accent/20 text-xs font-bold uppercase tracking-wider text-accent">
           <Sparkles className="w-3.5 h-3.5 shrink-0" />
-          Split Stay — {d.segments?.length} rooms · {d.discount_pct}% discount
+          {isAlternateSplit ? "Alternate split stay" : "Split Stay"} — {d.segments?.length} rooms
+          {d.discount_pct > 0 && <span> · {d.discount_pct}% off</span>}
           <span className="ml-auto font-mono font-normal normal-case text-text">${d.total_rate?.toLocaleString("en-US")} total</span>
         </div>
+        {isAlternateSplit && originalSearchRequest && (
+          <p className="px-3 pt-2 text-[10px] text-text-muted leading-relaxed">
+            Covers different dates or segments than your original search (
+            {originalSearchRequest.check_in} → {originalSearchRequest.check_out}).
+          </p>
+        )}
         <div className="p-3 space-y-1.5">
           {d.segments?.map((seg, i) => (
             <div key={i} className="flex items-center gap-3 text-xs">
@@ -497,7 +548,7 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
                 className="flex items-center gap-1.5 bg-accent text-surface font-bold uppercase tracking-wider text-[10px] px-4 py-1.5 hover:opacity-90 active:scale-95 disabled:opacity-50 transition-all"
               >
                 {confirming ? <Loader2 className="w-3 h-3 animate-spin" /> : <ClipboardCheck className="w-3 h-3" />}
-                Confirm Split Stay
+                {isAlternateSplit ? "Confirm this alternative" : "Confirm Split Stay"}
               </button>
             </div>
             {confirmErr && <div className="text-occured text-[10px]">{confirmErr}</div>}
@@ -518,6 +569,9 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
       request?: { category: string; check_in: string; check_out: string };
     };
     const ok = d.state !== "NOT_POSSIBLE";
+    const isAlternate =
+      apiRole === "booking"
+      && isAlternateToSearch(d.request, originalSearchRequest ?? undefined);
 
     const handleConfirm = async () => {
       if (!d.room_id || !d.request) return;
@@ -556,12 +610,26 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
         }`}>
           {ok ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <XCircle className="w-3.5 h-3.5 shrink-0" />}
           <span>
-            {d.state === "DIRECT_AVAILABLE" ? "Direct block available"
-              : d.state === "SHUFFLE_POSSIBLE" ? "Available via rearrangement"
-              : "No room available"}
+            {isAlternate
+              ? "Alternate stay available"
+              : d.state === "DIRECT_AVAILABLE"
+                ? (apiRole === "booking" ? "Your stay is available" : "Direct block available")
+                : d.state === "SHUFFLE_POSSIBLE"
+                  ? (apiRole === "booking" ? "Your stay is available" : "Available via rearrangement")
+                  : "No room available"}
           </span>
-          {d.room_id && <span className="ml-auto font-mono font-normal normal-case text-text">{apiRole === "receptionist" ? `Room ${d.room_id}` : "Available"}</span>}
+          {d.room_id && apiRole === "receptionist" && (
+            <span className="ml-auto font-mono font-normal normal-case text-text">Room {d.room_id}</span>
+          )}
         </div>
+        {isAlternate && d.request && originalSearchRequest && (
+          <div className="mt-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-[10px] text-text-muted leading-relaxed">
+            <span className="font-bold text-text">Not your original search.</span>{" "}
+            Requested {originalSearchRequest.check_in} → {originalSearchRequest.check_out} (
+            {originalSearchRequest.category}) is unavailable. This option:{" "}
+            {d.request.check_in} → {d.request.check_out} ({d.request.category}).
+          </div>
+        )}
         {apiRole === "receptionist" && d.comparison && <ComparisonSection comparison={d.comparison} />}
         {d.state === "NOT_POSSIBLE" && d.infeasible_dates && d.infeasible_dates.length > 0 && (
           <div className="bg-surface-2 border border-occured/30 p-3 mt-2 text-xs">
@@ -582,7 +650,9 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
           ) : (
             <div className="border border-border bg-surface-2 p-3 mt-2 text-xs space-y-2">
               <div className="text-text-muted uppercase tracking-wider font-bold text-[10px]">
-                Enter guest name and confirm to book
+                {isAlternate
+                  ? "Enter guest name to confirm this alternate stay"
+                  : "Enter guest name and confirm to book"}
               </div>
               <div className="flex gap-2 items-center flex-wrap">
                 <input
@@ -601,7 +671,7 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
                   {confirming
                     ? <Loader2 className="w-3 h-3 animate-spin" />
                     : <ClipboardCheck className="w-3 h-3" />}
-                  Confirm Booking
+                  {isAlternate ? "Confirm this alternative" : "Confirm Booking"}
                 </button>
               </div>
               {confirmErr && (
@@ -616,7 +686,15 @@ export function ActionCard({ data, apiRole }: { data: { type: string; data: Reco
   return null;
 }
 
-export function ChatBubble({ msg, apiRole }: { msg: ChatMsg, apiRole: ApiRole }) {
+export function ChatBubble({
+  msg,
+  apiRole,
+  originalSearchRequest = null,
+}: {
+  msg: ChatMsg;
+  apiRole: ApiRole;
+  originalSearchRequest?: SearchRequestRef | null;
+}) {
   const isUser = msg.role === "user";
   if (isUser && (
     msg.content.startsWith("[HANDOFF]")
@@ -640,7 +718,13 @@ export function ChatBubble({ msg, apiRole }: { msg: ChatMsg, apiRole: ApiRole })
         }`}>
           {msg.content}
         </div>
-        {msg.action_data && <ActionCard data={msg.action_data} apiRole={apiRole} />}
+        {msg.action_data && (
+          <ActionCard
+            data={msg.action_data}
+            apiRole={apiRole}
+            originalSearchRequest={originalSearchRequest}
+          />
+        )}
       </div>
     </div>
   );
@@ -660,12 +744,13 @@ export interface FloatingAiWidgetProps {
   apiRole: ApiRole;
   title?: string;
   subtitle?: string;
+  originalSearchRequest?: SearchRequestRef | null;
 }
 
 export function FloatingAiWidget({
   chatMessages, chatInput, setChatInput, chatLoading, chatEndRef,
   onSend, aiOpen, setAiOpen, hasProactive, setHasProactive, apiRole,
-  title, subtitle
+  title, subtitle, originalSearchRequest = null,
 }: FloatingAiWidgetProps) {
   const handleToggle = () => {
     setAiOpen(!aiOpen);
@@ -709,7 +794,14 @@ export function FloatingAiWidget({
                 </div>
               </div>
             )}
-            {chatMessages.map((msg, i) => <ChatBubble key={i} msg={msg} apiRole={apiRole} />)}
+            {chatMessages.map((msg, i) => (
+              <ChatBubble
+                key={i}
+                msg={msg}
+                apiRole={apiRole}
+                originalSearchRequest={originalSearchRequest}
+              />
+            ))}
             {chatLoading && (
               <div className="flex items-start gap-2.5">
                 <div className="w-7 h-7 bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 mt-0.5 rounded-sm">

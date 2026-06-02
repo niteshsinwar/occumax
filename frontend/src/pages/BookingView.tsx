@@ -111,6 +111,10 @@ export function BookingView() {
   }, [checkIn, checkOut]);
 
   const selectedCategory = categoryCopy[category] ?? categoryCopy.STANDARD;
+  const originalSearchRequest =
+    result?.state === "NOT_POSSIBLE"
+      ? { category, check_in: checkIn, check_out: checkOut }
+      : null;
 
   useEffect(() => {
     getBookingAiContext()
@@ -133,7 +137,11 @@ export function BookingView() {
       .catch(() => {});
   }, [browserToday]);
 
-  const triggerAiHandoff = async (data: ShuffleResult, runId = aiRunIdRef.current) => {
+  const triggerAiHandoff = async (
+    data: ShuffleResult,
+    runId = aiRunIdRef.current,
+    priorMessages: ChatMsg[] = [],
+  ) => {
     if (runId !== aiRunIdRef.current) return;
     const name = guestName.trim() || "Guest";
     const handoff = {
@@ -151,7 +159,11 @@ export function BookingView() {
         infeasible_dates: data.infeasible_dates ?? [],
       },
     };
-    await fireAiMessage(`[HANDOFF]\n${JSON.stringify(handoff, null, 2)}`, [], runId);
+    await fireAiMessage(
+      `[HANDOFF]\n${JSON.stringify(handoff, null, 2)}`,
+      priorMessages,
+      runId,
+    );
   };
 
   const handleSearch = async () => {
@@ -179,14 +191,15 @@ export function BookingView() {
       setResult(data);
       
       if (data.state === "NOT_POSSIBLE") {
-        setChatOpen(true);
-        setAiHasProactive(true);
-        setChatMessages([{
+        const handoffPreamble: ChatMsg = {
           role: "assistant",
           content:
             "No inventory is available for your selected dates. Redirecting you to our stay assistant to help find alternate options.",
-        }]);
-        setTimeout(() => triggerAiHandoff(data, runId), 100);
+        };
+        setChatOpen(true);
+        setAiHasProactive(true);
+        setChatMessages([handoffPreamble]);
+        setTimeout(() => triggerAiHandoff(data, runId, [handoffPreamble]), 100);
       } else if (data.state === "DIRECT_AVAILABLE" || data.state === "SHUFFLE_POSSIBLE") {
         setAiHasProactive(true);
         setChatMessages([{
@@ -336,33 +349,83 @@ export function BookingView() {
       </section>
 
       <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        {result?.state === "NOT_POSSIBLE" && (
+          <div
+            role="alert"
+            className="mb-6 rounded-[10px] border border-orange/30 bg-orange-dim px-5 py-4 text-sm text-text"
+          >
+            <p className="font-bold">No inventory available for your selected dates.</p>
+            <p className="mt-1 text-text-muted">
+              {chatLoading
+                ? "Redirecting to our stay assistant to help find alternate options…"
+                : "Check the stay assistant in the lower-right corner for alternate options."}
+            </p>
+          </div>
+        )}
         <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr]">
           <section>
             <div className="mb-4 flex items-end justify-between gap-4">
               <div>
-                <div className="text-xs font-bold uppercase tracking-[0.18em] text-accent">Selected stay</div>
+                <div className="text-xs font-bold uppercase tracking-[0.18em] text-accent">
+                  {result?.state === "NOT_POSSIBLE" ? "Requested stay" : "Selected stay"}
+                </div>
                 <h2 className="mt-1 font-serif text-3xl font-bold text-text">{selectedCategory.title}</h2>
               </div>
               {nights > 0 && (
-                <div className="rounded-full border border-border bg-white px-4 py-2 text-xs font-bold text-text-muted">
-                  {nights} night{nights === 1 ? "" : "s"}
+                <div
+                  className={`rounded-full border px-4 py-2 text-xs font-bold ${
+                    result?.state === "NOT_POSSIBLE"
+                      ? "border-orange/30 bg-orange-dim text-text-muted line-through decoration-orange/60"
+                      : "border-border bg-white text-text-muted"
+                  }`}
+                >
+                  {nights} night{nights === 1 ? "" : "s"} requested
                 </div>
               )}
             </div>
 
-            <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-subtle">
-              <img src={selectedCategory.image} alt={selectedCategory.title} className="h-72 w-full object-cover" />
-              <div className="p-6">
-                <p className="text-sm leading-7 text-text-muted">{selectedCategory.description}</p>
-                <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                  {["Flexible assistance", "Secure request", "Best-fit alternatives"].map((item) => (
-                    <div key={item} className="rounded-md border border-border bg-surface-2/40 px-3 py-3 text-xs font-bold text-text">
-                      {item}
+            {result?.state === "NOT_POSSIBLE" ? (
+              <div className="overflow-hidden rounded-[10px] border border-orange/25 bg-white shadow-subtle">
+                <div className="relative h-72">
+                  <img
+                    src={selectedCategory.image}
+                    alt={selectedCategory.title}
+                    className="h-full w-full object-cover opacity-35 grayscale"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/45 px-6 text-center">
+                    <div>
+                      <p className="text-lg font-bold text-white">Not available for these dates</p>
+                      <p className="mt-2 text-sm text-white/85 font-mono">
+                        {checkIn} → {checkOut}
+                      </p>
+                      <p className="mt-1 text-xs text-white/70">
+                        {selectedCategory.title} · full stay cannot be booked as searched
+                      </p>
                     </div>
-                  ))}
+                  </div>
+                </div>
+                <div className="p-6">
+                  <p className="text-sm leading-7 text-text-muted">
+                    This room style is not open for your full date range. Use the stay assistant for
+                    alternate dates, a shorter stay, or another room style — not the search above as-is.
+                  </p>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="overflow-hidden rounded-[10px] border border-border bg-white shadow-subtle">
+                <img src={selectedCategory.image} alt={selectedCategory.title} className="h-72 w-full object-cover" />
+                <div className="p-6">
+                  <p className="text-sm leading-7 text-text-muted">{selectedCategory.description}</p>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    {["Flexible assistance", "Secure request", "Best-fit alternatives"].map((item) => (
+                      <div key={item} className="rounded-md border border-border bg-surface-2/40 px-3 py-3 text-xs font-bold text-text">
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
 
           <aside className="space-y-5">
@@ -440,6 +503,7 @@ export function BookingView() {
         apiRole="booking"
         title="Stay Assistant"
         subtitle="Find your perfect stay"
+        originalSearchRequest={originalSearchRequest}
       />
     </div>
   );
