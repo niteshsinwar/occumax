@@ -184,6 +184,11 @@ Then we ask the AI to:
   - **Context signals** come from `frontend/src/mock/contextFeed.ts` via the Overview header selections.
   - **Market research (competitor pricing)** comes from `frontend/src/mock/competitorPricing.ts` (demo-only, deterministic by category+date).
 - **Scope**: Generate actionable recommendations **only for nights with unsold inventory** (heatmap `block_type === "EMPTY"`), with extra emphasis for **sandwich nights** (empty between two occupied nights).
+- **Clearance precedence** (backend `services/pricing/clearance_rules.py`, applied after AI):
+  - **Sandwich nights** → minimum ~12% discount vs category BAR.
+  - **≤4 days out + unsold + adverse weather** → discount (~10%), even during conference week.
+  - **≤4 days out + unsold + event week** → no INCREASE (hold or discount only).
+  - **≥7 days out** → AI may hold or increase on compression signals.
 - **Explainability**: Calendar cell hover must show the recommendation “why” plus the context signal text and competitor anchor range.
 
 ---

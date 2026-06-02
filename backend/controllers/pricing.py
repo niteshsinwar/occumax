@@ -31,6 +31,12 @@ from core.schemas.pricing import (
 )
 from services.ai.pricing_agent import WINDOW_DAYS, run_pricing_agent
 from services.database import AsyncSessionLocal
+from services.pricing.clearance_rules import (
+    apply_clearance_rules,
+    date_signals_from_context,
+    reconcile_action,
+    round_rate_5,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -223,26 +229,65 @@ def _compute_rescue_potential(calendar_map: dict, snapshot: dict) -> float:
     return round(rescue)
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+async def _build_sandwich_night_index(
+    db: AsyncSession,
+    today: date,
+    window_days: int,
+) -> set[tuple[str, str]]:
+    """
+    Category-date keys where at least one room has an EMPTY night between two non-EMPTY neighbors.
+    """
+    scan_end = today + timedelta(days=window_days)
+    rows = (
+        await db.execute(
+            select(Slot.room_id, Room.category, Slot.date, Slot.block_type)
+            .join(Room, Room.id == Slot.room_id)
+            .where(
+                Room.is_active == True,
+                Slot.date >= today,
+                Slot.date < scan_end,
+            )
+            .order_by(Slot.room_id, Slot.date)
+        )
+    ).all()
 
-async def analyse() -> PricingAnalyseResponse:
-    today = date.today()
-    async with AsyncSessionLocal() as db:
-        snapshot = await _build_pricing_context(db, today)
+    by_room: dict[str, list[tuple]] = defaultdict(list)
+    room_cat: dict[str, str] = {}
+    for room_id, category, slot_date, block_type in rows:
+        cat = category.value if hasattr(category, "value") else str(category)
+        room_cat[room_id] = cat
+        by_room[room_id].append((slot_date, block_type))
 
-    context_text = _build_context_text(snapshot, today)
-    dates = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+    sandwich: set[tuple[str, str]] = set()
+    for room_id, slots in by_room.items():
+        cat = room_cat.get(room_id, "")
+        if not cat:
+            continue
+        for i, (slot_date, block_type) in enumerate(slots):
+            if block_type != BlockType.EMPTY:
+                continue
+            before = slots[i - 1][1] if i > 0 else None
+            after = slots[i + 1][1] if i < len(slots) - 1 else None
+            if before not in (None, BlockType.EMPTY) and after not in (None, BlockType.EMPTY):
+                sandwich.add((cat, slot_date.isoformat()))
+    return sandwich
 
-    result = await run_pricing_agent(
-        snapshot=snapshot,
-        context_text=context_text,
-        today=today,
-        session_factory=AsyncSessionLocal,
-    )
 
-    calendar_map = result.get("calendar", {})
+def _assemble_pricing_response(
+    *,
+    today: date,
+    dates: list[str],
+    snapshot: dict,
+    calendar_map: dict,
+    summary: str,
+    meta: dict,
+    context_items: list[dict] | None,
+    sandwich_index: set[tuple[str, str]],
+    apply_clearance: bool,
+) -> PricingAnalyseResponse:
+    """Build API calendar rows from agent output, optionally applying Smart Clearance rules."""
+    signal_by_date = date_signals_from_context(context_items, today) if apply_clearance else {}
 
-    # Build calendar rows — one row per category, one cell per date
     calendar_rows: list[PricingCalendarRow] = []
     for cat in CATEGORY_ORDER:
         snap_cat = snapshot.get(cat, {})
@@ -258,34 +303,56 @@ async def analyse() -> PricingAnalyseResponse:
         cells: list[PricingCalendarCell] = []
         for d in dates:
             snap_day = snap_cat.get(d, {})
-            avg_rate = snap_day.get("avg_rate", 0.0)
-            floor_rate = snap_day.get("floor_rate", 0.0)
+            avg_rate = float(snap_day.get("avg_rate", 0.0))
+            floor_rate = float(snap_day.get("floor_rate", 0.0))
+            total = int(snap_day.get("total", 0) or 0)
+            otb = int(snap_day.get("otb", 0) or 0)
+            has_unsold = total > otb
             cell = cells_by_date.get(d, {})
 
             suggested = float(cell.get("suggested_rate", avg_rate))
-            # Hard floor-rate guard — AI must not go below floor
             if floor_rate > 0 and suggested < floor_rate:
                 suggested = floor_rate
 
-            action = cell.get("action", "MAINTAIN")
-            # Reconcile action with actual rate change to avoid mismatch
-            if suggested > avg_rate * 1.02:
-                action = "INCREASE"
-            elif suggested < avg_rate * 0.98:
-                action = "DISCOUNT"
+            action = str(cell.get("action", "MAINTAIN"))
+            reason = str(cell.get("reason", ""))
+            is_sandwich = (cat, d) in sandwich_index
+
+            try:
+                stay_date = date.fromisoformat(d)
+                days_until = (stay_date - today).days
+            except ValueError:
+                days_until = 0
+
+            if apply_clearance and has_unsold:
+                suggested, action, reason = apply_clearance_rules(
+                    suggested_rate=suggested,
+                    action=action,
+                    reason=reason,
+                    current_rate=avg_rate,
+                    floor_rate=floor_rate,
+                    days_until_stay=days_until,
+                    has_unsold=has_unsold,
+                    is_sandwich=is_sandwich,
+                    occ_pct=float(snap_day.get("occ_pct", 0.0)),
+                    day_signals=signal_by_date.get(d, []),
+                )
+                if floor_rate > 0 and suggested < floor_rate:
+                    suggested = floor_rate
+                action = reconcile_action(suggested, avg_rate)
             else:
-                action = "MAINTAIN"
+                action = reconcile_action(suggested, avg_rate)
 
             cells.append(PricingCalendarCell(
                 date=d,
                 current_rate=avg_rate,
-                suggested_rate=round(suggested / 5) * 5,  # nearest $5
+                suggested_rate=round_rate_5(suggested),
                 change_pct=round((suggested - avg_rate) / avg_rate * 100, 1) if avg_rate else 0.0,
                 action=action,
                 confidence=cell.get("confidence", "MEDIUM"),
-                reason=cell.get("reason", ""),
-                occupancy_pct=snap_day.get("occ_pct", 0.0),
-                otb=int(snap_day.get("otb", 0)),
+                reason=reason,
+                occupancy_pct=float(snap_day.get("occ_pct", 0.0)),
+                otb=otb,
                 floor_rate=floor_rate,
                 is_orphan=False,
                 weather_factor=cell.get("weather_factor", "") or "",
@@ -296,10 +363,20 @@ async def analyse() -> PricingAnalyseResponse:
         if any(c.current_rate > 0 for c in cells):
             calendar_rows.append(PricingCalendarRow(category=cat, cells=cells))
 
-    rescue_potential = _compute_rescue_potential(calendar_map, snapshot)
-    meta = result.get("_meta", {})
+    # Rescue potential from final actions (post-clearance)
+    final_calendar_map: dict[str, list[dict]] = {}
+    for row in calendar_rows:
+        final_calendar_map[row.category] = [
+            {
+                "date": c.date,
+                "suggested_rate": c.suggested_rate,
+                "change_pct": c.change_pct,
+                "action": c.action,
+            }
+            for c in row.cells
+        ]
+    rescue_potential = _compute_rescue_potential(final_calendar_map, snapshot)
 
-    # Flat list for the review table — only actionable days (INCREASE or DISCOUNT)
     recommendations: list[PricingRecommendation] = [
         PricingRecommendation(
             category=row.category,
@@ -321,7 +398,7 @@ async def analyse() -> PricingAnalyseResponse:
     return PricingAnalyseResponse(
         hotel_name=settings.HOTEL_NAME,
         analysis_date=today.isoformat(),
-        summary=result.get("summary", ""),
+        summary=summary,
         calendar_rows=calendar_rows,
         recommendations=recommendations,
         dates=dates,
@@ -330,6 +407,38 @@ async def analyse() -> PricingAnalyseResponse:
         cache_hit=bool(meta.get("cache_hit", False)),
         llm_call_count=int(meta.get("llm_call_count", 0) or 0),
         context_hash=str(meta.get("context_hash", "")),
+    )
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+async def analyse() -> PricingAnalyseResponse:
+    today = date.today()
+    async with AsyncSessionLocal() as db:
+        snapshot = await _build_pricing_context(db, today)
+        sandwich_index = await _build_sandwich_night_index(db, today, WINDOW_DAYS)
+
+    context_text = _build_context_text(snapshot, today)
+    dates = [(today + timedelta(days=i)).isoformat() for i in range(WINDOW_DAYS)]
+
+    result = await run_pricing_agent(
+        snapshot=snapshot,
+        context_text=context_text,
+        today=today,
+        session_factory=AsyncSessionLocal,
+        sandwich_index=sandwich_index,
+    )
+
+    return _assemble_pricing_response(
+        today=today,
+        dates=dates,
+        snapshot=snapshot,
+        calendar_map=result.get("calendar", {}),
+        summary=result.get("summary", ""),
+        meta=result.get("_meta", {}),
+        context_items=None,
+        sandwich_index=sandwich_index,
+        apply_clearance=True,
     )
 
 
@@ -340,8 +449,10 @@ async def analyse_with_context(body: PricingAnalyseRequest) -> PricingAnalyseRes
     """
     today = date.today()
     wd = min(max(body.window_days, 1), 60)
+    context_dicts = [ci.model_dump() for ci in body.context_items]
     async with AsyncSessionLocal() as db:
         snapshot = await _build_pricing_context(db, today)
+        sandwich_index = await _build_sandwich_night_index(db, today, wd)
 
     context_text = _build_context_text(snapshot, today)
     dates = [(today + timedelta(days=i)).isoformat() for i in range(wd)]
@@ -351,97 +462,22 @@ async def analyse_with_context(body: PricingAnalyseRequest) -> PricingAnalyseRes
         context_text=context_text,
         today=today,
         session_factory=AsyncSessionLocal,
-        context_items=[ci.model_dump() for ci in body.context_items],
+        context_items=context_dicts,
         analysis_window_days=wd,
         empty_nights_only=body.empty_nights_only,
+        sandwich_index=sandwich_index,
     )
 
-    calendar_map = result.get("calendar", {})
-
-    calendar_rows: list[PricingCalendarRow] = []
-    for cat in CATEGORY_ORDER:
-        snap_cat = snapshot.get(cat, {})
-        if not snap_cat:
-            continue
-
-        cells_by_date = {
-            cell.get("date"): cell
-            for cell in (calendar_map.get(cat) or [])
-            if isinstance(cell, dict) and cell.get("date")
-        }
-
-        cells: list[PricingCalendarCell] = []
-        for d in dates:
-            snap_day = snap_cat.get(d, {})
-            avg_rate = snap_day.get("avg_rate", 0.0)
-            floor_rate = snap_day.get("floor_rate", 0.0)
-            cell = cells_by_date.get(d, {})
-
-            suggested = float(cell.get("suggested_rate", avg_rate))
-            if floor_rate > 0 and suggested < floor_rate:
-                suggested = floor_rate
-
-            action = cell.get("action", "MAINTAIN")
-            if suggested > avg_rate * 1.02:
-                action = "INCREASE"
-            elif suggested < avg_rate * 0.98:
-                action = "DISCOUNT"
-            else:
-                action = "MAINTAIN"
-
-            cells.append(PricingCalendarCell(
-                date=d,
-                current_rate=avg_rate,
-                suggested_rate=round(suggested / 5) * 5,
-                change_pct=round((suggested - avg_rate) / avg_rate * 100, 1) if avg_rate else 0.0,
-                action=action,
-                confidence=cell.get("confidence", "MEDIUM"),
-                reason=cell.get("reason", ""),
-                occupancy_pct=snap_day.get("occ_pct", 0.0),
-                otb=int(snap_day.get("otb", 0)),
-                floor_rate=floor_rate,
-                is_orphan=False,
-                weather_factor=cell.get("weather_factor", "") or "",
-                event_factor=cell.get("event_factor", "") or "",
-                news_factor=cell.get("news_factor", "") or "",
-            ))
-
-        if any(c.current_rate > 0 for c in cells):
-            calendar_rows.append(PricingCalendarRow(category=cat, cells=cells))
-
-    rescue_potential = _compute_rescue_potential(calendar_map, snapshot)
-    meta = result.get("_meta", {})
-
-    recommendations: list[PricingRecommendation] = [
-        PricingRecommendation(
-            category=row.category,
-            date=cell.date,
-            current_rate=cell.current_rate,
-            suggested_rate=cell.suggested_rate,
-            change_pct=cell.change_pct,
-            action=cell.action,
-            confidence=cell.confidence,
-            reason=cell.reason,
-            occupancy_pct=cell.occupancy_pct,
-            otb=cell.otb,
-        )
-        for row in calendar_rows
-        for cell in row.cells
-        if cell.action != "MAINTAIN"
-    ]
-
-    return PricingAnalyseResponse(
-        hotel_name=settings.HOTEL_NAME,
-        analysis_date=today.isoformat(),
-        summary=result.get("summary", ""),
-        calendar_rows=calendar_rows,
-        recommendations=recommendations,
+    return _assemble_pricing_response(
+        today=today,
         dates=dates,
-        rescue_potential=rescue_potential,
-        run_id=str(meta.get("run_id", "")),
-        cache_hit=bool(meta.get("cache_hit", False)),
-        llm_call_count=int(meta.get("llm_call_count", 0) or 0),
-        context_hash=str(meta.get("context_hash", "")),
+        snapshot=snapshot,
+        calendar_map=result.get("calendar", {}),
+        summary=result.get("summary", ""),
+        meta=result.get("_meta", {}),
+        context_items=context_dicts,
+        sandwich_index=sandwich_index,
+        apply_clearance=True,
     )
 
 

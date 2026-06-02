@@ -38,10 +38,10 @@ This doc defines **which mock “context feed” events** (weather / flights / m
   - **Option B**: Pricing consumes **all 4** exogenous signal categories (Big Event + Weather + Flight/Travel + Market) together as a bundle.
 
 **Expected event types** used in Pricing:
-- **FLIGHT**: disruption → deeper clearance allowed (last-minute rebooking pressure)
-- **WEATHER**: disruption + mild TCO uplift
-- **EVENT**: compression → stronger floor protection (discount less)
-- **MARKET**: elasticity signal → tunes discount/floor mix
+- **FLIGHT**: disruption context; near-term unsold clearance still driven by lead time + inventory rules
+- **WEATHER**: adverse forecast → near-term unsold nights discount (overrides event compression)
+- **EVENT**: compression on **sold** nights; **unsold** nights this week still clear at discount (see `backend/services/pricing/clearance_rules.py`)
+- **MARKET**: elasticity / channel-risk signal → tunes narrative; deterministic clearance rules apply after AI
 
 ### Occupancy subtab — “Capacity recovery workspace”
 

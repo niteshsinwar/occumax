@@ -295,15 +295,17 @@ Output ONLY a raw JSON array — no fences, no extra text:
 Rules:
 - Output one entry per input date unless holding flat is optimal — then omit that date.
 - action: INCREASE or DISCOUNT only (omit dates where BAR should hold unchanged).
-- INCREASE when: weekend pickup strength OR category occ_pct suggests compression OR demand signals warrant uplift.
-- DISCOUNT when: weak pickup AND discretionary/unsold inventory should clear faster — prioritize realistic BAR reductions vs OTB/floor.
+- Each day includes days_until_stay and remaining_inventory. These override headline event scores.
+- DISCOUNT when: remaining_inventory > 0 AND (days_until_stay <= 4 OR is_sandwich) AND (adverse weather OR weak occ_pct OR sandwich gap).
+- DISCOUNT sandwich nights (is_sandwich=true) even during citywide events — stranded inventory must clear.
+- Near-term unsold (days_until_stay <= 4) + storms: DISCOUNT even if EVENT signals imply compression.
+- INCREASE only when: days_until_stay >= 7 OR category is genuinely compressed (high occ_pct) with no adverse weather on that date.
+- Do not INCREASE near-term unsold nights solely because of EVENT/TRAVEL signals while weather is adverse.
 - External signals are date-scoped. Use ONLY signals listed in that day's signals array for that date.
-- Do not apply storms, travel shocks, convention demand, OTA downtime, or market news to dates whose signals array is empty.
-- market_insight is a non-decision summary only; it must not justify recommendations on dates without matching day signals.
+- market_insight is non-decision context only.
 - Do not invent events, weather, travel shocks, or market news.
 - rate: integer, must be >= floor_rate from payload, rounded to nearest $5
 - conf: HIGH / MEDIUM / LOW based on confidence given occupancy totals vs OTB in payload.
-- Keep JSON compact — fewer dates analyzed means shorter arrays are acceptable.
 - Output ONLY the JSON array
 """
 
@@ -393,6 +395,7 @@ async def _synthesis_shard(
     market_analysis: dict,
     history_analysis: dict,
     today: date,
+    sandwich_dates: Optional[set[str]] = None,
 ) -> tuple[str, list]:
     """Price one category across all 20 days. Returns (category, cells_list)."""
     if not snap_cat:
@@ -406,8 +409,13 @@ async def _synthesis_shard(
         wx = weather_analysis.get(d, {})
         day_signals = market_analysis.get("date_signals", {}).get(d, [])
         remaining = int(b.get("total", 0) or 0) - int(b.get("otb", 0) or 0)
+        try:
+            days_until_stay = (date.fromisoformat(d) - today).days
+        except ValueError:
+            days_until_stay = 0
         day_rows.append({
             "date": d,
+            "days_until_stay": days_until_stay,
             "occ_pct": b.get("occ_pct", 0),
             "otb": b.get("otb", 0),
             "total": b.get("total", 0),
@@ -422,6 +430,7 @@ async def _synthesis_shard(
             "active_signal_titles": [str(s.get("title") or "") for s in day_signals[:4] if s.get("title")],
             "context_score": max([int(s.get("score") or 0) for s in day_signals] or [0]),
             "is_weekend": date.fromisoformat(d).weekday() >= 4,
+            "is_sandwich": d in (sandwich_dates or set()),
         })
 
     has_date_scoped_signals = bool(market_analysis.get("date_signals"))
@@ -561,6 +570,7 @@ async def _call_synthesis_agent(
     context_items: Optional[list[dict]] = None,
     analysis_window_days: int = WINDOW_DAYS,
     empty_nights_only: bool = False,
+    sandwich_index: Optional[set[tuple[str, str]]] = None,
 ) -> dict:
     dates_window_full = [(today + timedelta(days=i)).isoformat() for i in range(analysis_window_days)]
 
@@ -602,12 +612,16 @@ async def _call_synthesis_agent(
         )
         if not dates_for_shard:
             continue
+        cat_sandwich_dates = {
+            d for c, d in (sandwich_index or set()) if c == cat
+        }
         tasks.append(
             _synthesis_shard(
                 llm,
                 cat,
                 dates_window=dates_for_shard,
                 snap_cat=snap_c,
+                sandwich_dates=cat_sandwich_dates,
                 **shard_args_base,
             )
         )
@@ -751,6 +765,7 @@ async def run_pricing_agent(
     context_items: Optional[list[dict]] = None,
     analysis_window_days: int = WINDOW_DAYS,
     empty_nights_only: bool = False,
+    sandwich_index: Optional[set[tuple[str, str]]] = None,
 ) -> dict:
     """
     Run multi-call pricing analysis. Returns:
@@ -857,6 +872,7 @@ async def run_pricing_agent(
                 context_items=context_items,
                 analysis_window_days=analysis_window_days,
                 empty_nights_only=empty_nights_only,
+                sandwich_index=sandwich_index,
             ),
             timeout=300,
         )

@@ -63,14 +63,14 @@ export const contextFeed: ContextFeedItem[] = [
     severity: "INFO",
     title: "Convention calendar: Citywide conference week",
     detail:
-      "Compression nights expected. Maintain price floor; discount only stranded sandwich gaps with targeted channels.",
+      "Citywide compression lifts market ADR. Sold-out compression nights: protect BAR. Unsold nights this week (especially sandwich gaps): clearance discount to fill.",
     location: "Downtown",
     impact_start_offset_days: 1,
     impact_end_offset_days: 5,
     demand_segment: "Corporate group compression",
     factors: [
-      { type: "EVENT", label: "Event", value: "Citywide conference · compression nights likely", score: 88, weight: 0.65 },
-      { type: "MARKET", label: "Price floor", value: "Protect ADR · targeted clearance only", score: 72, weight: 0.35 },
+      { type: "EVENT", label: "Event", value: "Citywide conference · compression on sold nights", score: 88, weight: 0.65 },
+      { type: "MARKET", label: "Unsold clearance", value: "Discount near-term empty inventory · hold 7d+ if pickup builds", score: 72, weight: 0.35 },
     ],
   },
   {
